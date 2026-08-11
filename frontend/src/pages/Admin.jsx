@@ -1,0 +1,453 @@
+import { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { toast } from "sonner";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { api, errMsg, money, fmtDate } from "@/lib/api";
+import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
+
+const NAV = [
+  ["dashboard", "Dashboard"], ["users", "Users"], ["partners", "Partners"], ["events", "Events"],
+  ["memberships", "Memberships"], ["products", "Products"], ["orders", "Orders"], ["payments", "Payments"],
+  ["coupons", "Coupons"], ["reports", "Reports"], ["moderation", "Moderation"], ["content", "Content"],
+  ["settings", "Settings"], ["audit", "Audit logs"],
+];
+
+const Input = ({ label, ...p }) => (
+  <label className="block"><span className="text-xs font-bold text-slate-600">{label}</span>
+    <input {...p} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" /></label>
+);
+
+export default function Admin() {
+  const [tab, setTab] = useState("dashboard");
+  return (
+    <div className="mx-auto max-w-[1500px] px-4 sm:px-6 py-8 pb-28" data-testid="admin-page">
+      <SEO title="Admin" />
+      <p className="overline">Super admin</p>
+      <h1 className="mt-2 text-3xl font-bold">Buddilio control centre</h1>
+      <div className="mt-6 flex gap-2 overflow-x-auto no-scrollbar pb-1">
+        {NAV.map(([v, l]) => (
+          <button key={v} onClick={() => setTab(v)} data-testid={`admin-tab-${v}`}
+            className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold border ${tab === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
+        ))}
+      </div>
+      <div className="mt-8">
+        {tab === "dashboard" && <Overview />}
+        {tab === "users" && <Users key="u" role="user" />}
+        {tab === "partners" && <Users key="p" role="partner" />}
+        {tab === "events" && <Events />}
+        {tab === "memberships" && <Crud path="plans" title="Membership plans"
+          fields={[["name", "text"], ["price", "number"], ["duration_days", "number"], ["description", "text"], ["discount_percent", "number"], ["benefits", "list"], ["active", "bool"]]}
+          blank={{ name: "", price: 0, duration_days: 30, description: "", benefits: [], discount_percent: 0, active: true }} />}
+        {tab === "products" && <Crud path="products" title="Products & passes"
+          fields={[["name", "text"], ["description", "text"], ["price", "number"], ["discount_percent", "number"], ["tax_percent", "number"], ["image", "text"], ["validity_days", "number"], ["city", "text"], ["inventory", "number"], ["member_discount_percent", "number"], ["active", "bool"]]}
+          blank={{ name: "", description: "", price: 0, discount_percent: 0, tax_percent: 18, image: "", validity_days: 30, city: "All India", inventory: 100, member_discount_percent: 10, active: true }} />}
+        {tab === "coupons" && <Crud path="coupons" title="Coupons"
+          fields={[["code", "text"], ["discount_type", "text"], ["value", "number"], ["min_order", "number"], ["usage_limit", "number"], ["members_only", "bool"], ["expires_at", "text"], ["active", "bool"]]}
+          blank={{ code: "", discount_type: "percent", value: 10, min_order: 0, usage_limit: 100, members_only: false, expires_at: "", active: true }} />}
+        {(tab === "orders" || tab === "payments") && <Orders payments={tab === "payments"} />}
+        {(tab === "reports" || tab === "moderation") && <Reports />}
+        {tab === "content" && <Content />}
+        {tab === "settings" && <Settings />}
+        {tab === "audit" && <Audit />}
+      </div>
+    </div>
+  );
+}
+
+function Overview() {
+  const [days, setDays] = useState(30);
+  const [s, setS] = useState(null);
+  useEffect(() => { setS(null); api.get("/admin/stats", { params: { days } }).then(({ data }) => setS(data)).catch(() => setS({})); }, [days]);
+  if (!s) return <Spinner />;
+  return (
+    <div data-testid="admin-overview">
+      <div className="flex gap-2">
+        {[7, 30, 90, 365].map((d) => (
+          <button key={d} onClick={() => setDays(d)} data-testid={`admin-range-${d}`}
+            className={`rounded-full px-4 py-2 text-xs font-bold border ${days === d ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>Last {d}d</button>
+        ))}
+      </div>
+      <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Stat label="Total users" value={s.total_users} testid="admin-stat-users" />
+        <Stat label="New registrations" value={s.new_users} testid="admin-stat-new" />
+        <Stat label="Active users" value={s.active_users} testid="admin-stat-active" />
+        <Stat label="Premium members" value={s.premium_members} testid="admin-stat-premium" />
+        <Stat label="Partners" value={s.partners} />
+        <Stat label="Events" value={s.events} />
+        <Stat label="Upcoming events" value={s.upcoming_events} />
+        <Stat label="Participations" value={s.participations} />
+        <Stat label="Gross sales" value={money(s.gross_sales)} testid="admin-stat-sales" />
+        <Stat label="Membership revenue" value={money(s.membership_revenue)} />
+        <Stat label="Event revenue" value={money(s.event_revenue)} />
+        <Stat label="Pass revenue" value={money(s.pass_revenue)} />
+        <Stat label="Refunds" value={s.refunds} />
+        <Stat label="Pending event approvals" value={s.pending_events} testid="admin-stat-pending-events" />
+        <Stat label="Open reports" value={s.open_reports} testid="admin-stat-reports" />
+      </div>
+      <div className="mt-6 grid lg:grid-cols-2 gap-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-5">
+          <p className="overline">Revenue trend</p>
+          <div className="h-64 mt-4">
+            <ResponsiveContainer><LineChart data={s.revenue_series}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
+              <Tooltip /><Line type="monotone" dataKey="amount" stroke="#0F172A" strokeWidth={2} dot={false} />
+            </LineChart></ResponsiveContainer>
+          </div>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-5">
+          <p className="overline">Registrations</p>
+          <div className="h-64 mt-4">
+            <ResponsiveContainer><BarChart data={s.registration_series}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
+              <Tooltip /><Bar dataKey="count" fill="#0F172A" radius={[4, 4, 0, 0]} />
+            </BarChart></ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Users({ role }) {
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("");
+  const [data, setData] = useState(null);
+  const [page, setPage] = useState(1);
+  const load = useCallback(() => {
+    api.get("/admin/users", { params: { q, role, status, page, limit: 20 } }).then(({ data }) => setData(data)).catch(() => setData({ items: [] }));
+  }, [q, role, status, page]);
+  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
+
+  const act = async (u, body, msg) => {
+    try { await api.patch(`/admin/users/${u.id}`, body); toast.success(msg); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+
+  if (!data) return <Spinner />;
+  return (
+    <div data-testid={`admin-users-${role}`}>
+      <div className="flex flex-wrap gap-3">
+        <input data-testid="admin-user-search" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} placeholder="Search name or email…"
+          className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm w-72" />
+        <select data-testid="admin-user-status" value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">All statuses</option>{["active", "suspended", "banned"].map((s) => <option key={s}>{s}</option>)}
+        </select>
+      </div>
+      <div className="mt-5 rounded-xl border border-slate-200 bg-white overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-left"><tr>
+            {["Member", "City", "Status", "Membership", "Verified", "Actions"].map((h) => <th key={h} className="px-4 py-3 font-semibold text-xs uppercase tracking-wider text-slate-500">{h}</th>)}
+          </tr></thead>
+          <tbody className="divide-y divide-slate-100">
+            {data.items.map((u) => (
+              <tr key={u.id} data-testid={`admin-user-row-${u.id}`}>
+                <td className="px-4 py-3">
+                  <Link to={`/u/${u.id}`} className="font-semibold hover:underline">{u.full_name}</Link>
+                  <p className="text-xs text-slate-500">{u.email}</p>
+                </td>
+                <td className="px-4 py-3">{u.city}{u.org_name ? ` · ${u.org_name}` : ""}</td>
+                <td className="px-4 py-3"><Badge tone={statusTone(u.status)}>{u.status}</Badge></td>
+                <td className="px-4 py-3 text-xs">{u.membership?.plan_name || "—"}</td>
+                <td className="px-4 py-3 text-xs">{u.verified ? "Yes" : "No"}</td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    {u.status !== "active" && <button onClick={() => act(u, { status: "active" }, "Member activated")} data-testid={`activate-${u.id}`} className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold">Activate</button>}
+                    {u.status !== "suspended" && <button onClick={() => act(u, { status: "suspended" }, "Member suspended")} data-testid={`suspend-${u.id}`} className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold">Suspend</button>}
+                    {u.status !== "banned" && <button onClick={() => act(u, { status: "banned" }, "Member banned")} data-testid={`ban-${u.id}`} className="rounded-full border border-red-200 text-red-600 px-3 py-1.5 text-[11px] font-bold">Ban</button>}
+                    {!u.verified && <button onClick={() => act(u, { verified: true }, "Member verified")} data-testid={`verify-${u.id}`} className="rounded-full bg-slate-900 text-white px-3 py-1.5 text-[11px] font-bold">Verify</button>}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!data.items.length && <p className="p-6 text-sm text-slate-500">No members found.</p>}
+      </div>
+      {data.total > 20 && (
+        <div className="mt-4 flex gap-2">
+          <button disabled={page === 1} onClick={() => setPage(page - 1)} className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold disabled:opacity-40">Prev</button>
+          <span className="text-xs py-2">Page {page} / {Math.ceil(data.total / 20)}</span>
+          <button disabled={page >= Math.ceil(data.total / 20)} onClick={() => setPage(page + 1)} className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold disabled:opacity-40">Next</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Events() {
+  const [status, setStatus] = useState("submitted");
+  const [items, setItems] = useState(null);
+  const load = useCallback(() => {
+    api.get("/admin/events", { params: { status } }).then(({ data }) => setItems(data.items)).catch(() => setItems([]));
+  }, [status]);
+  useEffect(() => { load(); }, [load]);
+
+  const moderate = async (id, action) => {
+    try { await api.post(`/admin/events/${id}/moderate`, { action }); toast.success(`Event ${action === "approve" ? "approved and published" : "rejected"}`); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+
+  if (!items) return <Spinner />;
+  return (
+    <div data-testid="admin-events">
+      <div className="flex gap-2 flex-wrap">
+        {["submitted", "published", "draft", "rejected", ""].map((s) => (
+          <button key={s || "all"} onClick={() => setStatus(s)} data-testid={`admin-event-filter-${s || "all"}`}
+            className={`rounded-full px-4 py-2 text-xs font-bold border ${status === s ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{s || "All"}</button>
+        ))}
+      </div>
+      <div className="mt-5 space-y-3">
+        {items.length ? items.map((ev) => (
+          <div key={ev.id} className="rounded-xl border border-slate-200 bg-white p-4 flex flex-wrap items-center gap-4" data-testid={`admin-event-${ev.id}`}>
+            {ev.cover_image && <img src={ev.cover_image} alt="" className="h-14 w-20 rounded-lg object-cover" />}
+            <div className="flex-1 min-w-[200px]">
+              <p className="font-semibold text-sm">{ev.title}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{ev.partner_name} · {ev.city} · {fmtDate(ev.starts_at)} · {ev.price > 0 ? money(ev.price) : "Free"}</p>
+            </div>
+            <Badge tone={statusTone(ev.status)}>{ev.status}</Badge>
+            <div className="flex gap-2">
+              {ev.status !== "published" && <button onClick={() => moderate(ev.id, "approve")} data-testid={`approve-event-${ev.id}`} className="rounded-full bg-slate-900 text-white px-4 py-2 text-xs font-bold">Approve</button>}
+              {ev.status !== "rejected" && <button onClick={() => moderate(ev.id, "reject")} data-testid={`reject-event-${ev.id}`} className="rounded-full border border-red-200 text-red-600 px-4 py-2 text-xs font-bold">Reject</button>}
+              {ev.status === "published" && <Link to={`/events/${ev.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">View</Link>}
+            </div>
+          </div>
+        )) : <Empty title="Nothing here" sub="No events with this status." />}
+      </div>
+    </div>
+  );
+}
+
+function Orders({ payments }) {
+  const [status, setStatus] = useState("");
+  const [items, setItems] = useState(null);
+  const load = useCallback(() => {
+    api.get("/admin/orders", { params: { status } }).then(({ data }) => setItems(data.items)).catch(() => setItems([]));
+  }, [status]);
+  useEffect(() => { load(); }, [load]);
+
+  const refund = async (id) => {
+    try { await api.post(`/admin/orders/${id}/refund`); toast.success("Refund processed"); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+  if (!items) return <Spinner />;
+  return (
+    <div data-testid="admin-orders">
+      <div className="flex gap-2">
+        {["", "paid", "pending", "failed"].map((s) => (
+          <button key={s || "all"} onClick={() => setStatus(s)} data-testid={`admin-order-filter-${s || "all"}`}
+            className={`rounded-full px-4 py-2 text-xs font-bold border ${status === s ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{s || "All"}</button>
+        ))}
+      </div>
+      <div className="mt-5 rounded-xl border border-slate-200 bg-white overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-left"><tr>
+            {["Order", "Item", "Type", "Amount", "Payment", "Refund", payments ? "Txn" : "Actions"].map((h) => <th key={h} className="px-4 py-3 text-xs uppercase tracking-wider text-slate-500 font-semibold">{h}</th>)}
+          </tr></thead>
+          <tbody className="divide-y divide-slate-100">
+            {items.map((o) => (
+              <tr key={o.id} data-testid={`admin-order-${o.id}`}>
+                <td className="px-4 py-3"><p className="font-semibold">#{o.order_no}</p><p className="text-xs text-slate-500">{fmtDate(o.created_at)}</p></td>
+                <td className="px-4 py-3">{o.item_name}</td>
+                <td className="px-4 py-3 text-xs">{o.kind}</td>
+                <td className="px-4 py-3 font-semibold">{money(o.total)}</td>
+                <td className="px-4 py-3"><Badge tone={statusTone(o.payment_status)}>{o.payment_status}</Badge></td>
+                <td className="px-4 py-3 text-xs">{o.refund_status}</td>
+                <td className="px-4 py-3">
+                  {payments ? <span className="text-xs text-slate-500">{o.transaction_id || "—"}</span>
+                    : o.payment_status === "paid" && o.refund_status === "none" ? (
+                      <button onClick={() => refund(o.id)} data-testid={`refund-${o.id}`} className="rounded-full border border-red-200 text-red-600 px-3 py-1.5 text-[11px] font-bold">Refund</button>
+                    ) : <span className="text-xs text-slate-400">—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <p className="p-6 text-sm text-slate-500">No orders.</p>}
+      </div>
+    </div>
+  );
+}
+
+function Reports() {
+  const [items, setItems] = useState(null);
+  const load = () => api.get("/admin/reports").then(({ data }) => setItems(data.items)).catch(() => setItems([]));
+  useEffect(() => { load(); }, []);
+  const resolve = async (id, action) => {
+    try { await api.post(`/admin/reports/${id}/resolve`, { action }); toast.success(`Report resolved (${action})`); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+  if (!items) return <Spinner />;
+  return (
+    <div className="space-y-3" data-testid="admin-reports">
+      {items.length ? items.map((r) => (
+        <div key={r.id} className="rounded-xl border border-slate-200 bg-white p-5" data-testid={`admin-report-${r.id}`}>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Badge tone={r.status === "open" ? "amber" : "green"}>{r.status}</Badge>
+                <Badge>{r.target_type}</Badge>
+              </div>
+              <p className="mt-2 font-semibold text-sm">{r.reason}</p>
+              <p className="text-sm text-slate-500 mt-1">{r.details}</p>
+              <p className="text-xs text-slate-400 mt-2">
+                Reported by {r.reporter_email} · {fmtDate(r.created_at)}
+                {r.target ? ` · target: ${r.target.full_name} (${r.target.status})` : ""}
+              </p>
+            </div>
+            {r.status === "open" && (
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => resolve(r.id, "dismiss")} data-testid={`dismiss-report-${r.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Dismiss</button>
+                <button onClick={() => resolve(r.id, "suspend")} data-testid={`suspend-report-${r.id}`} className="rounded-full border border-amber-300 text-amber-700 px-4 py-2 text-xs font-bold">Suspend user</button>
+                <button onClick={() => resolve(r.id, "ban")} data-testid={`ban-report-${r.id}`} className="rounded-full bg-red-600 text-white px-4 py-2 text-xs font-bold">Ban user</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )) : <Empty title="Moderation queue is clear" sub="No open reports right now." />}
+    </div>
+  );
+}
+
+function Crud({ path, title, fields, blank }) {
+  const [items, setItems] = useState(null);
+  const [f, setF] = useState(blank);
+  const [editing, setEditing] = useState(null);
+  const load = useCallback(() => api.get(`/admin/${path}`).then(({ data }) => setItems(data.items)).catch(() => setItems([])), [path]);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    try {
+      const payload = { ...f };
+      fields.forEach(([k, t]) => { if (t === "number") payload[k] = Number(payload[k] || 0); });
+      if (editing) await api.put(`/admin/${path}/${editing}`, payload);
+      else await api.post(`/admin/${path}`, payload);
+      toast.success(editing ? "Updated" : "Created");
+      setF(blank); setEditing(null); load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const del = async (id) => {
+    try { await api.delete(`/admin/${path}/${id}`); toast.success("Deleted"); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+  if (!items) return <Spinner />;
+
+  return (
+    <div className="grid lg:grid-cols-3 gap-6" data-testid={`admin-crud-${path}`}>
+      <div className="lg:col-span-2 space-y-3">
+        <h2 className="text-xl font-bold">{title}</h2>
+        {items.map((it) => (
+          <div key={it.id} className="rounded-xl border border-slate-200 bg-white p-4 flex flex-wrap items-center gap-3" data-testid={`crud-item-${it.id}`}>
+            <div className="flex-1 min-w-[180px]">
+              <p className="font-semibold text-sm">{it.name || it.code}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {it.price !== undefined ? money(it.price) : `${it.discount_type} ${it.value}`}
+                {it.duration_days ? ` · ${it.duration_days} days` : ""}{it.city ? ` · ${it.city}` : ""}
+              </p>
+            </div>
+            <Badge tone={it.active ? "green" : "slate"}>{it.active ? "active" : "inactive"}</Badge>
+            <button onClick={() => { setF({ ...blank, ...it }); setEditing(it.id); }} data-testid={`crud-edit-${it.id}`} className="rounded-full border border-slate-200 px-4 py-1.5 text-xs font-bold">Edit</button>
+            <button onClick={() => del(it.id)} data-testid={`crud-delete-${it.id}`} className="rounded-full border border-red-200 text-red-600 px-4 py-1.5 text-xs font-bold">Delete</button>
+          </div>
+        ))}
+        {!items.length && <Empty title="Nothing yet" sub="Create your first item using the form." />}
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3 h-fit" data-testid={`crud-form-${path}`}>
+        <p className="font-semibold">{editing ? "Edit" : "Create new"}</p>
+        {fields.map(([k, t]) => (
+          t === "bool" ? (
+            <label key={k} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f[k]} data-testid={`crud-${k}`} onChange={(e) => setF({ ...f, [k]: e.target.checked })} />{k.replace(/_/g, " ")}</label>
+          ) : t === "list" ? (
+            <label key={k} className="block"><span className="text-xs font-bold text-slate-600">{k.replace(/_/g, " ")} (one per line)</span>
+              <textarea rows={4} data-testid={`crud-${k}`} value={(f[k] || []).join("\n")} onChange={(e) => setF({ ...f, [k]: e.target.value.split("\n").filter(Boolean) })}
+                className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" /></label>
+          ) : (
+            <Input key={k} label={k.replace(/_/g, " ")} type={t} data-testid={`crud-${k}`} value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} />
+          )
+        ))}
+        <div className="flex gap-2 pt-2">
+          <button onClick={save} data-testid={`crud-save-${path}`} className="flex-1 rounded-full bg-slate-900 text-white py-2.5 text-sm font-bold">{editing ? "Update" : "Create"}</button>
+          {editing && <button onClick={() => { setF(blank); setEditing(null); }} className="rounded-full border border-slate-200 px-4 py-2.5 text-sm font-bold">Cancel</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Content() {
+  const [pages, setPages] = useState(null);
+  const [sel, setSel] = useState(null);
+  const load = () => api.get("/cms").then(({ data }) => setPages(data.items)).catch(() => setPages([]));
+  useEffect(() => { load(); }, []);
+  const save = async () => {
+    try { await api.put(`/admin/cms/${sel.slug}`, sel); toast.success("Page updated"); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+  if (!pages) return <Spinner />;
+  return (
+    <div className="grid lg:grid-cols-3 gap-6" data-testid="admin-content">
+      <div className="space-y-2">
+        {pages.map((p) => (
+          <button key={p.slug} onClick={() => setSel(p)} data-testid={`cms-select-${p.slug}`}
+            className={`w-full text-left rounded-xl border p-4 ${sel?.slug === p.slug ? "border-slate-900 bg-slate-50" : "border-slate-200 bg-white"}`}>
+            <p className="font-semibold text-sm">{p.title}</p><p className="text-xs text-slate-500">/{p.slug}</p>
+          </button>
+        ))}
+      </div>
+      <div className="lg:col-span-2">
+        {sel ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
+            <Input label="Title" data-testid="cms-title" value={sel.title} onChange={(e) => setSel({ ...sel, title: e.target.value })} />
+            <label className="block"><span className="text-xs font-bold text-slate-600">Content</span>
+              <textarea rows={12} data-testid="cms-content" value={sel.content} onChange={(e) => setSel({ ...sel, content: e.target.value })}
+                className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" /></label>
+            <Input label="SEO title" data-testid="cms-seo-title" value={sel.seo_title || ""} onChange={(e) => setSel({ ...sel, seo_title: e.target.value })} />
+            <Input label="SEO description" data-testid="cms-seo-desc" value={sel.seo_description || ""} onChange={(e) => setSel({ ...sel, seo_description: e.target.value })} />
+            <button onClick={save} data-testid="cms-save" className="rounded-full bg-slate-900 text-white px-6 py-2.5 text-sm font-bold">Save page</button>
+          </div>
+        ) : <Empty title="Pick a page" sub="Select a CMS page on the left to edit it." />}
+      </div>
+    </div>
+  );
+}
+
+function Settings() {
+  const [s, setS] = useState(null);
+  useEffect(() => { api.get("/admin/settings").then(({ data }) => setS(data)).catch(() => setS({})); }, []);
+  if (!s) return <Spinner />;
+  const save = async () => {
+    try { const { data } = await api.put("/admin/settings", s); setS(data); toast.success("Settings saved"); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+  const keys = [["platform_name", "text"], ["contact_email", "text"], ["contact_number", "text"], ["currency", "text"],
+    ["tax_percent", "number"], ["gateway", "text"], ["gateway_mode", "text"], ["min_age", "number"],
+    ["seo_title", "text"], ["seo_description", "text"], ["moderation_auto_suspend_reports", "number"]];
+  return (
+    <div className="max-w-2xl rounded-xl border border-slate-200 bg-white p-6 space-y-3" data-testid="admin-settings">
+      {keys.map(([k, t]) => (
+        <Input key={k} label={k.replace(/_/g, " ")} type={t} data-testid={`setting-${k}`} value={s[k] ?? ""} onChange={(e) => setS({ ...s, [k]: t === "number" ? Number(e.target.value) : e.target.value })} />
+      ))}
+      {[["require_email_verification", "Require email verification"], ["auto_approve_events", "Auto-approve partner events"]].map(([k, l]) => (
+        <label key={k} className="flex items-center gap-2 text-sm"><input type="checkbox" data-testid={`setting-${k}`} checked={!!s[k]} onChange={(e) => setS({ ...s, [k]: e.target.checked })} />{l}</label>
+      ))}
+      <button onClick={save} data-testid="save-settings" className="rounded-full bg-slate-900 text-white px-6 py-2.5 text-sm font-bold">Save settings</button>
+    </div>
+  );
+}
+
+function Audit() {
+  const [items, setItems] = useState(null);
+  useEffect(() => { api.get("/admin/audit-logs").then(({ data }) => setItems(data.items)).catch(() => setItems([])); }, []);
+  if (!items) return <Spinner />;
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100" data-testid="admin-audit">
+      {items.length ? items.map((l) => (
+        <div key={l.id} className="p-4 flex flex-wrap justify-between gap-2 text-sm">
+          <div><p className="font-semibold">{l.action}</p><p className="text-xs text-slate-500">{l.entity} {l.entity_id}</p></div>
+          <div className="text-right text-xs text-slate-500"><p>{l.actor_email}</p><p>{new Date(l.created_at).toLocaleString("en-IN")}</p></div>
+        </div>
+      )) : <p className="p-6 text-sm text-slate-500">No admin actions logged yet.</p>}
+    </div>
+  );
+}

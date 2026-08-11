@@ -1,0 +1,1217 @@
+from dotenv import load_dotenv
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+import os
+import jwt
+import bcrypt
+import uuid
+import secrets
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Annotated, Any
+
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
+from pydantic import BaseModel, Field, BeforeValidator, EmailStr, ConfigDict
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("buddilio")
+
+client = AsyncIOMotorClient(os.environ['MONGO_URL'])
+db = client[os.environ['DB_NAME']]
+
+JWT_ALGORITHM = "HS256"
+bearer = HTTPBearer(auto_error=False)
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso(dt: datetime) -> str:
+    return dt.isoformat()
+
+
+PyObjectId = Annotated[str, BeforeValidator(lambda v: str(v))]
+
+
+def clean(doc: dict) -> dict:
+    if not doc:
+        return doc
+    out = dict(doc)
+    out["id"] = str(out.pop("_id"))
+    out.pop("password_hash", None)
+    return out
+
+
+# ---------------- auth helpers ----------------
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def create_access_token(user_id: str, email: str, role: str) -> str:
+    payload = {"sub": user_id, "email": email, "role": role,
+               "exp": now_utc() + timedelta(days=7), "type": "access"}
+    return jwt.encode(payload, os.environ["JWT_SECRET"], algorithm=JWT_ALGORITHM)
+
+
+async def get_current_user(request: Request,
+                           creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> dict:
+    token = creds.credentials if creds else request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if user.get("status") in ("banned", "suspended"):
+        raise HTTPException(status_code=403, detail=f"Your account is {user['status']}. Contact support.")
+    return clean(user)
+
+
+async def optional_user(request: Request,
+                        creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> Optional[dict]:
+    try:
+        return await get_current_user(request, creds)
+    except HTTPException:
+        return None
+
+
+def require_role(*roles):
+    async def dep(user: dict = Depends(get_current_user)) -> dict:
+        if user.get("role") not in roles:
+            raise HTTPException(status_code=403, detail="You do not have permission to do this.")
+        return user
+    return dep
+
+
+admin_only = require_role("admin")
+partner_only = require_role("partner", "admin")
+
+
+async def audit(actor: dict, action: str, entity: str, entity_id: str = "", meta: dict | None = None):
+    await db.audit_logs.insert_one({
+        "actor_id": actor["id"], "actor_email": actor.get("email"), "action": action,
+        "entity": entity, "entity_id": entity_id, "meta": meta or {}, "created_at": iso(now_utc()),
+    })
+
+
+async def notify(user_id: str, title: str, body: str, ntype: str = "system", link: str = ""):
+    await db.notifications.insert_one({
+        "user_id": user_id, "title": title, "body": body, "type": ntype, "link": link,
+        "read": False, "created_at": iso(now_utc()),
+    })
+
+
+async def membership_active(user_id: str) -> Optional[dict]:
+    m = await db.user_memberships.find_one(
+        {"user_id": user_id, "status": "active", "ends_at": {"$gt": iso(now_utc())}},
+        sort=[("ends_at", -1)])
+    return clean(m) if m else None
+
+
+# ---------------- models ----------------
+class RegisterIn(BaseModel):
+    full_name: str
+    email: EmailStr
+    mobile: str
+    password: str = Field(min_length=6)
+    dob: str
+    gender: str
+    city: str
+    bio: str = ""
+    photo: str = ""
+    interests: List[str] = []
+    event_categories: List[str] = []
+    lifestyle: List[str] = []
+    is_adult: bool = False
+    accept_terms: bool = False
+    role: str = "user"
+    org_name: str = ""
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class GoogleSessionIn(BaseModel):
+    session_id: str
+
+
+class ProfileIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    full_name: Optional[str] = None
+    bio: Optional[str] = None
+    city: Optional[str] = None
+    photo: Optional[str] = None
+    interests: Optional[List[str]] = None
+    event_categories: Optional[List[str]] = None
+    lifestyle: Optional[List[str]] = None
+    privacy: Optional[dict] = None
+    notification_prefs: Optional[dict] = None
+
+
+class EventIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    title: str
+    description: str = ""
+    category: str
+    city: str
+    venue: str = ""
+    starts_at: str
+    ends_at: str = ""
+    cover_image: str = ""
+    gallery: List[str] = []
+    price: float = 0
+    capacity: int = 50
+    rules: str = ""
+    cancellation_policy: str = ""
+    approval_mode: str = "instant"  # instant | organizer | admin
+    featured: bool = False
+
+
+class PlanIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    price: float
+    duration_days: int = 365
+    description: str = ""
+    benefits: List[str] = []
+    discount_percent: float = 0
+    active: bool = True
+
+
+class ProductIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    description: str = ""
+    price: float
+    discount_percent: float = 0
+    tax_percent: float = 18
+    image: str = ""
+    validity_days: int = 30
+    city: str = "All India"
+    inventory: int = 100
+    member_discount_percent: float = 10
+    active: bool = True
+
+
+class CouponIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    code: str
+    discount_type: str = "percent"  # percent | fixed
+    value: float = 10
+    min_order: float = 0
+    usage_limit: int = 100
+    members_only: bool = False
+    expires_at: str = ""
+    active: bool = True
+
+
+class CheckoutIn(BaseModel):
+    kind: str  # membership | product | event
+    item_id: str
+    quantity: int = 1
+    coupon_code: str = ""
+
+
+class VerifyPaymentIn(BaseModel):
+    order_id: str
+    gateway_payment_id: str = ""
+    simulate: str = "success"  # success | failure
+
+
+class MessageIn(BaseModel):
+    body: str
+
+
+class ReportIn(BaseModel):
+    target_type: str  # user | event | conversation
+    target_id: str
+    reason: str
+    details: str = ""
+
+
+app = FastAPI(title="Buddilio API")
+api = APIRouter(prefix="/api")
+
+
+# ---------------- auth routes ----------------
+def set_cookies(response: Response, token: str):
+    response.set_cookie("access_token", token, httponly=True, secure=True,
+                        samesite="none", max_age=604800, path="/")
+
+
+def age_from_dob(dob: str) -> int:
+    try:
+        d = datetime.fromisoformat(dob[:10])
+        t = now_utc()
+        return t.year - d.year - ((t.month, t.day) < (d.month, d.day))
+    except Exception:
+        return 0
+
+
+@api.post("/auth/register")
+async def register(payload: RegisterIn, response: Response):
+    email = payload.email.lower().strip()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+    age = age_from_dob(payload.dob)
+    if age < 21:
+        raise HTTPException(status_code=400, detail="You must be at least 21 years old to join Buddilio.")
+    if not payload.is_adult or not payload.accept_terms:
+        raise HTTPException(status_code=400, detail="Please confirm your age and accept the policies.")
+    if len(payload.mobile.strip()) < 8:
+        raise HTTPException(status_code=400, detail="Please enter a valid mobile number.")
+    role = "partner" if payload.role == "partner" else "user"
+    doc = {
+        "full_name": payload.full_name, "email": email, "mobile": payload.mobile,
+        "password_hash": hash_password(payload.password), "role": role, "status": "active",
+        "dob": payload.dob, "age": age, "gender": payload.gender, "city": payload.city,
+        "bio": payload.bio, "photo": payload.photo, "interests": payload.interests,
+        "event_categories": payload.event_categories, "lifestyle": payload.lifestyle,
+        "verified": False, "email_verified": False, "org_name": payload.org_name,
+        "privacy": {"profile_visibility": "public", "who_can_message": "everyone"},
+        "notification_prefs": {"email": True, "in_app": True, "sms": False},
+        "blocked": [], "connections": [], "saved_events": [],
+        "created_at": iso(now_utc()),
+    }
+    res = await db.users.insert_one(doc)
+    uid = str(res.inserted_id)
+    await notify(uid, "Welcome to Buddilio", "Complete your profile to get better companion matches.", "registration", "/profile")
+    token = create_access_token(uid, email, role)
+    set_cookies(response, token)
+    user = clean(await db.users.find_one({"_id": res.inserted_id}))
+    return {"access_token": token, "user": user}
+
+
+@api.post("/auth/login")
+async def login(payload: LoginIn, request: Request, response: Response):
+    email = payload.email.lower().strip()
+    ident = f"email:{email}"
+    att = await db.login_attempts.find_one({"identifier": ident})
+    if att and att.get("count", 0) >= 5 and att.get("locked_until", "") > iso(now_utc()):
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_password(payload.password, user.get("password_hash", "")):
+        await db.login_attempts.update_one(
+            {"identifier": ident},
+            {"$inc": {"count": 1}, "$set": {"locked_until": iso(now_utc() + timedelta(minutes=15))}},
+            upsert=True)
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    if user.get("status") == "banned":
+        raise HTTPException(status_code=403, detail="This account has been banned.")
+    if user.get("status") == "suspended":
+        raise HTTPException(status_code=403, detail="This account is suspended. Contact support.")
+    await db.login_attempts.delete_one({"identifier": ident})
+    token = create_access_token(str(user["_id"]), email, user.get("role", "user"))
+    set_cookies(response, token)
+    return {"access_token": token, "user": clean(user)}
+
+
+@api.post("/auth/logout")
+async def logout(response: Response):
+    response.delete_cookie("access_token", path="/")
+    return {"ok": True}
+
+
+@api.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    user["membership"] = await membership_active(user["id"])
+    return user
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(body: dict):
+    email = (body.get("email") or "").lower().strip()
+    user = await db.users.find_one({"email": email})
+    if user:
+        token = secrets.token_urlsafe(32)
+        await db.password_reset_tokens.insert_one({
+            "token": token, "user_id": str(user["_id"]), "used": False,
+            "expires_at": now_utc() + timedelta(hours=1)})
+        logger.info(f"[Buddilio] Password reset link: /reset-password?token={token}")
+    return {"message": "If that email exists, a reset link has been sent."}
+
+
+@api.post("/auth/reset-password")
+async def reset_password(body: dict):
+    token, new_password = body.get("token"), body.get("password") or ""
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    rec = await db.password_reset_tokens.find_one({"token": token, "used": False})
+    if not rec:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired.")
+    await db.users.update_one({"_id": ObjectId(rec["user_id"])},
+                              {"$set": {"password_hash": hash_password(new_password)}})
+    await db.password_reset_tokens.update_one({"_id": rec["_id"]}, {"$set": {"used": True}})
+    return {"message": "Password updated. You can now log in."}
+
+
+@api.post("/auth/google/session")
+async def google_session(payload: GoogleSessionIn, response: Response):
+    import httpx
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                        headers={"X-Session-ID": payload.session_id})
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="Google sign-in failed. Please try again.")
+    data = r.json()
+    email = (data.get("email") or "").lower()
+    user = await db.users.find_one({"email": email})
+    if not user:
+        doc = {
+            "full_name": data.get("name") or email.split("@")[0], "email": email, "mobile": "",
+            "password_hash": hash_password(secrets.token_urlsafe(16)), "role": "user", "status": "active",
+            "dob": "", "age": 0, "gender": "", "city": "Delhi NCR", "bio": "",
+            "photo": data.get("picture") or "", "interests": [], "event_categories": [], "lifestyle": [],
+            "verified": True, "email_verified": True, "auth_provider": "google",
+            "privacy": {"profile_visibility": "public", "who_can_message": "everyone"},
+            "notification_prefs": {"email": True, "in_app": True, "sms": False},
+            "blocked": [], "connections": [], "saved_events": [], "created_at": iso(now_utc()),
+        }
+        res = await db.users.insert_one(doc)
+        user = await db.users.find_one({"_id": res.inserted_id})
+    token = create_access_token(str(user["_id"]), email, user.get("role", "user"))
+    set_cookies(response, token)
+    return {"access_token": token, "user": clean(user)}
+
+
+# ---------------- profiles / discover ----------------
+@api.put("/users/me")
+async def update_me(payload: ProfileIn, user: dict = Depends(get_current_user)):
+    upd = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if upd:
+        await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": upd})
+    return clean(await db.users.find_one({"_id": ObjectId(user["id"])}))
+
+
+PUBLIC_FIELDS = {"full_name": 1, "age": 1, "city": 1, "bio": 1, "photo": 1, "interests": 1,
+                 "event_categories": 1, "lifestyle": 1, "created_at": 1, "verified": 1, "role": 1}
+
+
+@api.get("/discover")
+async def discover(city: str = "", interest: str = "", category: str = "",
+                   min_age: int = 21, max_age: int = 99, q: str = "",
+                   page: int = 1, limit: int = 12, user: dict = Depends(get_current_user)):
+    me_doc = await db.users.find_one({"_id": ObjectId(user["id"])})
+    blocked = me_doc.get("blocked", [])
+    flt: dict[str, Any] = {"role": "user", "status": "active",
+                           "_id": {"$nin": [ObjectId(b) for b in blocked] + [ObjectId(user["id"])]},
+                           "privacy.profile_visibility": {"$ne": "private"}}
+    if city:
+        flt["city"] = city
+    if interest:
+        flt["interests"] = interest
+    if category:
+        flt["event_categories"] = category
+    if q:
+        flt["full_name"] = {"$regex": q, "$options": "i"}
+    flt["age"] = {"$gte": min_age, "$lte": max_age}
+    total = await db.users.count_documents(flt)
+    cur = db.users.find(flt, PUBLIC_FIELDS).skip((page - 1) * limit).limit(limit)
+    items = []
+    for d in await cur.to_list(limit):
+        c = clean(d)
+        c["membership"] = bool(await membership_active(c["id"]))
+        items.append(c)
+    return {"items": items, "total": total, "page": page}
+
+
+@api.get("/users/{user_id}")
+async def get_user(user_id: str, user: dict = Depends(get_current_user)):
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(user_id)}, PUBLIC_FIELDS)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    out = clean(doc)
+    out["events_attended"] = await db.event_participants.count_documents(
+        {"user_id": user_id, "status": "confirmed"})
+    out["membership"] = bool(await membership_active(user_id))
+    out["is_connected"] = user_id in (await db.users.find_one({"_id": ObjectId(user["id"])})).get("connections", [])
+    return out
+
+
+@api.post("/users/{user_id}/connect")
+async def connect(user_id: str, user: dict = Depends(get_current_user)):
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$addToSet": {"connections": user_id}})
+    await notify(user_id, "New connection", f"{user['full_name']} connected with you on Buddilio.",
+                 "connection", "/discover")
+    return {"ok": True}
+
+
+@api.post("/users/{user_id}/block")
+async def block(user_id: str, user: dict = Depends(get_current_user)):
+    await db.users.update_one({"_id": ObjectId(user["id"])},
+                              {"$addToSet": {"blocked": user_id}, "$pull": {"connections": user_id}})
+    return {"ok": True}
+
+
+@api.post("/reports")
+async def create_report(payload: ReportIn, user: dict = Depends(get_current_user)):
+    await db.reports.insert_one({
+        "reporter_id": user["id"], "reporter_email": user["email"],
+        "target_type": payload.target_type, "target_id": payload.target_id,
+        "reason": payload.reason, "details": payload.details, "status": "open",
+        "created_at": iso(now_utc())})
+    return {"message": "Report submitted. Our safety team will review it."}
+
+
+# ---------------- events ----------------
+@api.get("/events")
+async def list_events(q: str = "", city: str = "", category: str = "", max_price: float = -1,
+                      featured: Optional[bool] = None, when: str = "", sort: str = "date",
+                      page: int = 1, limit: int = 12):
+    flt: dict[str, Any] = {"status": "published"}
+    if q:
+        flt["title"] = {"$regex": q, "$options": "i"}
+    if city:
+        flt["city"] = city
+    if category:
+        flt["category"] = category
+    if max_price >= 0:
+        flt["price"] = {"$lte": max_price}
+    if featured:
+        flt["featured"] = True
+    if when == "upcoming":
+        flt["starts_at"] = {"$gte": iso(now_utc())}
+    total = await db.events.count_documents(flt)
+    sort_key = [("participant_count", -1)] if sort == "popular" else [("starts_at", 1)]
+    docs = await db.events.find(flt).sort(sort_key).skip((page - 1) * limit).limit(limit).to_list(limit)
+    return {"items": [clean(d) for d in docs], "total": total, "page": page}
+
+
+@api.get("/events/{event_id}")
+async def get_event(event_id: str, user: Optional[dict] = Depends(optional_user)):
+    try:
+        doc = await db.events.find_one({"_id": ObjectId(event_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid event id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Event not found")
+    ev = clean(doc)
+    if ev["status"] != "published" and not (user and (user["role"] == "admin" or ev.get("partner_id") == user["id"])):
+        raise HTTPException(status_code=403, detail="This event is not published yet.")
+    parts = await db.event_participants.find({"event_id": event_id, "status": "confirmed"}).to_list(200)
+    ev["participants"] = []
+    for p in parts[:20]:
+        u = await db.users.find_one({"_id": ObjectId(p["user_id"])},
+                                    {"full_name": 1, "photo": 1, "city": 1})
+        if u:
+            ev["participants"].append(clean(u))
+    ev["participant_count"] = len(parts)
+    ev["seats_left"] = max(ev.get("capacity", 0) - len(parts), 0)
+    if user:
+        mine = await db.event_participants.find_one({"event_id": event_id, "user_id": user["id"]})
+        ev["my_status"] = mine["status"] if mine else None
+    return ev
+
+
+@api.post("/events/{event_id}/join")
+async def join_event(event_id: str, user: dict = Depends(get_current_user)):
+    ev = await db.events.find_one({"_id": ObjectId(event_id), "status": "published"})
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if await db.event_participants.find_one({"event_id": event_id, "user_id": user["id"]}):
+        raise HTTPException(status_code=400, detail="You have already joined or requested this event.")
+    count = await db.event_participants.count_documents({"event_id": event_id, "status": "confirmed"})
+    if count >= ev.get("capacity", 0):
+        raise HTTPException(status_code=400, detail="This event is fully booked.")
+    if ev.get("price", 0) > 0:
+        raise HTTPException(status_code=400, detail="This is a paid event. Please buy a pass to join.")
+    status = "confirmed" if ev.get("approval_mode", "instant") == "instant" else "pending"
+    await db.event_participants.insert_one({
+        "event_id": event_id, "user_id": user["id"], "status": status,
+        "created_at": iso(now_utc())})
+    if status == "confirmed":
+        await db.events.update_one({"_id": ev["_id"]}, {"$inc": {"participant_count": 1}})
+    await notify(user["id"], "Event booking " + status,
+                 f"Your spot for {ev['title']} is {status}.", "event", f"/events/{event_id}")
+    return {"status": status}
+
+
+@api.post("/events/{event_id}/cancel")
+async def cancel_participation(event_id: str, user: dict = Depends(get_current_user)):
+    res = await db.event_participants.delete_one({"event_id": event_id, "user_id": user["id"]})
+    if res.deleted_count:
+        await db.events.update_one({"_id": ObjectId(event_id)}, {"$inc": {"participant_count": -1}})
+    return {"ok": True}
+
+
+@api.post("/events/{event_id}/save")
+async def save_event(event_id: str, user: dict = Depends(get_current_user)):
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if event_id in u.get("saved_events", []):
+        await db.users.update_one({"_id": u["_id"]}, {"$pull": {"saved_events": event_id}})
+        return {"saved": False}
+    await db.users.update_one({"_id": u["_id"]}, {"$addToSet": {"saved_events": event_id}})
+    return {"saved": True}
+
+
+@api.get("/me/events")
+async def my_events(user: dict = Depends(get_current_user)):
+    parts = await db.event_participants.find({"user_id": user["id"]}).to_list(200)
+    out = []
+    for p in parts:
+        try:
+            ev = await db.events.find_one({"_id": ObjectId(p["event_id"])})
+        except Exception:
+            continue
+        if ev:
+            e = clean(ev)
+            e["my_status"] = p["status"]
+            out.append(e)
+    return {"items": out}
+
+
+@api.get("/me/saved-events")
+async def saved_events(user: dict = Depends(get_current_user)):
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    ids = [ObjectId(i) for i in u.get("saved_events", [])]
+    docs = await db.events.find({"_id": {"$in": ids}}).to_list(100)
+    return {"items": [clean(d) for d in docs]}
+
+
+# ---------------- partner ----------------
+@api.post("/partner/events")
+async def create_event(payload: EventIn, submit: bool = False, user: dict = Depends(partner_only)):
+    doc = payload.model_dump()
+    doc.update({"partner_id": user["id"], "partner_name": user.get("org_name") or user["full_name"],
+                "status": "submitted" if submit else "draft", "participant_count": 0,
+                "created_at": iso(now_utc())})
+    res = await db.events.insert_one(doc)
+    await audit(user, "event.create", "event", str(res.inserted_id), {"title": payload.title})
+    return clean(await db.events.find_one({"_id": res.inserted_id}))
+
+
+@api.put("/partner/events/{event_id}")
+async def update_event(event_id: str, payload: EventIn, user: dict = Depends(partner_only)):
+    ev = await db.events.find_one({"_id": ObjectId(event_id)})
+    if not ev or (user["role"] != "admin" and ev.get("partner_id") != user["id"]):
+        raise HTTPException(status_code=404, detail="Event not found")
+    await db.events.update_one({"_id": ev["_id"]}, {"$set": payload.model_dump()})
+    return clean(await db.events.find_one({"_id": ev["_id"]}))
+
+
+@api.post("/partner/events/{event_id}/submit")
+async def submit_event(event_id: str, user: dict = Depends(partner_only)):
+    ev = await db.events.find_one({"_id": ObjectId(event_id)})
+    if not ev or (user["role"] != "admin" and ev.get("partner_id") != user["id"]):
+        raise HTTPException(status_code=404, detail="Event not found")
+    await db.events.update_one({"_id": ev["_id"]}, {"$set": {"status": "submitted"}})
+    admin = await db.users.find_one({"role": "admin"})
+    if admin:
+        await notify(str(admin["_id"]), "Event awaiting review",
+                     f"{ev['title']} was submitted for approval.", "moderation", "/admin/events")
+    return {"status": "submitted"}
+
+
+@api.get("/partner/events")
+async def partner_events(user: dict = Depends(partner_only)):
+    docs = await db.events.find({"partner_id": user["id"]}).sort([("created_at", -1)]).to_list(200)
+    return {"items": [clean(d) for d in docs]}
+
+
+@api.get("/partner/stats")
+async def partner_stats(user: dict = Depends(partner_only)):
+    evs = await db.events.find({"partner_id": user["id"]}).to_list(500)
+    ids = [str(e["_id"]) for e in evs]
+    parts = await db.event_participants.count_documents({"event_id": {"$in": ids}})
+    orders = await db.orders.find({"ref_id": {"$in": ids}, "payment_status": "paid"}).to_list(1000)
+    revenue = sum(o.get("total", 0) for o in orders)
+    return {"events": len(evs), "published": sum(1 for e in evs if e.get("status") == "published"),
+            "pending": sum(1 for e in evs if e.get("status") == "submitted"),
+            "participants": parts, "revenue": revenue, "payout_due": round(revenue * 0.85, 2)}
+
+
+@api.get("/partner/events/{event_id}/participants")
+async def event_participants(event_id: str, user: dict = Depends(partner_only)):
+    ev = await db.events.find_one({"_id": ObjectId(event_id)})
+    if not ev or (user["role"] != "admin" and ev.get("partner_id") != user["id"]):
+        raise HTTPException(status_code=404, detail="Event not found")
+    parts = await db.event_participants.find({"event_id": event_id}).to_list(500)
+    out = []
+    for p in parts:
+        u = await db.users.find_one({"_id": ObjectId(p["user_id"])}, {"full_name": 1, "email": 1, "city": 1, "photo": 1})
+        if u:
+            item = clean(u)
+            item["participation_status"] = p["status"]
+            out.append(item)
+    return {"items": out}
+
+
+# ---------------- membership / products / coupons ----------------
+@api.get("/plans")
+async def plans():
+    docs = await db.membership_plans.find({"active": True}).sort([("price", 1)]).to_list(50)
+    return {"items": [clean(d) for d in docs]}
+
+
+@api.get("/products")
+async def products(city: str = "", q: str = ""):
+    flt: dict[str, Any] = {"active": True}
+    if city:
+        flt["city"] = {"$in": [city, "All India"]}
+    if q:
+        flt["name"] = {"$regex": q, "$options": "i"}
+    docs = await db.products.find(flt).to_list(100)
+    return {"items": [clean(d) for d in docs]}
+
+
+@api.get("/me/membership")
+async def my_membership(user: dict = Depends(get_current_user)):
+    return {"membership": await membership_active(user["id"])}
+
+
+async def price_for(kind: str, item_id: str):
+    if kind == "membership":
+        d = await db.membership_plans.find_one({"_id": ObjectId(item_id)})
+        return (d, d["price"], d["name"], 0) if d else (None, 0, "", 0)
+    if kind == "product":
+        d = await db.products.find_one({"_id": ObjectId(item_id)})
+        if not d:
+            return None, 0, "", 0
+        base = d["price"] * (1 - d.get("discount_percent", 0) / 100)
+        return d, base, d["name"], d.get("tax_percent", 18)
+    d = await db.events.find_one({"_id": ObjectId(item_id)})
+    return (d, d.get("price", 0), d["title"], 18) if d else (None, 0, "", 0)
+
+
+@api.post("/checkout")
+async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
+    item, base, name, tax_pct = await price_for(payload.kind, payload.item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not available")
+    subtotal = round(base * max(payload.quantity, 1), 2)
+    discount = 0.0
+    coupon = None
+    member = await membership_active(user["id"])
+    if member and payload.kind in ("product", "event"):
+        mp = await db.membership_plans.find_one({"_id": ObjectId(member["plan_id"])})
+        if mp and mp.get("discount_percent"):
+            discount += round(subtotal * mp["discount_percent"] / 100, 2)
+    if payload.coupon_code:
+        coupon = await db.coupons.find_one({"code": payload.coupon_code.upper(), "active": True})
+        if not coupon:
+            raise HTTPException(status_code=400, detail="Invalid coupon code.")
+        if coupon.get("expires_at") and coupon["expires_at"] < iso(now_utc()):
+            raise HTTPException(status_code=400, detail="This coupon has expired.")
+        if subtotal < coupon.get("min_order", 0):
+            raise HTTPException(status_code=400, detail=f"Coupon needs a minimum order of ₹{coupon['min_order']:.0f}.")
+        if coupon.get("members_only") and not member:
+            raise HTTPException(status_code=400, detail="This coupon is for premium members only.")
+        used = await db.coupon_usage.count_documents({"code": coupon["code"]})
+        if used >= coupon.get("usage_limit", 0):
+            raise HTTPException(status_code=400, detail="This coupon has reached its usage limit.")
+        discount += round(subtotal * coupon["value"] / 100, 2) if coupon["discount_type"] == "percent" else coupon["value"]
+    discount = min(discount, subtotal)
+    taxable = subtotal - discount
+    tax = round(taxable * tax_pct / 100, 2)
+    total = round(taxable + tax, 2)
+    order = {
+        "order_no": "BUD" + uuid.uuid4().hex[:8].upper(), "user_id": user["id"], "user_email": user["email"],
+        "kind": payload.kind, "ref_id": payload.item_id, "item_name": name, "quantity": payload.quantity,
+        "subtotal": subtotal, "discount": discount, "tax": tax, "total": total,
+        "coupon": coupon["code"] if coupon else "", "currency": "INR",
+        "payment_status": "pending", "order_status": "created", "refund_status": "none",
+        "gateway": "razorpay_sim", "transaction_id": "", "created_at": iso(now_utc()),
+    }
+    res = await db.orders.insert_one(order)
+    return {"order": clean(await db.orders.find_one({"_id": res.inserted_id}))}
+
+
+@api.post("/payments/verify")
+async def verify_payment(payload: VerifyPaymentIn, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"_id": ObjectId(payload.order_id), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order["payment_status"] == "paid":
+        return {"status": "paid", "order": clean(order)}
+    if payload.simulate == "failure":
+        await db.orders.update_one({"_id": order["_id"]},
+                                   {"$set": {"payment_status": "failed", "order_status": "failed"}})
+        await db.payments.insert_one({"order_id": str(order["_id"]), "user_id": user["id"],
+                                      "amount": order["total"], "status": "failed",
+                                      "created_at": iso(now_utc())})
+        raise HTTPException(status_code=402, detail="Payment failed. No amount was charged. Please try again.")
+    txn = payload.gateway_payment_id or "pay_" + uuid.uuid4().hex[:14]
+    await db.orders.update_one({"_id": order["_id"]},
+                               {"$set": {"payment_status": "paid", "order_status": "completed",
+                                         "transaction_id": txn, "paid_at": iso(now_utc())}})
+    await db.payments.insert_one({"order_id": str(order["_id"]), "user_id": user["id"],
+                                  "amount": order["total"], "status": "captured",
+                                  "transaction_id": txn, "created_at": iso(now_utc())})
+    if order.get("coupon"):
+        await db.coupon_usage.insert_one({"code": order["coupon"], "user_id": user["id"],
+                                          "order_id": str(order["_id"]), "created_at": iso(now_utc())})
+    if order["kind"] == "membership":
+        plan = await db.membership_plans.find_one({"_id": ObjectId(order["ref_id"])})
+        await db.user_memberships.update_many({"user_id": user["id"], "status": "active"},
+                                              {"$set": {"status": "replaced"}})
+        await db.user_memberships.insert_one({
+            "user_id": user["id"], "plan_id": order["ref_id"], "plan_name": plan["name"],
+            "status": "active", "starts_at": iso(now_utc()),
+            "ends_at": iso(now_utc() + timedelta(days=plan.get("duration_days", 365))),
+            "order_id": str(order["_id"]), "created_at": iso(now_utc())})
+        await notify(user["id"], "Membership activated",
+                     f"Your {plan['name']} membership is now active.", "membership", "/membership")
+    elif order["kind"] == "event":
+        ev = await db.events.find_one({"_id": ObjectId(order["ref_id"])})
+        if ev and not await db.event_participants.find_one({"event_id": order["ref_id"], "user_id": user["id"]}):
+            st = "confirmed" if ev.get("approval_mode") == "instant" else "pending"
+            await db.event_participants.insert_one({"event_id": order["ref_id"], "user_id": user["id"],
+                                                     "status": st, "order_id": str(order["_id"]),
+                                                     "created_at": iso(now_utc())})
+            await db.events.update_one({"_id": ev["_id"]}, {"$inc": {"participant_count": 1}})
+        await notify(user["id"], "Event pass confirmed", f"You're going to {order['item_name']}!",
+                     "event", f"/events/{order['ref_id']}")
+    else:
+        await notify(user["id"], "Purchase successful", f"{order['item_name']} is now in your account.",
+                     "order", "/orders")
+    return {"status": "paid", "order": clean(await db.orders.find_one({"_id": order["_id"]}))}
+
+
+@api.get("/me/orders")
+async def my_orders(user: dict = Depends(get_current_user)):
+    docs = await db.orders.find({"user_id": user["id"]}).sort([("created_at", -1)]).to_list(200)
+    return {"items": [clean(d) for d in docs]}
+
+
+# ---------------- messaging ----------------
+@api.post("/conversations")
+async def start_conversation(body: dict, user: dict = Depends(get_current_user)):
+    other_id = body.get("user_id")
+    other = await db.users.find_one({"_id": ObjectId(other_id)})
+    if not other:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user["id"] in other.get("blocked", []):
+        raise HTTPException(status_code=403, detail="You cannot message this member.")
+    conv = await db.conversations.find_one({"type": "direct", "members": {"$all": [user["id"], other_id]}})
+    if not conv:
+        res = await db.conversations.insert_one({
+            "type": "direct", "members": [user["id"], other_id], "event_id": "",
+            "title": "", "last_message": "", "updated_at": iso(now_utc()),
+            "created_at": iso(now_utc())})
+        conv = await db.conversations.find_one({"_id": res.inserted_id})
+    return clean(conv)
+
+
+@api.get("/conversations")
+async def list_conversations(user: dict = Depends(get_current_user)):
+    docs = await db.conversations.find({"members": user["id"]}).sort([("updated_at", -1)]).to_list(100)
+    out = []
+    for d in docs:
+        c = clean(d)
+        if c["type"] == "direct":
+            oid = next((m for m in c["members"] if m != user["id"]), None)
+            other = await db.users.find_one({"_id": ObjectId(oid)}, {"full_name": 1, "photo": 1}) if oid else None
+            c["title"] = other["full_name"] if other else "Buddilio member"
+            c["avatar"] = other.get("photo", "") if other else ""
+            c["other_id"] = oid
+        c["unread"] = await db.messages.count_documents(
+            {"conversation_id": c["id"], "sender_id": {"$ne": user["id"]}, "read": False})
+        out.append(c)
+    return {"items": out}
+
+
+@api.get("/conversations/{cid}/messages")
+async def get_messages(cid: str, user: dict = Depends(get_current_user)):
+    conv = await db.conversations.find_one({"_id": ObjectId(cid)})
+    if not conv or user["id"] not in conv["members"]:
+        raise HTTPException(status_code=403, detail="You are not part of this conversation.")
+    await db.messages.update_many({"conversation_id": cid, "sender_id": {"$ne": user["id"]}},
+                                  {"$set": {"read": True}})
+    docs = await db.messages.find({"conversation_id": cid}).sort([("created_at", 1)]).to_list(500)
+    out = []
+    for d in docs:
+        m = clean(d)
+        u = await db.users.find_one({"_id": ObjectId(m["sender_id"])}, {"full_name": 1, "photo": 1})
+        m["sender_name"] = u["full_name"] if u else "Member"
+        m["sender_photo"] = u.get("photo", "") if u else ""
+        out.append(m)
+    return {"items": out}
+
+
+@api.post("/conversations/{cid}/messages")
+async def send_message(cid: str, payload: MessageIn, user: dict = Depends(get_current_user)):
+    conv = await db.conversations.find_one({"_id": ObjectId(cid)})
+    if not conv or user["id"] not in conv["members"]:
+        raise HTTPException(status_code=403, detail="You are not part of this conversation.")
+    if not payload.body.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    doc = {"conversation_id": cid, "sender_id": user["id"], "body": payload.body.strip()[:2000],
+           "read": False, "created_at": iso(now_utc())}
+    res = await db.messages.insert_one(doc)
+    await db.conversations.update_one({"_id": conv["_id"]},
+                                      {"$set": {"last_message": doc["body"][:80], "updated_at": iso(now_utc())}})
+    for m in conv["members"]:
+        if m != user["id"]:
+            await notify(m, "New message", f"{user['full_name']}: {doc['body'][:60]}", "message", "/messages")
+    return clean(await db.messages.find_one({"_id": res.inserted_id}))
+
+
+@api.delete("/conversations/{cid}")
+async def delete_conversation(cid: str, user: dict = Depends(get_current_user)):
+    conv = await db.conversations.find_one({"_id": ObjectId(cid)})
+    if not conv or user["id"] not in conv["members"]:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    await db.conversations.update_one({"_id": conv["_id"]}, {"$pull": {"members": user["id"]}})
+    return {"ok": True}
+
+
+# ---------------- notifications ----------------
+@api.get("/notifications")
+async def notifications(user: dict = Depends(get_current_user)):
+    docs = await db.notifications.find({"user_id": user["id"]}).sort([("created_at", -1)]).to_list(100)
+    unread = await db.notifications.count_documents({"user_id": user["id"], "read": False})
+    return {"items": [clean(d) for d in docs], "unread": unread}
+
+
+@api.post("/notifications/read-all")
+async def read_all(user: dict = Depends(get_current_user)):
+    await db.notifications.update_many({"user_id": user["id"]}, {"$set": {"read": True}})
+    return {"ok": True}
+
+
+# ---------------- dashboard / search / cms ----------------
+@api.get("/me/dashboard")
+async def dashboard(user: dict = Depends(get_current_user)):
+    membership = await membership_active(user["id"])
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    filled = sum(1 for f in ["photo", "bio", "city", "mobile"] if u.get(f))
+    filled += 1 if u.get("interests") else 0
+    filled += 1 if u.get("event_categories") else 0
+    rec_events = await db.events.find(
+        {"status": "published", "starts_at": {"$gte": iso(now_utc())},
+         "$or": [{"city": u.get("city")}, {"category": {"$in": u.get("event_categories", [])}}]}
+    ).limit(6).to_list(6)
+    if not rec_events:
+        rec_events = await db.events.find({"status": "published"}).limit(6).to_list(6)
+    rec_people = await db.users.find(
+        {"role": "user", "status": "active", "_id": {"$ne": u["_id"]},
+         "$or": [{"city": u.get("city")}, {"interests": {"$in": u.get("interests", [])}}]},
+        PUBLIC_FIELDS).limit(6).to_list(6)
+    return {
+        "profile_completion": round(filled / 6 * 100),
+        "membership": membership,
+        "unread_messages": await db.messages.count_documents(
+            {"sender_id": {"$ne": user["id"]}, "read": False,
+             "conversation_id": {"$in": [str(c["_id"]) for c in await db.conversations.find({"members": user["id"]}).to_list(100)]}}),
+        "unread_notifications": await db.notifications.count_documents({"user_id": user["id"], "read": False}),
+        "orders": await db.orders.count_documents({"user_id": user["id"]}),
+        "upcoming_events": [clean(e) for e in await db.events.find(
+            {"_id": {"$in": [ObjectId(p["event_id"]) for p in await db.event_participants.find({"user_id": user["id"]}).to_list(50)]}}
+        ).limit(5).to_list(5)],
+        "recommended_events": [clean(e) for e in rec_events],
+        "recommended_people": [clean(p) for p in rec_people],
+        "saved_count": len(u.get("saved_events", [])),
+    }
+
+
+@api.get("/search")
+async def global_search(q: str):
+    if not q:
+        return {"users": [], "events": [], "products": []}
+    rx = {"$regex": q, "$options": "i"}
+    users = await db.users.find({"full_name": rx, "role": "user", "status": "active"}, PUBLIC_FIELDS).limit(5).to_list(5)
+    events = await db.events.find({"title": rx, "status": "published"}).limit(5).to_list(5)
+    prods = await db.products.find({"name": rx, "active": True}).limit(5).to_list(5)
+    return {"users": [clean(u) for u in users], "events": [clean(e) for e in events],
+            "products": [clean(p) for p in prods]}
+
+
+@api.get("/meta")
+async def meta():
+    cities = await db.cities.find({}).to_list(100)
+    cats = await db.event_categories.find({}).to_list(100)
+    ints = await db.interests.find({}).to_list(200)
+    return {"cities": [c["name"] for c in cities], "categories": [c["name"] for c in cats],
+            "interests": [i["name"] for i in ints],
+            "settings": clean(await db.settings.find_one({}) or {"_id": ObjectId(), "platform_name": "Buddilio"})}
+
+
+@api.get("/cms/{slug}")
+async def cms_page(slug: str):
+    doc = await db.cms_pages.find_one({"slug": slug})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Page not found")
+    return clean(doc)
+
+
+@api.get("/cms")
+async def cms_pages():
+    return {"items": [clean(d) for d in await db.cms_pages.find({}).to_list(50)]}
+
+
+# ---------------- admin ----------------
+@api.get("/admin/stats")
+async def admin_stats(days: int = 30, user: dict = Depends(admin_only)):
+    since = iso(now_utc() - timedelta(days=days))
+    paid = await db.orders.find({"payment_status": "paid", "created_at": {"$gte": since}}).to_list(2000)
+    def rev(kind):
+        return round(sum(o["total"] for o in paid if o["kind"] == kind), 2)
+    users_total = await db.users.count_documents({"role": "user"})
+    series = {}
+    for o in paid:
+        series[o["created_at"][:10]] = round(series.get(o["created_at"][:10], 0) + o["total"], 2)
+    reg_series = {}
+    for u in await db.users.find({"created_at": {"$gte": since}}, {"created_at": 1}).to_list(2000):
+        reg_series[u["created_at"][:10]] = reg_series.get(u["created_at"][:10], 0) + 1
+    return {
+        "total_users": users_total,
+        "new_users": await db.users.count_documents({"role": "user", "created_at": {"$gte": since}}),
+        "active_users": await db.users.count_documents({"role": "user", "status": "active"}),
+        "premium_members": await db.user_memberships.count_documents({"status": "active"}),
+        "partners": await db.users.count_documents({"role": "partner"}),
+        "events": await db.events.count_documents({}),
+        "upcoming_events": await db.events.count_documents({"status": "published", "starts_at": {"$gte": iso(now_utc())}}),
+        "participations": await db.event_participants.count_documents({}),
+        "gross_sales": round(sum(o["total"] for o in paid), 2),
+        "membership_revenue": rev("membership"), "event_revenue": rev("event"), "pass_revenue": rev("product"),
+        "refunds": await db.orders.count_documents({"refund_status": {"$in": ["requested", "refunded"]}}),
+        "pending_events": await db.events.count_documents({"status": "submitted"}),
+        "open_reports": await db.reports.count_documents({"status": "open"}),
+        "revenue_series": [{"date": k, "amount": v} for k, v in sorted(series.items())],
+        "registration_series": [{"date": k, "count": v} for k, v in sorted(reg_series.items())],
+    }
+
+
+@api.get("/admin/users")
+async def admin_users(q: str = "", role: str = "", status: str = "",
+                      page: int = 1, limit: int = 20, user: dict = Depends(admin_only)):
+    flt: dict[str, Any] = {}
+    if q:
+        flt["$or"] = [{"full_name": {"$regex": q, "$options": "i"}}, {"email": {"$regex": q, "$options": "i"}}]
+    if role:
+        flt["role"] = role
+    if status:
+        flt["status"] = status
+    total = await db.users.count_documents(flt)
+    docs = await db.users.find(flt).sort([("created_at", -1)]).skip((page - 1) * limit).limit(limit).to_list(limit)
+    items = []
+    for d in docs:
+        c = clean(d)
+        c["membership"] = await membership_active(c["id"])
+        items.append(c)
+    return {"items": items, "total": total, "page": page}
+
+
+@api.patch("/admin/users/{uid}")
+async def admin_update_user(uid: str, body: dict, user: dict = Depends(admin_only)):
+    allowed = {k: v for k, v in body.items()
+               if k in ("status", "verified", "role", "full_name", "city", "email_verified")}
+    if not allowed:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    await db.users.update_one({"_id": ObjectId(uid)}, {"$set": allowed})
+    await audit(user, "user.update", "user", uid, allowed)
+    return clean(await db.users.find_one({"_id": ObjectId(uid)}))
+
+
+@api.get("/admin/events")
+async def admin_events(status: str = "", user: dict = Depends(admin_only)):
+    flt = {"status": status} if status else {}
+    docs = await db.events.find(flt).sort([("created_at", -1)]).to_list(300)
+    return {"items": [clean(d) for d in docs]}
+
+
+@api.post("/admin/events/{eid}/moderate")
+async def moderate_event(eid: str, body: dict, user: dict = Depends(admin_only)):
+    action = body.get("action")
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+    ev = await db.events.find_one({"_id": ObjectId(eid)})
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found")
+    new_status = "published" if action == "approve" else "rejected"
+    await db.events.update_one({"_id": ev["_id"]},
+                               {"$set": {"status": new_status, "review_note": body.get("note", "")}})
+    await audit(user, f"event.{action}", "event", eid, {"title": ev["title"]})
+    if ev.get("partner_id"):
+        await notify(ev["partner_id"], f"Event {new_status}",
+                     f"{ev['title']} was {new_status} by the Buddilio team.", "event", "/partner")
+    return {"status": new_status}
+
+
+@api.get("/admin/orders")
+async def admin_orders(status: str = "", user: dict = Depends(admin_only)):
+    flt = {"payment_status": status} if status else {}
+    return {"items": [clean(d) for d in await db.orders.find(flt).sort([("created_at", -1)]).to_list(300)]}
+
+
+@api.post("/admin/orders/{oid}/refund")
+async def refund_order(oid: str, user: dict = Depends(admin_only)):
+    order = await db.orders.find_one({"_id": ObjectId(oid)})
+    if not order or order["payment_status"] != "paid":
+        raise HTTPException(status_code=400, detail="Only paid orders can be refunded.")
+    await db.orders.update_one({"_id": order["_id"]},
+                               {"$set": {"refund_status": "refunded", "order_status": "refunded",
+                                         "refunded_at": iso(now_utc())}})
+    if order["kind"] == "membership":
+        await db.user_memberships.update_many({"order_id": oid}, {"$set": {"status": "cancelled"}})
+    await audit(user, "order.refund", "order", oid, {"amount": order["total"]})
+    await notify(order["user_id"], "Refund processed",
+                 f"₹{order['total']:.0f} for {order['item_name']} has been refunded.", "refund", "/orders")
+    return {"refund_status": "refunded"}
+
+
+@api.get("/admin/reports")
+async def admin_reports(status: str = "", user: dict = Depends(admin_only)):
+    flt = {"status": status} if status else {}
+    docs = await db.reports.find(flt).sort([("created_at", -1)]).to_list(300)
+    out = []
+    for d in docs:
+        r = clean(d)
+        if r["target_type"] == "user":
+            try:
+                t = await db.users.find_one({"_id": ObjectId(r["target_id"])}, {"full_name": 1, "email": 1, "status": 1})
+                r["target"] = clean(t) if t else None
+            except Exception:
+                r["target"] = None
+        out.append(r)
+    return {"items": out}
+
+
+@api.post("/admin/reports/{rid}/resolve")
+async def resolve_report(rid: str, body: dict, user: dict = Depends(admin_only)):
+    action = body.get("action", "dismiss")  # dismiss | suspend | ban
+    rep = await db.reports.find_one({"_id": ObjectId(rid)})
+    if not rep:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if action in ("suspend", "ban") and rep["target_type"] == "user":
+        await db.users.update_one({"_id": ObjectId(rep["target_id"])},
+                                  {"$set": {"status": "suspended" if action == "suspend" else "banned"}})
+    await db.reports.update_one({"_id": rep["_id"]},
+                                {"$set": {"status": "resolved", "resolution": action,
+                                          "resolved_at": iso(now_utc())}})
+    await audit(user, f"report.{action}", "report", rid, {})
+    return {"status": "resolved", "action": action}
+
+
+@api.get("/admin/audit-logs")
+async def audit_logs(user: dict = Depends(admin_only)):
+    return {"items": [clean(d) for d in await db.audit_logs.find({}).sort([("created_at", -1)]).to_list(200)]}
+
+
+def crud_routes(path: str, coll: str, model):
+    @api.post(f"/admin/{path}", name=f"create_{path}")
+    async def create(payload: model, user: dict = Depends(admin_only)):  # type: ignore
+        doc = payload.model_dump()
+        if "code" in doc:
+            doc["code"] = doc["code"].upper()
+        doc["created_at"] = iso(now_utc())
+        res = await db[coll].insert_one(doc)
+        await audit(user, f"{path}.create", path, str(res.inserted_id), {})
+        return clean(await db[coll].find_one({"_id": res.inserted_id}))
+
+    @api.get(f"/admin/{path}", name=f"list_{path}")
+    async def listing(user: dict = Depends(admin_only)):
+        return {"items": [clean(d) for d in await db[coll].find({}).to_list(200)]}
+
+    @api.put(f"/admin/{path}/{{item_id}}", name=f"update_{path}")
+    async def update(item_id: str, payload: model, user: dict = Depends(admin_only)):  # type: ignore
+        await db[coll].update_one({"_id": ObjectId(item_id)}, {"$set": payload.model_dump()})
+        await audit(user, f"{path}.update", path, item_id, {})
+        return clean(await db[coll].find_one({"_id": ObjectId(item_id)}))
+
+    @api.delete(f"/admin/{path}/{{item_id}}", name=f"delete_{path}")
+    async def delete(item_id: str, user: dict = Depends(admin_only)):
+        await db[coll].delete_one({"_id": ObjectId(item_id)})
+        await audit(user, f"{path}.delete", path, item_id, {})
+        return {"ok": True}
+
+
+crud_routes("plans", "membership_plans", PlanIn)
+crud_routes("products", "products", ProductIn)
+crud_routes("coupons", "coupons", CouponIn)
+
+
+@api.put("/admin/cms/{slug}")
+async def update_cms(slug: str, body: dict, user: dict = Depends(admin_only)):
+    await db.cms_pages.update_one({"slug": slug},
+                                  {"$set": {"title": body.get("title", slug), "content": body.get("content", ""),
+                                            "seo_title": body.get("seo_title", ""),
+                                            "seo_description": body.get("seo_description", ""),
+                                            "updated_at": iso(now_utc())}}, upsert=True)
+    await audit(user, "cms.update", "cms_page", slug, {})
+    return clean(await db.cms_pages.find_one({"slug": slug}))
+
+
+@api.get("/admin/settings")
+async def get_settings(user: dict = Depends(admin_only)):
+    return clean(await db.settings.find_one({}))
+
+
+@api.put("/admin/settings")
+async def update_settings(body: dict, user: dict = Depends(admin_only)):
+    body.pop("id", None)
+    s = await db.settings.find_one({})
+    await db.settings.update_one({"_id": s["_id"]}, {"$set": body})
+    await audit(user, "settings.update", "settings", str(s["_id"]), {})
+    return clean(await db.settings.find_one({}))
+
+
+@api.get("/")
+async def root():
+    return {"service": "Buddilio API", "status": "ok"}
+
+
+app.include_router(api)
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup():
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index([("city", 1), ("role", 1)])
+    await db.events.create_index([("status", 1), ("starts_at", 1)])
+    await db.events.create_index([("city", 1), ("category", 1)])
+    await db.event_participants.create_index([("event_id", 1), ("user_id", 1)])
+    await db.messages.create_index([("conversation_id", 1), ("created_at", 1)])
+    await db.notifications.create_index([("user_id", 1), ("read", 1)])
+    await db.orders.create_index([("user_id", 1), ("created_at", -1)])
+    await db.login_attempts.create_index("identifier")
+    await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+    admin_email = os.environ["ADMIN_EMAIL"]
+    existing = await db.users.find_one({"email": admin_email})
+    if not existing:
+        await db.users.insert_one({
+            "full_name": "Buddilio Admin", "email": admin_email,
+            "password_hash": hash_password(os.environ["ADMIN_PASSWORD"]), "role": "admin",
+            "status": "active", "city": "Delhi NCR", "age": 35, "photo": "", "bio": "",
+            "interests": [], "event_categories": [], "blocked": [], "connections": [],
+            "saved_events": [], "verified": True, "created_at": iso(now_utc())})
+    elif not verify_password(os.environ["ADMIN_PASSWORD"], existing.get("password_hash", "")):
+        await db.users.update_one({"_id": existing["_id"]},
+                                  {"$set": {"password_hash": hash_password(os.environ["ADMIN_PASSWORD"])}})
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    client.close()

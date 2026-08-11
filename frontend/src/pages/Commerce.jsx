@@ -1,0 +1,202 @@
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
+import { api, errMsg, money } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
+import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
+import { Check, ShieldCheck, CreditCard, Smartphone, Building2 } from "lucide-react";
+
+export function Membership() {
+  const { user } = useAuth();
+  const nav = useNavigate();
+  const [plans, setPlans] = useState(null);
+  const [mine, setMine] = useState(null);
+
+  useEffect(() => {
+    api.get("/plans").then(({ data }) => setPlans(data.items)).catch(() => setPlans([]));
+    if (user) api.get("/me/membership").then(({ data }) => setMine(data.membership)).catch(() => {});
+  }, [user]);
+
+  if (!plans) return <Spinner />;
+
+  const pick = (p) => {
+    if (!user) return nav("/login");
+    if (p.price === 0) return toast.success("You're already on Basic — it's free for every member.");
+    nav(`/checkout?kind=membership&id=${p.id}`);
+  };
+
+  return (
+    <div className="mx-auto max-w-7xl px-4 sm:px-6 py-10 pb-28" data-testid="membership-page">
+      <SEO title="Membership plans" description="Buddilio membership: discounts on passes, premium discovery filters and priority access." />
+      <p className="overline">Membership</p>
+      <h1 className="mt-2 text-3xl sm:text-4xl font-bold">Choose how you go out</h1>
+
+      {mine && (
+        <div className="mt-6 rounded-2xl bg-slate-900 text-white p-6 flex flex-wrap items-center justify-between gap-4" data-testid="current-membership">
+          <div>
+            <p className="overline text-slate-400">Your active plan</p>
+            <p className="text-xl font-display font-bold mt-1">{mine.plan_name}</p>
+          </div>
+          <p className="text-sm text-slate-400">Renews / expires {new Date(mine.ends_at).toLocaleDateString("en-IN")}</p>
+        </div>
+      )}
+
+      <div className="mt-10 grid md:grid-cols-3 gap-6">
+        {plans.map((p, i) => (
+          <div key={p.id} data-testid={`plan-card-${p.id}`}
+            className={`rounded-3xl p-8 border hover-lift ${i === 2 ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>
+            {i === 2 && <span className="overline text-slate-400">Best value</span>}
+            <p className="font-display font-semibold text-2xl mt-1">{p.name}</p>
+            <p className={`text-sm mt-2 ${i === 2 ? "text-slate-400" : "text-slate-500"}`}>{p.description}</p>
+            <p className="mt-6 text-4xl font-display font-bold">{p.price === 0 ? "Free" : money(p.price)}</p>
+            <p className={`text-xs mt-1 ${i === 2 ? "text-slate-400" : "text-slate-500"}`}>for {p.duration_days} days{p.discount_percent > 0 && ` · ${p.discount_percent}% off all passes`}</p>
+            <ul className="mt-6 space-y-2.5 text-sm">
+              {p.benefits.map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}
+            </ul>
+            <button onClick={() => pick(p)} data-testid={`plan-cta-${p.id}`}
+              className={`mt-8 w-full rounded-full py-3.5 text-sm font-bold ${i === 2 ? "bg-white text-slate-900" : "bg-slate-900 text-white"}`}>
+              {p.price === 0 ? "Included free" : `Get ${p.name}`}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function Passes() {
+  const { user } = useAuth();
+  const nav = useNavigate();
+  const [items, setItems] = useState(null);
+  const [city, setCity] = useState("");
+  const [cities, setCities] = useState([]);
+
+  useEffect(() => { api.get("/meta").then(({ data }) => setCities(data.cities)).catch(() => {}); }, []);
+  useEffect(() => { api.get("/products", { params: { city } }).then(({ data }) => setItems(data.items)).catch(() => setItems([])); }, [city]);
+
+  return (
+    <div className="mx-auto max-w-7xl px-4 sm:px-6 py-10 pb-28" data-testid="passes-page">
+      <SEO title="Passes & products" description="Party passes, night passes, dining experiences and gift cards from Buddilio." />
+      <p className="overline">Passes</p>
+      <h1 className="mt-2 text-3xl sm:text-4xl font-bold">Buddilio passes</h1>
+      <p className="mt-3 text-slate-600 max-w-2xl">One purchase, multiple nights out. Members get an extra discount at checkout.</p>
+
+      <select data-testid="passes-city" value={city} onChange={(e) => setCity(e.target.value)}
+        className="mt-6 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm">
+        <option value="">All cities</option>{cities.map((c) => <option key={c}>{c}</option>)}
+      </select>
+
+      {!items ? <Spinner /> : items.length ? (
+        <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {items.map((p) => {
+            const final = p.price * (1 - p.discount_percent / 100);
+            return (
+              <div key={p.id} data-testid={`product-card-${p.id}`} className="rounded-2xl border border-slate-200 bg-white overflow-hidden hover-lift">
+                <img src={p.image} alt={p.name} loading="lazy" className="aspect-[16/10] w-full object-cover" />
+                <div className="p-6">
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="font-display font-semibold text-lg">{p.name}</h3>
+                    {p.discount_percent > 0 && <Badge tone="green">{p.discount_percent}% off</Badge>}
+                  </div>
+                  <p className="mt-2 text-sm text-slate-500 leading-relaxed">{p.description}</p>
+                  <div className="mt-4 flex items-baseline gap-2">
+                    <p className="text-2xl font-display font-bold">{money(final)}</p>
+                    {p.discount_percent > 0 && <p className="text-sm text-slate-400 line-through">{money(p.price)}</p>}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">Valid {p.validity_days} days · {p.city} · +{p.tax_percent}% GST</p>
+                  <button onClick={() => user ? nav(`/checkout?kind=product&id=${p.id}`) : nav("/login")}
+                    data-testid={`buy-product-${p.id}`} className="mt-5 w-full rounded-full bg-slate-900 text-white py-3 text-sm font-bold">
+                    Buy pass
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : <div className="mt-8"><Empty title="No passes for this city yet" sub="Try All cities — many passes work nationwide." /></div>}
+    </div>
+  );
+}
+
+export function Checkout() {
+  const [params] = useSearchParams();
+  const nav = useNavigate();
+  const kind = params.get("kind");
+  const itemId = params.get("id");
+  const [order, setOrder] = useState(null);
+  const [coupon, setCoupon] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [method, setMethod] = useState("upi");
+
+  const create = async (code = "") => {
+    setBusy(true);
+    try {
+      const { data } = await api.post("/checkout", { kind, item_id: itemId, quantity: 1, coupon_code: code });
+      setOrder(data.order);
+      if (code) toast.success("Coupon applied");
+    } catch (e) { toast.error(errMsg(e)); if (!order) nav(-1); } finally { setBusy(false); }
+  };
+
+  useEffect(() => { if (kind && itemId) create(""); /* eslint-disable-next-line */ }, [kind, itemId]);
+
+  const pay = async (simulate) => {
+    setBusy(true);
+    try {
+      await api.post("/payments/verify", { order_id: order.id, simulate });
+      toast.success("Payment successful");
+      nav(kind === "membership" ? "/membership" : kind === "event" ? `/events/${itemId}` : "/orders");
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+  };
+
+  if (!order) return <Spinner label="Preparing your order" />;
+
+  return (
+    <div className="mx-auto max-w-3xl px-4 sm:px-6 py-10 pb-28" data-testid="checkout-page">
+      <SEO title="Checkout" />
+      <h1 className="text-3xl font-bold">Checkout</h1>
+      <p className="mt-2 text-sm text-slate-500">Order #{order.order_no}</p>
+
+      <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6">
+        <p className="font-semibold">{order.item_name}</p>
+        <div className="mt-5 space-y-2 text-sm">
+          <div className="flex justify-between"><span className="text-slate-500">Subtotal</span><span>{money(order.subtotal)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Discount</span><span className="text-emerald-600">− {money(order.discount)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">GST</span><span>{money(order.tax)}</span></div>
+          <div className="flex justify-between border-t border-slate-200 pt-3 font-bold text-base"><span>Total payable</span><span data-testid="order-total">{money(order.total)}</span></div>
+        </div>
+
+        <div className="mt-6 flex gap-2">
+          <input data-testid="coupon-input" value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} placeholder="Coupon code"
+            className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm" />
+          <button onClick={() => create(coupon)} disabled={busy} data-testid="apply-coupon"
+            className="rounded-xl border border-slate-900 px-5 py-2.5 text-sm font-bold">Apply</button>
+        </div>
+        <p className="text-xs text-slate-400 mt-2">Try BUDDY20 or FIRSTNIGHT</p>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
+        <p className="overline">Payment method</p>
+        <div className="mt-4 grid sm:grid-cols-3 gap-3">
+          {[["upi", "UPI", Smartphone], ["card", "Card", CreditCard], ["netbanking", "Net banking", Building2]].map(([v, l, Icon]) => (
+            <button key={v} onClick={() => setMethod(v)} data-testid={`pay-method-${v}`}
+              className={`rounded-xl border p-4 text-left ${method === v ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
+              <Icon className="h-5 w-5" /><p className="mt-2 text-sm font-semibold">{l}</p>
+            </button>
+          ))}
+        </div>
+        <p className="mt-4 text-xs text-slate-500 flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4" /> Razorpay-ready gateway in simulation mode. Payment is always verified on our server.
+        </p>
+        <div className="mt-6 grid sm:grid-cols-2 gap-3">
+          <button onClick={() => pay("success")} disabled={busy} data-testid="pay-success-btn"
+            className="rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
+            {busy ? "Processing…" : `Pay ${money(order.total)}`}
+          </button>
+          <button onClick={() => pay("failure")} disabled={busy} data-testid="pay-failure-btn"
+            className="rounded-full border border-slate-200 py-3.5 text-sm font-bold text-slate-500">Simulate failed payment</button>
+        </div>
+      </div>
+      <Link to="/orders" className="mt-6 inline-block text-sm font-bold border-b-2 border-slate-900 pb-0.5">View my orders</Link>
+    </div>
+  );
+}

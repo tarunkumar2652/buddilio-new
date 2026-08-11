@@ -1,0 +1,158 @@
+{
+  "theme": "light",
+  "project_name": "Buddilio",
+  "description": "A modern social discovery and companionship platform for adults to find people to attend social activities, events, and lifestyle experiences. The platform bridges digital trust with physical world connection.",
+  "vibe": "Premium, trustworthy, modern, mobile-first, exclusive yet accessible (The Modern Social Club). Think Soho House aesthetics meets high-end lifestyle tech.",
+  
+  "typography": {
+    "strategy": "The 'Old Money Tech' approach adapted for lifestyle. We avoid generic corporate sans-serifs for headings. We need a typeface that speaks to culture, curation, and premium experiences.",
+    "headings": {
+      "font_family": "Outfit, 'Cabinet Grotesk', sans-serif",
+      "weight": "font-semibold to font-bold",
+      "tracking": "tracking-tight",
+      "usage": "Use for all H1, H2, H3, and major callouts. Never use Inter for headings."
+    },
+    "body": {
+      "font_family": "Manrope, 'Satoshi', sans-serif",
+      "weight": "font-normal",
+      "tracking": "tracking-normal",
+      "line_height": "leading-relaxed"
+    },
+    "labels_overlines": {
+      "style": "uppercase text-xs tracking-[0.2em] font-bold text-slate-500"
+    },
+    "hierarchy_rules": [
+      "H1 (Hero): text-4xl sm:text-5xl lg:text-6xl tracking-tighter leading-[1.1]",
+      "H2 (Section): text-3xl sm:text-4xl tracking-tight",
+      "H3 (Card/Widget): text-xl sm:text-2xl",
+      "Body: text-base (mobile: text-sm)"
+    ]
+  },
+
+  "colors": {
+    "strategy": "Archetype 5: Luxury (Light Mode). Bone-white backgrounds, Midnight Navy accents, and structural grays for high-contrast, sophisticated clarity.",
+    "palette": {
+      "background": {
+        "primary": "#FAFAFA",
+        "secondary": "#FFFFFF",
+        "tertiary": "#F1F5F9"
+      },
+      "brand": {
+        "primary": "#0F172A", 
+        "primary_hover": "#1E293B",
+        "accent": "#000000"
+      },
+      "text": {
+        "primary": "#0F172A",
+        "secondary": "#475569",
+        "muted": "#94A3B8",
+        "inverse": "#FFFFFF"
+      },
+      "ui": {
+        "border": "#E2E8F0",
+        "divider": "#F1F5F9",
+        "error": "#EF4444",
+        "success": "#10B981"
+      }
+    },
+    "rules": [
+      "No pure #FFFFFF backgrounds for the main body; use #FAFAFA (Bone White) to reduce eye strain and feel more premium.",
+      "Primary actions and bold accents must use the Midnight Navy (#0F172A).",
+      "Avoid all generic 'tech blue' or 'dating app pink/red'. Maintain a neutral, sophisticated palette."
+    ]
+  },
+
+  "layouts": {
+    "strategy": "Generous spacing. The 'Bento' Grid Protocol for marketing sections and high-density, cardless/flat grids for dashboards.",
+    "spacing_scale": "p-4, p-6, p-8, p-12, p-16, p-24, p-32",
+    "patterns": {
+      "homepage": "Bento grids for 'Discover Events' and 'Featured Experiences'. Wide gaps (gap-8 to gap-12). Asymmetric alignments to break the 'template' look.",
+      "dashboards": "High-density Grid Mode. 1px solid strokes for borders (border-slate-200), max 12px border-radius (rounded-xl), minimal shadows.",
+      "cards": "Subtle roundness (rounded-2xl or rounded-3xl for marketing, rounded-xl for dashboards). Internal padding must be generous (p-6 or p-8)."
+    },
+    "navigation": "Sticky glassmorphism header (backdrop-blur-xl bg-white/80). Minimalist layout. Mobile-first bottom navigation for the PWA dashboard experience."
+  },
+
+  "visual_enhancers": {
+    "surfaces": "Flat Solid for data/dashboards (clean, clinical trust). Crystal Glassmorphism for floating navs and modal overlays.",
+    "borders": "1px delicate inner stroke (border-slate-200) to separate containers from the background.",
+    "shadows": "Ambient, diffuse shadows only (shadow-[0_8px_30px_rgb(0,0,0,0.04)]). Never use harsh default drop shadows."
+  },
+
+  "motion": {
+    "strategy": "Smooth, purposeful, premium. No excessive bouncing.",
+    "interactions": [
+      "Hover on cards: -translate-y-1, shadow-lg, border-slate-300.",
+      "Buttons: scale-[1.02] active:scale-[0.98] transition-transform duration-200.",
+      "Lists: Staggered fade-up entrances using framer-motion."
+    ]
+  },
+
+  "components": {
+    "buttons": "Pill-shaped (rounded-full) or soft-rect (rounded-xl). Primary uses bg-[#0F172A] text-white. No default HTML buttons.",
+    "inputs": "Shadcn UI forms, customized with rounded-xl, bg-white, border-slate-200, focus:ring-slate-900.",
+    "cards": "Profile cards (Companions) must focus heavily on the image (aspect ratio 3:4 or 4:5), with text overlay as a gradient from black/60 to transparent at the bottom.",
+    "toasts": "Use Sonner component (located in /app/frontend/src/components/ui/sonner.tsx) for all notifications."
+  },
+
+  "media": {
+    "image_strategy": "High-quality lifestyle imagery showcasing authentic connection. No corny stock photos. Focus on lighting, mood, and diversity.",
+    "image_urls": {
+      "hero_background": {
+        "url": "https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg",
+        "description": "Stylish group dinner with drinks in a cozy setting. Represents premium social dining."
+      },
+      "discover_nightlife": {
+        "url": "https://images.unsplash.com/photo-1760331339913-da9637154477",
+        "description": "People dancing at a formal event. Represents premium nightlife and parties."
+      },
+      "discover_cafe": {
+        "url": "https://images.pexels.com/photos/36729801/pexels-photo-36729801.jpeg",
+        "description": "Friends enjoying conversation over coffee. Represents casual daytime meetups."
+      },
+      "companion_profiles": [
+        {
+          "url": "https://images.pexels.com/photos/7580994/pexels-photo-7580994.jpeg",
+          "description": "Professional man smiling."
+        },
+        {
+          "url": "https://images.pexels.com/photos/7580837/pexels-photo-7580837.jpeg",
+          "description": "Professional woman with arms crossed."
+        }
+      ]
+    }
+  },
+  
+  "accessibility": {
+    "contrast": "Ensure text over images uses a gradient overlay (bg-gradient-to-t from-black/80 to-transparent) to pass APCA/WCAG contrast minimums.",
+    "focus": "All interactive elements must have a high-contrast focus ring (focus:ring-2 focus:ring-offset-2 focus:ring-slate-900).",
+    "testing": "All interactive and key informational elements MUST include a `data-testid` attribute (kebab-case, role-based, e.g., data-testid='hero-join-cta')."
+  },
+
+  "instructions_to_main_agent": [
+    "You are building Buddilio.com - a premium social club PWA.",
+    "Install required icon library: yarn add lucide-react",
+    "Install animation library: yarn add framer-motion",
+    "Do NOT build generic center-aligned Vercel template designs. Apply the E1 persona - make it look like a high-end editorial lifestyle product.",
+    "Use pure HTML/Tailwind for the landing page marketing sections to achieve bento grids and overlapping layouts. Use Shadcn for the Dashboard, Forms, and Modals.",
+    "Implement a mobile-first approach. Ensure touch targets are at least 48x48px on mobile.",
+    "Avoid using card components excessively. Go for cardless, rectangular, flat designs for dense dashboards.",
+    "For the companion profile cards, ensure they do not look like Tinder (dating). Focus on shared interests, professional background, and lifestyle vibes."
+  ],
+
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid this: make creative, distinctive frontends.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) where appropriate.",
+    "You MUST NOT apply universal transition (e.g., transition: all). Always add transitions for specific properties.",
+    "You MUST NOT center align the app container, i.e., do not add .App { text-align: center; }.",
+    "Always use modern button styles (pill-shaped or rounded-xl) with interaction animations.",
+    "NEVER use AI assistant Emoji characters (like 🤖🧠💭) for icons. Use clean Lucide icons.",
+    "Every interaction needs micro-animations (hover, transitions, entrance animations).",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Do not use placeholder text for images or logos. Use the provided high-quality image URLs.",
+    "All interactive elements MUST include `data-testid` attribute (e.g., data-testid='login-submit').",
+    "Use 'sonner' for toasts."
+  ]
+}

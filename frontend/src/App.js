@@ -1,0 +1,73 @@
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Toaster } from "sonner";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { Navbar, Footer } from "@/components/Layout";
+import { Spinner } from "@/components/Shared";
+import Home from "@/pages/Home";
+import { Login, Register, ForgotPassword, ResetPassword } from "@/pages/Auth";
+import Dashboard, { Orders, Notifications, SavedEvents } from "@/pages/Dashboard";
+import { Events, EventDetail } from "@/pages/Events";
+import { Discover, PublicProfile, MyProfile } from "@/pages/Discover";
+import Messages from "@/pages/Messages";
+import { Membership, Passes, Checkout } from "@/pages/Commerce";
+import { CmsPage, Safety } from "@/pages/Content";
+import PartnerDashboard from "@/pages/Partner";
+import Admin from "@/pages/Admin";
+import "@/index.css";
+
+function Protected({ children, roles }) {
+  const { user, loading } = useAuth();
+  const loc = useLocation();
+  if (loading) return <Spinner label="Checking your session" />;
+  if (!user) return <Navigate to="/login" state={{ from: loc.pathname }} replace />;
+  if (roles && !roles.includes(user.role)) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+function Shell() {
+  return (
+    <div className="min-h-screen flex flex-col">
+      <Navbar />
+      <main className="flex-1">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/events" element={<Events />} />
+          <Route path="/events/:id" element={<EventDetail />} />
+          <Route path="/passes" element={<Passes />} />
+          <Route path="/membership" element={<Membership />} />
+          <Route path="/safety" element={<Safety />} />
+          <Route path="/p/:slug" element={<CmsPage />} />
+          <Route path="/u/:id" element={<PublicProfile />} />
+
+          <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
+          <Route path="/discover" element={<Protected><Discover /></Protected>} />
+          <Route path="/messages" element={<Protected><Messages /></Protected>} />
+          <Route path="/orders" element={<Protected><Orders /></Protected>} />
+          <Route path="/saved" element={<Protected><SavedEvents /></Protected>} />
+          <Route path="/notifications" element={<Protected><Notifications /></Protected>} />
+          <Route path="/profile" element={<Protected><MyProfile /></Protected>} />
+          <Route path="/checkout" element={<Protected><Checkout /></Protected>} />
+          <Route path="/partner" element={<Protected roles={["partner", "admin"]}><PartnerDashboard /></Protected>} />
+          <Route path="/admin" element={<Protected roles={["admin"]}><Admin /></Protected>} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
+      <Footer />
+      <Toaster position="top-center" richColors />
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <Shell />
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}

@@ -1,0 +1,57 @@
+export const CATEGORIES = ["Parties", "Dining", "Nightlife", "Concerts", "Festivals", "Sports",
+  "Travel", "Networking", "Social Gatherings", "Lifestyle Experiences", "Other"];
+
+export const Spinner = ({ label = "Loading" }) => (
+  <div className="flex flex-col items-center justify-center py-20 gap-3" data-testid="loading-state">
+    <div className="h-8 w-8 rounded-full border-2 border-slate-200 border-t-slate-900 animate-spin" />
+    <p className="text-sm text-slate-500">{label}…</p>
+  </div>
+);
+
+export const Empty = ({ title, sub, action, testid = "empty-state" }) => (
+  <div className="text-center py-16 px-6 rounded-2xl border border-dashed border-slate-300 bg-white" data-testid={testid}>
+    <h3 className="text-xl font-semibold">{title}</h3>
+    {sub && <p className="text-sm text-slate-500 mt-2 max-w-md mx-auto">{sub}</p>}
+    {action && <div className="mt-5 flex justify-center">{action}</div>}
+  </div>
+);
+
+export const Badge = ({ children, tone = "slate" }) => {
+  const tones = {
+    slate: "bg-slate-100 text-slate-700",
+    dark: "bg-slate-900 text-white",
+    green: "bg-emerald-50 text-emerald-700",
+    amber: "bg-amber-50 text-amber-700",
+    red: "bg-red-50 text-red-700",
+  };
+  return <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${tones[tone]}`}>{children}</span>;
+};
+
+export const statusTone = (s) =>
+  ({ published: "green", paid: "green", confirmed: "green", active: "green",
+     submitted: "amber", pending: "amber", draft: "slate", created: "slate",
+     rejected: "red", failed: "red", banned: "red", suspended: "red", refunded: "red" }[s] || "slate");
+
+export const Stat = ({ label, value, sub, testid }) => (
+  <div className="rounded-xl border border-slate-200 bg-white p-5" data-testid={testid}>
+    <p className="overline">{label}</p>
+    <p className="text-2xl font-semibold mt-2 font-display">{value}</p>
+    {sub && <p className="text-xs text-slate-500 mt-1">{sub}</p>}
+  </div>
+);
+
+export const SEO = ({ title, description }) => {
+  if (typeof document !== "undefined") {
+    document.title = title ? `${title} | Buddilio` : "Buddilio — Find your people for every experience";
+    let m = document.querySelector('meta[name="description"]');
+    if (!m) { m = document.createElement("meta"); m.name = "description"; document.head.appendChild(m); }
+    m.content = description || "Discover events, parties, dining and lifestyle experiences and find verified companions to go with.";
+    let og = document.querySelector('meta[property="og:title"]');
+    if (!og) { og = document.createElement("meta"); og.setAttribute("property", "og:title"); document.head.appendChild(og); }
+    og.content = title || "Buddilio";
+    let can = document.querySelector('link[rel="canonical"]');
+    if (!can) { can = document.createElement("link"); can.rel = "canonical"; document.head.appendChild(can); }
+    can.href = window.location.origin + window.location.pathname;
+  }
+  return null;
+};
