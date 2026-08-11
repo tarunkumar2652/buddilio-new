@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { api } from "@/lib/api";
+import { useCurrency } from "@/context/CurrencyContext";
+import { api, fileUrl } from "@/lib/api";
 import { Menu, X, Search, Bell, LayoutGrid, Compass, CalendarDays, MessageCircle, User } from "lucide-react";
 
 const NAV_PUBLIC = [
@@ -19,6 +20,16 @@ const NAV_USER = [
   { to: "/membership", label: "Membership" },
   { to: "/orders", label: "Orders" },
 ];
+
+export const CurrencyPicker = () => {
+  const { list, code, set } = useCurrency();
+  return (
+    <select value={code} onChange={(e) => set(e.target.value)} data-testid="currency-picker"
+      className="rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-slate-900">
+      {list.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+    </select>
+  );
+};
 
 export const Navbar = () => {
   const { user, logout } = useAuth();
@@ -93,6 +104,7 @@ export const Navbar = () => {
           </div>
 
           <div className="ml-auto md:ml-0 flex items-center gap-2">
+            <CurrencyPicker />
             {user ? (
               <>
                 <Link to="/notifications" className="relative p-2 rounded-full hover:bg-slate-100" data-testid="nav-notifications">
@@ -102,7 +114,7 @@ export const Navbar = () => {
                 {user.role === "admin" && <Link to="/admin" className="hidden sm:block text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-100" data-testid="nav-admin">Admin</Link>}
                 {user.role === "partner" && <Link to="/partner" className="hidden sm:block text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-100" data-testid="nav-partner">Partner</Link>}
                 <Link to="/profile" data-testid="nav-profile" className="hidden sm:flex items-center gap-2">
-                  {user.photo ? <img src={user.photo} alt="" className="h-8 w-8 rounded-full object-cover" />
+                  {user.photo ? <img src={fileUrl(user.photo)} alt="" className="h-8 w-8 rounded-full object-cover" />
                     : <span className="h-8 w-8 rounded-full bg-slate-200 grid place-items-center text-xs font-bold">{user.full_name?.[0]}</span>}
                 </Link>
                 <button onClick={() => { logout(); nav("/"); }} data-testid="nav-logout"

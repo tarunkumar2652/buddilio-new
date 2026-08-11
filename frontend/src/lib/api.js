@@ -21,6 +21,12 @@ export function errMsg(e) {
 export const money = (n) =>
   "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
+export const fileUrl = (u) => {
+  if (!u) return "";
+  if (u.startsWith("http") || u.startsWith("data:")) return u;
+  return `${BASE}${u.startsWith("/") ? "" : "/"}${u}`;
+};
+
 export const fmtDate = (s) => {
   if (!s) return "";
   try {

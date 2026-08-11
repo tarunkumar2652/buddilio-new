@@ -1,9 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { api, errMsg, money, fmtDate, fmtTime } from "@/lib/api";
+import { api, errMsg, fmtDate, fmtTime, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { EventCard } from "@/components/Cards";
+import { useCurrency } from "@/context/CurrencyContext";
+import { EventCard, Stars } from "@/components/Cards";
+import { ReviewSection } from "@/components/ReviewSection";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert } from "lucide-react";
 export function Events() {
@@ -47,11 +49,11 @@ export function Events() {
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
-        {[["", "All"], ["upcoming", "Upcoming"]].map(([v, l]) => (
-          <button key={l} data-testid={`events-when-${l.toLowerCase()}`} onClick={() => { setPage(1); setF({ ...f, when: v }); }}
+        {[["", "All"], ["upcoming", "Upcoming"], ["past", "Past & rated"]].map(([v, l]) => (
+          <button key={l} data-testid={`events-when-${l.toLowerCase().split(" ")[0]}`} onClick={() => { setPage(1); setF({ ...f, when: v }); }}
             className={`rounded-full px-4 py-2 text-xs font-bold border ${f.when === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
         ))}
-        {[["date", "By date"], ["popular", "Most popular"]].map(([v, l]) => (
+        {[["date", "By date"], ["popular", "Most popular"], ["rating", "Top rated"]].map(([v, l]) => (
           <button key={l} data-testid={`events-sort-${v}`} onClick={() => { setPage(1); setF({ ...f, sort: v }); }}
             className={`rounded-full px-4 py-2 text-xs font-bold border ${f.sort === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
         ))}
@@ -82,6 +84,7 @@ export function EventDetail() {
   const { id } = useParams();
   const nav = useNavigate();
   const { user } = useAuth();
+  const { fmt } = useCurrency();
   const [ev, setEv] = useState(null);
   const [busy, setBusy] = useState(false);
   const [reporting, setReporting] = useState(false);
@@ -124,6 +127,8 @@ export function EventDetail() {
     } catch (e) { toast.error(errMsg(e)); }
   };
 
+  const finished = (ev.ends_at || ev.starts_at) < new Date().toISOString();
+
   const share = async () => {    const url = window.location.href;
     try {
       if (navigator.share) await navigator.share({ title: ev.title, url });
@@ -144,12 +149,17 @@ export function EventDetail() {
     <div data-testid="event-detail-page">
       <SEO title={ev.title} description={ev.description?.slice(0, 155)} />
       <div className="relative h-[45vh] min-h-[300px] bg-slate-900">
-        <img src={ev.cover_image} alt={ev.title} className="absolute inset-0 h-full w-full object-cover opacity-70" />
+        <img src={fileUrl(ev.cover_image)} alt={ev.title} className="absolute inset-0 h-full w-full object-cover opacity-70" />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
         <div className="relative h-full mx-auto max-w-7xl px-4 sm:px-6 flex flex-col justify-end pb-10 text-white">
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             <Badge tone="dark">{ev.category}</Badge>
             {ev.featured && <span className="rounded-full bg-white text-slate-900 px-2.5 py-1 text-xs font-bold">Featured</span>}
+            {ev.rating > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-white/95 text-slate-900 px-2.5 py-1 text-xs font-bold" data-testid="detail-rating">
+                <Stars value={ev.rating} size="h-3 w-3" />{ev.rating} ({ev.rating_count})
+              </span>
+            )}
           </div>
           <h1 className="mt-4 text-3xl sm:text-4xl lg:text-5xl font-bold max-w-3xl">{ev.title}</h1>
           <p className="mt-3 text-slate-300 text-sm">Hosted by {ev.partner_name}</p>
@@ -179,7 +189,7 @@ export function EventDetail() {
             <div>
               <h2 className="text-2xl font-bold">Gallery</h2>
               <div className="mt-4 grid grid-cols-2 gap-4">
-                {ev.gallery.map((g, i) => <img key={i} src={g} alt="" loading="lazy" className="rounded-2xl aspect-[4/3] object-cover w-full" />)}
+                {ev.gallery.map((g, i) => <img key={i} src={fileUrl(g)} alt="" loading="lazy" className="rounded-2xl aspect-[4/3] object-cover w-full" />)}
               </div>
             </div>
           )}
@@ -199,7 +209,7 @@ export function EventDetail() {
               <div className="mt-4 flex flex-wrap gap-4">
                 {ev.participants.map((p) => (
                   <Link key={p.id} to={`/u/${p.id}`} data-testid={`participant-${p.id}`} className="flex items-center gap-3 rounded-full border border-slate-200 bg-white pl-1 pr-4 py-1">
-                    {p.photo ? <img src={p.photo} alt="" className="h-9 w-9 rounded-full object-cover" />
+                    {p.photo ? <img src={fileUrl(p.photo)} alt="" className="h-9 w-9 rounded-full object-cover" />
                       : <span className="h-9 w-9 rounded-full bg-slate-200 grid place-items-center text-xs font-bold">{p.full_name[0]}</span>}
                     <span className="text-sm font-semibold">{p.full_name.split(" ")[0]}</span>
                   </Link>
@@ -207,6 +217,8 @@ export function EventDetail() {
               </div>
             </div>
           )}
+
+          <ReviewSection eventId={ev.id} canReview={!!user && ev.my_status === "confirmed" && finished} />
 
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 flex gap-3">
             <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
@@ -219,7 +231,7 @@ export function EventDetail() {
 
         <aside className="lg:sticky lg:top-24 h-fit">
           <div className="rounded-2xl border border-slate-200 bg-white p-6">
-            <p className="text-3xl font-display font-bold">{ev.price > 0 ? money(ev.price) : "Free"}</p>
+            <p className="text-3xl font-display font-bold">{ev.price > 0 ? fmt(ev.price) : "Free"}</p>
             <p className="text-xs text-slate-500 mt-1">
               {ev.approval_mode === "instant" ? "Instant confirmation" : "Requires organiser approval"} · {ev.participant_count} going
             </p>
@@ -232,8 +244,14 @@ export function EventDetail() {
                   className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-slate-900 text-white py-3 text-sm font-bold">
                   <Users className="h-4 w-4" />Open group chat
                 </button>
-                <button onClick={cancel} data-testid="cancel-participation"
-                  className="w-full rounded-full border border-slate-200 py-3 text-sm font-bold">Cancel participation</button>
+                {!finished && (
+                  <button onClick={cancel} data-testid="cancel-participation"
+                    className="w-full rounded-full border border-slate-200 py-3 text-sm font-bold">Cancel participation</button>
+                )}
+              </div>
+            ) : finished ? (
+              <div className="mt-5 rounded-xl bg-slate-100 px-4 py-3 text-sm font-semibold text-center text-slate-600" data-testid="event-finished">
+                This experience has finished
               </div>
             ) : (
               <button onClick={join} disabled={busy || ev.seats_left === 0} data-testid="join-event-btn"

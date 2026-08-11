@@ -63,10 +63,10 @@ class TestPaymentsConfig:
         r = requests.get(f"{API}/payments/config", timeout=15)
         assert r.status_code == 200
         d = r.json()
-        assert d["gateway"] == "razorpay"
-        assert d["live"] is False
-        assert d["key_id"] == ""
-        assert "upi" in d["methods"]
+        assert d["razorpay_live"] is False
+        assert d["razorpay_key_id"] == ""
+        assert d["stripe_enabled"] is True
+        assert "upi" in d["methods"]["INR"]
 
     def test_razorpay_order_returns_503_without_keys(self, user_token):
         # Create a real order first

@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 3 full-stack testing complete. Backend: 30/30 tests in test_iteration3.py pass (24 originally + fixed 6 review tests after allowing finished events to be viewed). Verified multi-currency checkout (INR base, USD/EUR/GBP/AED/SGD conversion with charge_subtotal/discount/tax/total + fx_rate + INR equivalent line), Stripe hosted checkout creation (session_id + real checkout.stripe.com URL), /api/payments/status polling returns non-paid until Stripe confirms and does NOT mark order paid, Stripe webhook rejects invalid signature (400), cross-user /payments/verify 404, unauthenticated /uploads 401, PNG upload + retrieval (image bytes + long cache header set by backend, though ingress overrides), non-image extension and >5MB uploads rejected with 400, reviews endpoints (attendee-only, once-per-user, average updates, top-rated sort, /me/reviewable), partner payouts (own only, 15% fee math correct), admin payouts listing, generate_payouts idempotent (no duplicate rows), mark paid writes audit + notifies partner + 2nd attempt returns friendly 400, partner2 can't see partner1 payouts, non-admin gets 403, admin per-currency price_overrides charge exactly the override amount instead of converted (USD 19 verified). Frontend: currency-picker (navbar SELECT) switches prices across events/passes/membership without reload (₹499 → $5.99 with 2 decimals, INR no decimals). Login works with data-testid selectors. Checkout page shows pay-stripe-btn when currency is USD, pay-success-btn/pay-failure-btn when INR. Clicking pay-stripe-btn navigates to real checkout.stripe.com sandbox page with amount US$16.23. Partner /partner Revenue & payouts tab renders payout rows with gross/fee/net/status/reference. Admin /admin Payouts tab shows all payouts with filters, 'Run settlement now' button (data-testid=generate-payouts) is present and idempotent. Reviews section renders reviews-average on finished events. One critical backend bug found and fixed by the testing agent (see rca).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/payments/config", "issue": "Iter2 legacy test asserted d['gateway']=='razorpay' — this field was removed in iter3 in favour of {razorpay_live, stripe_enabled, currencies[]}. Not a bug; iter2 test needs updating to the new contract."},
+      {"endpoint": "GET /api/files/{path}", "issue": "Backend correctly sets Cache-Control: public, max-age=31536000, immutable but the fronting CDN/ingress rewrites the header to 'no-store, no-cache, must-revalidate'. Images still load; long-caching is not effective end-to-end. Deployment/ingress config concern, not application code."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Event card (Home + /events)", "issue": "Card 'Sunday Brunch & Board Games' displays '-2 going · 40 spots' — participant_count went negative because cancel decrements below 0. Guard the counter or clamp with max(0, count).", "selector": "[data-testid^='event-card-']", "priority": "MEDIUM"},
+      {"component": "Dashboard.jsx reviewable-section", "issue": "Section is only rendered when /me/reviewable is non-empty (`{reviewable.length > 0 && ...}`). With the current seed only ananya.kapoor is an attendee of the finished events, and she has already reviewed both, so the prompt is invisible for any test account. Seed at least one attendee who has NOT yet reviewed so this data-testid is testable end-to-end.", "selector": "[data-testid='reviewable-section']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_iteration2.py",
+    "/app/test_reports/pytest/pytest_iter3.xml",
+    "/app/test_reports/pytest/pytest_iter3_full.xml"
+  ],
+  "action_items": [
+    "Update legacy test test_iteration2.py::TestPaymentsConfig::test_payments_config_simulation_mode to match new /api/payments/config shape (razorpay_live/stripe_enabled/currencies) — I did not modify this test to keep iter2 report honest.",
+    "Clamp event.participant_count at 0 (or fix cancel to only $inc when a matching participant was actually removed) so cards don't show negative 'going' numbers.",
+    "Seed one additional user who attended a finished event but has NOT yet reviewed, so the Dashboard 'Rate your recent experiences' prompt (data-testid=reviewable-section) can be exercised by testers.",
+    "Optional infra: allow the ingress to pass through Cache-Control from /api/files/* so uploaded images benefit from the long-cache header set by the app."
+  ],
+  "critical_code_review_comments": [
+    "server.py grew to 1901 lines — split into routers (auth, payments, events, uploads, reviews, payouts, admin) before iter 4.",
+    "GET /api/events/{id} only permitted status=='published' for non-owner viewers, blocking any UI flow (reviews, ratings) for status=='completed' events. Fixed to accept both 'published' and 'completed' — this was the sole blocker for the entire review UI.",
+    "generate_payouts groups by event_id which is correct, but relies on a partial index on payouts.event_id being unique in practice; no explicit unique index. Consider `db.payouts.create_index('event_id', unique=True)` to enforce idempotency at the storage layer.",
+    "stripe_status polls the gateway synchronously on every /api/payments/status call — for high-traffic success pages consider caching last known status for a few seconds to avoid rate-limiting the shared platform Stripe key.",
+    "Stripe webhook route is `@app.post('/api/webhook/stripe')` (not on api router) — consistent with iter 2's razorpay webhook. Both correctly bypass CORS since they are server-to-server, but flag: signature verification is delegated to emergentintegrations.handle_webhook which raises a generic Exception that is caught and re-raised as 400 (verified in TestStripe.test_webhook_invalid_signature_rejected)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py (new file, 30 tests)",
+    "/app/backend/server.py (line 596: allow status in ('published','completed') so finished events remain viewable for reviews — testing-scope minimal fix)"
+  ],
+  "success_rate": {"backend": "100% for iteration-3 (30/30 in test_iteration3.py); overall pytest 74/75 (one legacy iter2 test needs update for new /api/payments/config shape)", "frontend": "All iter-3 flows verified: currency switching, Stripe checkout URL creation, reviews view on completed events, partner + admin payouts UI, image uploads"},
+  "test_credentials": "Admin admin@buddilio.com/Admin@123; Partners partner@buddilio.com and partner2@buddilio.com / Partner@123; Users *@example.com/User@123. Ananya has already reviewed both finished events per iter-3 seed.",
+  "seed_data_creation": "During testing: (a) test_price_override_applies_at_checkout creates + deletes a TEST_Override plan with USD:19 override; (b) test_mark_paid_and_dup_rejected marked the two seeded payouts (Supper Club + Rooftop Jazz) as PAID with references TEST_UTR_* — so the admin Payouts screen now shows both as paid, and 'pay-payout-*' buttons are no longer present until new payouts are generated. Rerun /api/admin/payouts/generate after seeding new finished events if you need pending rows again.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Three backend test files: backend_test.py (regression), test_iteration2.py (chat/websocket/razorpay-sim), test_iteration3.py (currency/stripe/uploads/reviews/payouts). Run with: `export $(grep -v '^#' /app/frontend/.env | xargs) && cd /app/backend && python -m pytest tests/ --tb=short`. Iter-2 test_payments_config_simulation_mode fails because /api/payments/config now returns razorpay_live+stripe_enabled+currencies instead of gateway field — expected, not a regression. The two seeded finished events are id 6a7b73e34a13de566dbd110f (Rooftop Jazz) and 6a7b73e34a13de566dbd112c (Supper Club Thali) both status=completed with real reviews. If you generate more payouts, the pay-payout-{id} testid becomes assertable in the admin UI (fixture creates then teardown-marks paid). STRIPE_API_KEY is the shared platform test key — checkout URL creation works, but do NOT complete card charges. Backend event view was fixed to allow status=completed (line 596), keep this behaviour when refactoring events router.",
+  "rca of the issue": "GET /api/events/{event_id} rejected any status other than 'published' with 403 for non-owner viewers, so the moment /api/admin/payouts/generate flipped a finished event from status=published to status=completed, that event became invisible on the public detail page (renders 'Event unavailable — awaiting approval'). This broke the entire reviews UX chain: (1) Dashboard /me/reviewable did return the completed events, but the CTA link /events/{id} showed 'unavailable', (2) even attendees who tried to open the event directly to leave a rating were blocked, (3) the reviews-average could not surface on the detail page for events that closed 48h+ ago. Reproduction: seed_past_events.py runs, then generate_payouts() sets ev.status='completed' at line 1706 of server.py, then attendee visits /events/{id} → 403. Fix: line 596 now accepts status in ('published','completed'); admin/partner override remains unchanged. Verified live by loading the Supper Club detail page as ananya.kapoor after fix — reviews-average shows 4.5 (4)."
+}

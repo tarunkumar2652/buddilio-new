@@ -99,6 +99,15 @@ async def main():
         "platform_name": "Buddilio", "contact_email": "hello@buddilio.com",
         "contact_number": "+91 98100 00000", "currency": "INR", "tax_percent": 18,
         "gateway": "razorpay", "gateway_mode": "test", "min_age": 21,
+        "currencies": {
+            "INR": {"rate": 1.0, "symbol": "₹", "label": "Indian Rupee"},
+            "USD": {"rate": 0.012, "symbol": "$", "label": "US Dollar"},
+            "EUR": {"rate": 0.011, "symbol": "€", "label": "Euro"},
+            "GBP": {"rate": 0.0094, "symbol": "£", "label": "British Pound"},
+            "AED": {"rate": 0.044, "symbol": "AED ", "label": "UAE Dirham"},
+            "SGD": {"rate": 0.016, "symbol": "S$", "label": "Singapore Dollar"},
+        },
+        "platform_fee_percent": 15, "payout_hold_hours": 48,
         "require_email_verification": False, "auto_approve_events": False,
         "moderation_auto_suspend_reports": 3,
         "social": {"instagram": "https://instagram.com/buddilio", "linkedin": "https://linkedin.com/company/buddilio",
@@ -305,6 +314,7 @@ async def main():
          "seo_description": c[:150], "updated_at": iso(now())} for s, (t, c) in pages.items()])
 
     print("Seed complete:", len(user_ids), "users,", len(event_ids), "events")
+    print("Now run: python seed_past_events.py  (adds finished events, reviews and payouts)")
 
 
 asyncio.run(main())

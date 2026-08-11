@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { api, errMsg } from "@/lib/api";
+import { api, errMsg, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { PersonCard } from "@/components/Cards";
+import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { MessageCircle, UserPlus, Ban, Flag, CalendarDays, Ticket } from "lucide-react";
 
@@ -128,7 +129,7 @@ export function PublicProfile() {
         <div className="h-32 bg-slate-900" />
         <div className="px-6 sm:px-10 pb-8">
           <div className="-mt-14 flex items-end gap-5 flex-wrap">
-            {p.photo ? <img src={p.photo} alt={p.full_name} className="h-28 w-28 rounded-2xl object-cover border-4 border-white" />
+            {p.photo ? <img src={fileUrl(p.photo)} alt={p.full_name} className="h-28 w-28 rounded-2xl object-cover border-4 border-white" />
               : <div className="h-28 w-28 rounded-2xl bg-slate-200 border-4 border-white grid place-items-center text-3xl font-display">{p.full_name[0]}</div>}
             <div className="pb-2">
               <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-3">
@@ -223,15 +224,6 @@ export function MyProfile() {
 
   const toggle = (key, val) => setF((p) => ({ ...p, [key]: p[key].includes(val) ? p[key].filter((x) => x !== val) : [...p[key], val] }));
 
-  const photo = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 3_000_000) return toast.error("Please pick an image under 3MB.");
-    const r = new FileReader();
-    r.onload = () => setF((p) => ({ ...p, photo: r.result }));
-    r.readAsDataURL(file);
-  };
-
   const save = async () => {
     setBusy(true);
     try { await api.put("/users/me", f); await refresh(); toast.success("Profile updated"); }
@@ -246,12 +238,7 @@ export function MyProfile() {
 
       <div className="mt-8 space-y-6">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 space-y-4">
-          <div className="flex items-center gap-4">
-            {f.photo ? <img src={f.photo} alt="" className="h-20 w-20 rounded-2xl object-cover" />
-              : <div className="h-20 w-20 rounded-2xl bg-slate-100 grid place-items-center text-2xl font-display">{f.full_name?.[0]}</div>}
-            <input type="file" accept="image/*" onChange={photo} data-testid="profile-photo-input"
-              className="text-sm file:mr-3 file:rounded-full file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-white file:text-xs file:font-bold" />
-          </div>
+          <ImageUpload value={f.photo} onChange={(url) => setF({ ...f, photo: url })} label="Profile photo" testid="profile-photo-input" />
           <label className="block"><span className="text-xs font-bold text-slate-600">Full name</span>
             <input data-testid="profile-name" value={f.full_name} onChange={(e) => setF({ ...f, full_name: e.target.value })}
               className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>

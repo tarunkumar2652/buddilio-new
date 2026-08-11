@@ -1,8 +1,10 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { CurrencyProvider } from "@/context/CurrencyContext";
 import { Navbar, Footer } from "@/components/Layout";
 import { Spinner } from "@/components/Shared";
+import { InstallPrompt } from "@/components/InstallPrompt";
 import Home from "@/pages/Home";
 import { Login, Register, ForgotPassword, ResetPassword } from "@/pages/Auth";
 import Dashboard, { Orders, Notifications, SavedEvents } from "@/pages/Dashboard";
@@ -10,6 +12,7 @@ import { Events, EventDetail } from "@/pages/Events";
 import { Discover, PublicProfile, MyProfile } from "@/pages/Discover";
 import Messages from "@/pages/Messages";
 import { Membership, Passes, Checkout } from "@/pages/Commerce";
+import { PaymentSuccess, PaymentCancel } from "@/pages/Payment";
 import { CmsPage, Safety } from "@/pages/Content";
 import PartnerDashboard from "@/pages/Partner";
 import Admin from "@/pages/Admin";
@@ -42,6 +45,8 @@ function Shell() {
           <Route path="/safety" element={<Safety />} />
           <Route path="/p/:slug" element={<CmsPage />} />
           <Route path="/u/:id" element={<PublicProfile />} />
+          <Route path="/payment/success" element={<PaymentSuccess />} />
+          <Route path="/payment/cancel" element={<PaymentCancel />} />
 
           <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
           <Route path="/discover" element={<Protected><Discover /></Protected>} />
@@ -57,6 +62,7 @@ function Shell() {
         </Routes>
       </main>
       <Footer />
+      <InstallPrompt />
       <Toaster position="top-center" richColors />
     </div>
   );
@@ -66,7 +72,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Shell />
+        <CurrencyProvider>
+          <Shell />
+        </CurrencyProvider>
       </AuthProvider>
     </BrowserRouter>
   );

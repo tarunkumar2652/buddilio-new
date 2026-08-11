@@ -2,14 +2,16 @@ import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { api, errMsg, money, fmtDate } from "@/lib/api";
+import { ChevronRight } from "lucide-react";
+import { api, errMsg, money, fmtDate, fileUrl } from "@/lib/api";
+import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 
 const NAV = [
   ["dashboard", "Dashboard"], ["users", "Users"], ["partners", "Partners"], ["events", "Events"],
   ["memberships", "Memberships"], ["products", "Products"], ["orders", "Orders"], ["payments", "Payments"],
-  ["coupons", "Coupons"], ["reports", "Reports"], ["moderation", "Moderation"], ["content", "Content"],
-  ["settings", "Settings"], ["audit", "Audit logs"],
+  ["payouts", "Payouts"], ["coupons", "Coupons"], ["reports", "Reports"], ["reviews", "Reviews"],
+  ["content", "Content"], ["settings", "Settings"], ["audit", "Audit logs"],
 ];
 
 const Input = ({ label, ...p }) => (
@@ -24,11 +26,16 @@ export default function Admin() {
       <SEO title="Admin" />
       <p className="overline">Super admin</p>
       <h1 className="mt-2 text-3xl font-bold">Buddilio control centre</h1>
-      <div className="mt-6 flex gap-2 overflow-x-auto no-scrollbar pb-1">
-        {NAV.map(([v, l]) => (
-          <button key={v} onClick={() => setTab(v)} data-testid={`admin-tab-${v}`}
-            className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold border ${tab === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
-        ))}
+      <div className="relative mt-6">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 pr-10 sm:pr-0">
+          {NAV.map(([v, l]) => (
+            <button key={v} onClick={() => setTab(v)} data-testid={`admin-tab-${v}`}
+              className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold border ${tab === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
+          ))}
+        </div>
+        <div aria-hidden className="sm:hidden pointer-events-none absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-[#FAFAFA] via-[#FAFAFA]/80 to-transparent flex items-center justify-end">
+          <ChevronRight className="h-4 w-4 text-slate-400" />
+        </div>
       </div>
       <div className="mt-8">
         {tab === "dashboard" && <Overview />}
@@ -36,16 +43,18 @@ export default function Admin() {
         {tab === "partners" && <Users key="p" role="partner" />}
         {tab === "events" && <Events />}
         {tab === "memberships" && <Crud path="plans" title="Membership plans"
-          fields={[["name", "text"], ["price", "number"], ["duration_days", "number"], ["description", "text"], ["discount_percent", "number"], ["benefits", "list"], ["active", "bool"]]}
-          blank={{ name: "", price: 0, duration_days: 30, description: "", benefits: [], discount_percent: 0, active: true }} />}
+          fields={[["name", "text"], ["price", "number"], ["duration_days", "number"], ["description", "text"], ["discount_percent", "number"], ["benefits", "list"], ["price_overrides", "json"], ["active", "bool"]]}
+          blank={{ name: "", price: 0, duration_days: 30, description: "", benefits: [], discount_percent: 0, price_overrides: {}, active: true }} />}
         {tab === "products" && <Crud path="products" title="Products & passes"
-          fields={[["name", "text"], ["description", "text"], ["price", "number"], ["discount_percent", "number"], ["tax_percent", "number"], ["image", "text"], ["validity_days", "number"], ["city", "text"], ["inventory", "number"], ["member_discount_percent", "number"], ["active", "bool"]]}
-          blank={{ name: "", description: "", price: 0, discount_percent: 0, tax_percent: 18, image: "", validity_days: 30, city: "All India", inventory: 100, member_discount_percent: 10, active: true }} />}
+          fields={[["name", "text"], ["description", "text"], ["price", "number"], ["discount_percent", "number"], ["tax_percent", "number"], ["image", "image"], ["validity_days", "number"], ["city", "text"], ["inventory", "number"], ["member_discount_percent", "number"], ["price_overrides", "json"], ["active", "bool"]]}
+          blank={{ name: "", description: "", price: 0, discount_percent: 0, tax_percent: 18, image: "", validity_days: 30, city: "All India", inventory: 100, member_discount_percent: 10, price_overrides: {}, active: true }} />}
         {tab === "coupons" && <Crud path="coupons" title="Coupons"
           fields={[["code", "text"], ["discount_type", "text"], ["value", "number"], ["min_order", "number"], ["usage_limit", "number"], ["members_only", "bool"], ["expires_at", "text"], ["active", "bool"]]}
           blank={{ code: "", discount_type: "percent", value: 10, min_order: 0, usage_limit: 100, members_only: false, expires_at: "", active: true }} />}
         {(tab === "orders" || tab === "payments") && <Orders payments={tab === "payments"} />}
-        {(tab === "reports" || tab === "moderation") && <Reports />}
+        {tab === "payouts" && <Payouts />}
+        {tab === "reports" && <Reports />}
+        {tab === "reviews" && <ReviewsMod />}
         {tab === "content" && <Content />}
         {tab === "settings" && <Settings />}
         {tab === "audit" && <Audit />}
@@ -83,6 +92,7 @@ function Overview() {
         <Stat label="Refunds" value={s.refunds} />
         <Stat label="Pending event approvals" value={s.pending_events} testid="admin-stat-pending-events" />
         <Stat label="Open reports" value={s.open_reports} testid="admin-stat-reports" />
+        <Stat label="Flagged reviews" value={s.flagged_reviews} testid="admin-stat-flagged-reviews" />
       </div>
       <div className="mt-6 grid lg:grid-cols-2 gap-4">
         <div className="rounded-xl border border-slate-200 bg-white p-5">
@@ -201,7 +211,7 @@ function Events() {
       <div className="mt-5 space-y-3">
         {items.length ? items.map((ev) => (
           <div key={ev.id} className="rounded-xl border border-slate-200 bg-white p-4 flex flex-wrap items-center gap-4" data-testid={`admin-event-${ev.id}`}>
-            {ev.cover_image && <img src={ev.cover_image} alt="" className="h-14 w-20 rounded-lg object-cover" />}
+            {ev.cover_image && <img src={fileUrl(ev.cover_image)} alt="" className="h-14 w-20 rounded-lg object-cover" />}
             <div className="flex-1 min-w-[200px]">
               <p className="font-semibold text-sm">{ev.title}</p>
               <p className="text-xs text-slate-500 mt-0.5">{ev.partner_name} · {ev.city} · {fmtDate(ev.starts_at)} · {ev.price > 0 ? money(ev.price) : "Free"}</p>
@@ -270,6 +280,69 @@ function Orders({ payments }) {
   );
 }
 
+function Payouts() {
+  const [items, setItems] = useState(null);
+  const [status, setStatus] = useState("");
+  const load = useCallback(() => {
+    api.get("/admin/payouts", { params: { status } }).then(({ data }) => setItems(data.items)).catch(() => setItems([]));
+  }, [status]);
+  useEffect(() => { load(); }, [load]);
+
+  const pay = async (id) => {
+    try { const { data } = await api.post(`/admin/payouts/${id}/pay`, {}); toast.success(`Payout settled · ${data.reference}`); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+  const generate = async () => {
+    try { const { data } = await api.post("/admin/payouts/generate"); toast.success(`${data.created} new payout${data.created === 1 ? "" : "s"} generated`); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+
+  if (!items) return <Spinner />;
+  const pending = items.filter((p) => p.status === "pending");
+  return (
+    <div data-testid="admin-payouts">
+      <div className="flex flex-wrap items-center gap-2">
+        {["", "pending", "paid"].map((s) => (
+          <button key={s || "all"} onClick={() => setStatus(s)} data-testid={`payout-filter-${s || "all"}`}
+            className={`rounded-full px-4 py-2 text-xs font-bold border ${status === s ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{s || "All"}</button>
+        ))}
+        <button onClick={generate} data-testid="generate-payouts" className="ml-auto rounded-full border border-slate-900 px-4 py-2 text-xs font-bold">Run settlement now</button>
+      </div>
+      <div className="mt-4 grid sm:grid-cols-3 gap-4">
+        <Stat label="Pending payouts" value={pending.length} testid="payouts-pending-count" />
+        <Stat label="Pending amount" value={money(pending.reduce((s, p) => s + p.net, 0))} testid="payouts-pending-amount" />
+        <Stat label="Settled amount" value={money(items.filter((p) => p.status === "paid").reduce((s, p) => s + p.net, 0))} testid="payouts-paid-amount" />
+      </div>
+      <div className="mt-5 rounded-xl border border-slate-200 bg-white overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-left"><tr>
+            {["Partner", "Event", "Gross", "Fee", "Net", "Status", "Action"].map((h) => (
+              <th key={h} className="px-4 py-3 text-xs uppercase tracking-wider text-slate-500 font-semibold">{h}</th>))}
+          </tr></thead>
+          <tbody className="divide-y divide-slate-100">
+            {items.map((p) => (
+              <tr key={p.id} data-testid={`admin-payout-${p.id}`}>
+                <td className="px-4 py-3"><p className="font-semibold">{p.partner?.org_name || p.partner?.full_name || "—"}</p><p className="text-xs text-slate-500">{p.partner?.email}</p></td>
+                <td className="px-4 py-3">{p.event_title}<p className="text-xs text-slate-500">{p.orders} paid orders · {fmtDate(p.created_at)}</p></td>
+                <td className="px-4 py-3">{money(p.gross)}</td>
+                <td className="px-4 py-3 text-slate-500">− {money(p.fee)}</td>
+                <td className="px-4 py-3 font-semibold">{money(p.net)}</td>
+                <td className="px-4 py-3"><Badge tone={p.status === "paid" ? "green" : "amber"}>{p.status}</Badge></td>
+                <td className="px-4 py-3">
+                  {p.status === "pending"
+                    ? <button onClick={() => pay(p.id)} data-testid={`pay-payout-${p.id}`} className="rounded-full bg-slate-900 text-white px-4 py-1.5 text-[11px] font-bold">Mark paid</button>
+                    : <span className="text-xs text-slate-500">{p.reference}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <p className="p-6 text-sm text-slate-500">No payouts yet — run settlement after events finish.</p>}
+      </div>
+    </div>
+  );
+}
+
 function Reports() {
   const [items, setItems] = useState(null);
   const load = () => api.get("/admin/reports").then(({ data }) => setItems(data.items)).catch(() => setItems([]));
@@ -306,6 +379,76 @@ function Reports() {
           </div>
         </div>
       )) : <Empty title="Moderation queue is clear" sub="No open reports right now." />}
+    </div>
+  );
+}
+
+function ReviewsMod() {
+  const [status, setStatus] = useState("flagged");
+  const [data, setData] = useState(null);
+  const load = useCallback(() => {
+    api.get("/admin/reviews", { params: { status } }).then(({ data }) => setData(data)).catch(() => setData({ items: [] }));
+  }, [status]);
+  useEffect(() => { load(); }, [load]);
+
+  const moderate = async (id, action) => {
+    if (action === "delete" && !window.confirm("Delete this review permanently?")) return;
+    try {
+      await api.post(`/admin/reviews/${id}/moderate`, { action });
+      toast.success(action === "hide" ? "Review hidden from the event page" : action === "publish" ? "Review kept visible" : "Review deleted");
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  if (!data) return <Spinner />;
+  const FILTERS = [["flagged", "Flagged"], ["published", "Published"], ["hidden", "Hidden"], ["", "All"]];
+  return (
+    <div data-testid="admin-reviews">
+      <div className="flex flex-wrap gap-2">
+        {FILTERS.map(([v, l]) => (
+          <button key={v || "all"} onClick={() => setStatus(v)} data-testid={`review-filter-${v || "all"}`}
+            className={`rounded-full px-4 py-2 text-xs font-bold border ${status === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
+        ))}
+      </div>
+      <div className="mt-4 grid sm:grid-cols-3 gap-4">
+        <Stat label="Flagged now" value={data.flagged ?? 0} testid="reviews-flagged-count" />
+        <Stat label="Hidden" value={data.hidden ?? 0} testid="reviews-hidden-count" />
+        <Stat label="Total reviews" value={data.total ?? 0} testid="reviews-total-count" />
+      </div>
+      <div className="mt-5 space-y-3">
+        {data.items.length ? data.items.map((r) => (
+          <div key={r.id} className="rounded-xl border border-slate-200 bg-white p-5" data-testid={`admin-review-${r.id}`}>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-[240px] flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={r.status === "hidden" ? "red" : "green"}>{r.status || "published"}</Badge>
+                  {r.flag_count > 0 && <Badge tone="amber">{r.flag_count} flag{r.flag_count > 1 ? "s" : ""}</Badge>}
+                  <span className="text-xs font-bold">{r.rating}/5</span>
+                </div>
+                <p className="mt-2 text-sm font-semibold">{r.event_title}<span className="text-slate-400 font-normal"> · {r.partner_name}</span></p>
+                <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{r.comment || <span className="text-slate-400">No written comment</span>}</p>
+                <p className="text-xs text-slate-400 mt-2">By {r.user_name} ({r.user_email}) · {fmtDate(r.created_at)}</p>
+                {r.reply && <p className="mt-2 text-xs text-slate-500 border-l-2 border-slate-300 pl-3">Organiser reply: {r.reply.body}</p>}
+                {r.reports?.length > 0 && (
+                  <ul className="mt-2 space-y-1" data-testid={`review-reports-${r.id}`}>
+                    {r.reports.map((rp, i) => <li key={i} className="text-xs text-amber-700">“{rp.reason}” — {rp.by}</li>)}
+                  </ul>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {r.status !== "hidden"
+                  ? <button onClick={() => moderate(r.id, "hide")} data-testid={`hide-review-${r.id}`} className="rounded-full border border-amber-300 text-amber-700 px-4 py-2 text-xs font-bold">Hide</button>
+                  : <button onClick={() => moderate(r.id, "publish")} data-testid={`restore-review-${r.id}`} className="rounded-full bg-slate-900 text-white px-4 py-2 text-xs font-bold">Restore</button>}
+                {r.flag_count > 0 && r.status !== "hidden" && (
+                  <button onClick={() => moderate(r.id, "publish")} data-testid={`keep-review-${r.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Keep visible</button>
+                )}
+                <button onClick={() => moderate(r.id, "delete")} data-testid={`delete-review-${r.id}`} className="rounded-full border border-red-200 text-red-600 px-4 py-2 text-xs font-bold">Delete</button>
+                <Link to={`/events/${r.event_id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Event</Link>
+              </div>
+            </div>
+          </div>
+        )) : <Empty title="Nothing to moderate" sub={status === "flagged" ? "No review has been flagged by members." : "No reviews with this status."} />}
+      </div>
     </div>
   );
 }
@@ -362,6 +505,15 @@ function Crud({ path, title, fields, blank }) {
             <label key={k} className="block"><span className="text-xs font-bold text-slate-600">{k.replace(/_/g, " ")} (one per line)</span>
               <textarea rows={4} data-testid={`crud-${k}`} value={(f[k] || []).join("\n")} onChange={(e) => setF({ ...f, [k]: e.target.value.split("\n").filter(Boolean) })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" /></label>
+          ) : t === "json" ? (
+            <label key={k} className="block"><span className="text-xs font-bold text-slate-600">Price per currency (optional)</span>
+              <textarea rows={3} data-testid={`crud-${k}`} value={JSON.stringify(f[k] || {})}
+                onChange={(e) => { try { setF({ ...f, [k]: JSON.parse(e.target.value || "{}") }); } catch { /* keep typing */ } }}
+                placeholder='{"USD": 19, "EUR": 18}'
+                className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-mono" />
+              <span className="text-[11px] text-slate-400">Leave empty to auto-convert from the INR price.</span></label>
+          ) : t === "image" ? (
+            <ImageUpload key={k} value={f[k]} onChange={(url) => setF({ ...f, [k]: url })} label="Product image" testid="crud-image" aspect="wide" />
           ) : (
             <Input key={k} label={k.replace(/_/g, " ")} type={t} data-testid={`crud-${k}`} value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} />
           )

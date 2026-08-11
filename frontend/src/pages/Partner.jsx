@@ -1,8 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { api, errMsg, money, fmtDate } from "@/lib/api";
+import { api, errMsg, money, fmtDate, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { ImageUpload } from "@/components/ImageUpload";
+import { Stars } from "@/components/Cards";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 import { Plus, Send } from "lucide-react";
 
@@ -23,10 +25,16 @@ export default function PartnerDashboard() {
   const [f, setF] = useState(blank);
   const [editing, setEditing] = useState(null);
   const [participants, setParticipants] = useState(null);
+  const [payouts, setPayouts] = useState(null);
+  const [reviews, setReviews] = useState(null);
+  const [replyFor, setReplyFor] = useState(null);
+  const [replyText, setReplyText] = useState("");
 
   const load = useCallback(() => {
     api.get("/partner/stats").then(({ data }) => setStats(data)).catch(() => setStats({}));
     api.get("/partner/events").then(({ data }) => setEvents(data.items)).catch(() => {});
+    api.get("/partner/payouts").then(({ data }) => setPayouts(data)).catch(() => {});
+    api.get("/partner/reviews").then(({ data }) => setReviews(data)).catch(() => setReviews({ items: [] }));
   }, []);
   useEffect(() => { load(); api.get("/meta").then(({ data }) => setMeta(data)).catch(() => {}); }, [load]);
 
@@ -53,9 +61,18 @@ export default function PartnerDashboard() {
     } catch (e) { toast.error(errMsg(e)); }
   };
 
+  const postReply = async (id) => {
+    if (!replyText.trim()) return toast.error("Write a reply first.");
+    try {
+      await api.post(`/reviews/${id}/reply`, { body: replyText });
+      toast.success("Reply posted publicly on the event page");
+      setReplyFor(null); setReplyText(""); load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   if (!stats) return <Spinner />;
 
-  const TABS = [["dashboard", "Dashboard"], ["events", "My events"], ["create", "Create event"], ["participants", "Participants"], ["revenue", "Revenue & payouts"]];
+  const TABS = [["dashboard", "Dashboard"], ["events", "My events"], ["create", "Create event"], ["participants", "Participants"], ["reviews", "Reviews"], ["payouts", "Revenue & payouts"]];
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-10 pb-28" data-testid="partner-dashboard">
@@ -77,7 +94,15 @@ export default function PartnerDashboard() {
           <Stat label="Pending review" value={stats.pending} testid="stat-pending" />
           <Stat label="Participants" value={stats.participants} testid="stat-participants" />
           <Stat label="Revenue" value={money(stats.revenue)} testid="stat-revenue" />
-          <Stat label="Payout due" value={money(stats.payout_due)} sub="after 15% platform fee" testid="stat-payout" />
+          <Stat label="Payout due" value={money(stats.payout_due)} sub={`after ${15}% platform fee`} testid="stat-payout" />
+          <div className="rounded-xl border border-slate-200 bg-white p-5" data-testid="partner-rating">
+            <p className="overline">Member rating</p>
+            <div className="mt-2 flex items-center gap-2">
+              <Stars value={stats.rating || 0} />
+              <span className="text-2xl font-display font-semibold">{stats.rating || "—"}</span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">{stats.rating_count || 0} reviews across your events</p>
+          </div>
         </div>
       )}
 
@@ -85,7 +110,7 @@ export default function PartnerDashboard() {
         <div className="mt-8 space-y-4">
           {events.length ? events.map((ev) => (
             <div key={ev.id} className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-wrap gap-4 items-center" data-testid={`partner-event-${ev.id}`}>
-              {ev.cover_image && <img src={ev.cover_image} alt="" className="h-16 w-24 rounded-xl object-cover" />}
+              {ev.cover_image && <img src={fileUrl(ev.cover_image)} alt="" className="h-16 w-24 rounded-xl object-cover" />}
               <div className="flex-1 min-w-[200px]">
                 <p className="font-semibold">{ev.title}</p>
                 <p className="text-xs text-slate-500 mt-1">{ev.city} · {fmtDate(ev.starts_at)} · {ev.participant_count} going · {ev.price > 0 ? money(ev.price) : "Free"}</p>
@@ -109,11 +134,12 @@ export default function PartnerDashboard() {
       {tab === "create" && (
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 space-y-4 max-w-3xl" data-testid="partner-event-form">
           <h2 className="text-xl font-bold">{editing ? "Edit event" : "Create event"}</h2>
-          {[["title", "Event title"], ["venue", "Venue"], ["cover_image", "Cover image URL"]].map(([k, l]) => (
+          {[["title", "Event title"], ["venue", "Venue"]].map(([k, l]) => (
             <label key={k} className="block"><span className="text-xs font-bold text-slate-600">{l}</span>
               <input data-testid={`event-${k}`} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
           ))}
+          <ImageUpload value={f.cover_image} onChange={(url) => setF({ ...f, cover_image: url })} label="Cover image" testid="event-cover-upload" aspect="wide" />
           <label className="block"><span className="text-xs font-bold text-slate-600">Description</span>
             <textarea data-testid="event-description" rows={4} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })}
               className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
@@ -165,7 +191,7 @@ export default function PartnerDashboard() {
               <div className="mt-4 rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100" data-testid="participants-list">
                 {participants.items.length ? participants.items.map((p) => (
                   <div key={p.id} className="p-4 flex items-center gap-4">
-                    {p.photo ? <img src={p.photo} alt="" className="h-10 w-10 rounded-full object-cover" /> : <span className="h-10 w-10 rounded-full bg-slate-200" />}
+                    {p.photo ? <img src={fileUrl(p.photo)} alt="" className="h-10 w-10 rounded-full object-cover" /> : <span className="h-10 w-10 rounded-full bg-slate-200" />}
                     <div className="flex-1"><p className="font-semibold text-sm">{p.full_name}</p><p className="text-xs text-slate-500">{p.city}</p></div>
                     <Badge tone={statusTone(p.participation_status)}>{p.participation_status}</Badge>
                   </div>
@@ -176,11 +202,88 @@ export default function PartnerDashboard() {
         </div>
       )}
 
-      {tab === "revenue" && (
-        <div className="mt-8 grid sm:grid-cols-3 gap-4">
-          <Stat label="Gross revenue" value={money(stats.revenue)} testid="rev-gross" />
-          <Stat label="Platform fee (15%)" value={money(stats.revenue * 0.15)} testid="rev-fee" />
-          <Stat label="Payout due" value={money(stats.payout_due)} sub="Settled weekly on Fridays" testid="rev-payout" />
+      {tab === "reviews" && (
+        <div className="mt-8" data-testid="partner-reviews">
+          <div className="grid sm:grid-cols-3 gap-4">
+            <Stat label="Member rating" value={reviews?.average || "—"} testid="prev-average" />
+            <Stat label="Reviews" value={reviews?.count || 0} testid="prev-count" />
+            <Stat label="Awaiting your reply" value={reviews?.unanswered || 0} sub="A reply shows publicly under the review" testid="prev-unanswered" />
+          </div>
+          <div className="mt-6 space-y-4">
+            {reviews?.items?.length ? reviews.items.map((r) => (
+              <div key={r.id} className="rounded-2xl border border-slate-200 bg-white p-5" data-testid={`partner-review-${r.id}`}>
+                <div className="flex flex-wrap items-center gap-3">
+                  {r.user_photo ? <img src={fileUrl(r.user_photo)} alt="" className="h-9 w-9 rounded-full object-cover" />
+                    : <span className="h-9 w-9 rounded-full bg-slate-200 grid place-items-center text-xs font-bold">{r.user_name?.[0]}</span>}
+                  <div className="min-w-[140px]">
+                    <p className="text-sm font-semibold">{r.user_name}</p>
+                    <p className="text-[11px] text-slate-400">{r.event_title} · {fmtDate(r.created_at)}</p>
+                  </div>
+                  <div className="ml-auto flex items-center gap-2">
+                    {r.status === "hidden" && <Badge tone="red">hidden by admin</Badge>}
+                    <Stars value={r.rating} />
+                  </div>
+                </div>
+                {r.comment && <p className="mt-3 text-sm text-slate-600 leading-relaxed">{r.comment}</p>}
+                {r.reply ? (
+                  <div className="mt-4 rounded-xl border-l-2 border-slate-900 bg-slate-50 px-4 py-3" data-testid={`partner-reply-${r.id}`}>
+                    <p className="overline">Your reply · {fmtDate(r.reply.at)}</p>
+                    <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{r.reply.body}</p>
+                    <button onClick={() => { setReplyFor(r.id); setReplyText(r.reply.body); }} data-testid={`edit-reply-${r.id}`}
+                      className="mt-2 text-[11px] font-bold text-slate-500 hover:text-slate-900">Edit reply</button>
+                  </div>
+                ) : replyFor !== r.id && (
+                  <button onClick={() => { setReplyFor(r.id); setReplyText(""); }} data-testid={`reply-btn-${r.id}`}
+                    className="mt-3 rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Reply publicly</button>
+                )}
+                {replyFor === r.id && (
+                  <div className="mt-3">
+                    <textarea rows={3} value={replyText} onChange={(e) => setReplyText(e.target.value)} data-testid={`reply-input-${r.id}`}
+                      placeholder="Thank the member, or explain what you'll change next time…"
+                      className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-slate-900" />
+                    <div className="mt-2 flex gap-2">
+                      <button onClick={() => postReply(r.id)} data-testid={`reply-submit-${r.id}`}
+                        className="rounded-full bg-slate-900 text-white px-5 py-2 text-xs font-bold">Post reply</button>
+                      <button onClick={() => { setReplyFor(null); setReplyText(""); }}
+                        className="rounded-full border border-slate-200 px-5 py-2 text-xs font-bold">Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )) : <Empty title="No reviews yet" sub="Attendees can review an experience once it has finished." />}
+          </div>
+        </div>
+      )}
+
+      {tab === "payouts" && (
+        <div className="mt-8" data-testid="partner-payouts">
+          <div className="grid sm:grid-cols-3 gap-4">
+            <Stat label="Gross revenue" value={money(stats.revenue)} testid="rev-gross" />
+            <Stat label="Pending payout" value={money(payouts?.pending_total || 0)} sub="Settled 48h after each event" testid="rev-payout" />
+            <Stat label="Settled to date" value={money(payouts?.paid_total || 0)} testid="rev-paid" />
+          </div>
+          <div className="mt-6 rounded-xl border border-slate-200 bg-white overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-left"><tr>
+                {["Event", "Orders", "Gross", "Platform fee", "Net payable", "Status", "Reference"].map((h) => (
+                  <th key={h} className="px-4 py-3 text-xs uppercase tracking-wider text-slate-500 font-semibold">{h}</th>))}
+              </tr></thead>
+              <tbody className="divide-y divide-slate-100">
+                {(payouts?.items || []).map((p) => (
+                  <tr key={p.id} data-testid={`payout-row-${p.id}`}>
+                    <td className="px-4 py-3"><p className="font-semibold">{p.event_title}</p><p className="text-xs text-slate-500">{fmtDate(p.created_at)}</p></td>
+                    <td className="px-4 py-3">{p.orders}</td>
+                    <td className="px-4 py-3">{money(p.gross)}</td>
+                    <td className="px-4 py-3 text-slate-500">− {money(p.fee)} ({p.fee_percent}%)</td>
+                    <td className="px-4 py-3 font-semibold">{money(p.net)}</td>
+                    <td className="px-4 py-3"><Badge tone={p.status === "paid" ? "green" : "amber"}>{p.status}</Badge></td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{p.reference || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!payouts?.items?.length && <p className="p-6 text-sm text-slate-500">No payouts yet. A ledger entry is created automatically 48 hours after each event finishes.</p>}
+          </div>
         </div>
       )}
     </div>

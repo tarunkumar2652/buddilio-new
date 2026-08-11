@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, BeforeValidator, EmailStr, ConfigDict
 
 from emailer import send_email, wrap
 from realtime import hub
+from storage import init_storage, put_object, get_object, MIME_TYPES, APP_NAME
 
 try:
     import razorpay
@@ -124,6 +125,30 @@ async def audit(actor: dict, action: str, entity: str, entity_id: str = "", meta
 
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
+
+DEFAULT_CURRENCIES = {
+    "INR": {"rate": 1.0, "symbol": "₹", "label": "Indian Rupee", "stripe_min": 4200},
+    "USD": {"rate": 0.012, "symbol": "$", "label": "US Dollar", "stripe_min": 50},
+    "EUR": {"rate": 0.011, "symbol": "€", "label": "Euro", "stripe_min": 50},
+    "GBP": {"rate": 0.0094, "symbol": "£", "label": "British Pound", "stripe_min": 30},
+    "AED": {"rate": 0.044, "symbol": "AED ", "label": "UAE Dirham", "stripe_min": 200},
+    "SGD": {"rate": 0.016, "symbol": "S$", "label": "Singapore Dollar", "stripe_min": 50},
+}
+ZERO_DECIMAL = {"JPY", "KRW"}
+
+
+async def currency_config() -> dict:
+    s = await db.settings.find_one({}, {"currencies": 1})
+    conf = (s or {}).get("currencies") or {}
+    out = {k: dict(v) for k, v in DEFAULT_CURRENCIES.items()}
+    for code, cfg in conf.items():
+        out.setdefault(code.upper(), {"symbol": code.upper() + " ", "label": code.upper()})
+        out[code.upper()].update(cfg)
+    return out
+
+
+async def fx_rates() -> dict:
+    return {k: float(v.get("rate", 1)) for k, v in (await currency_config()).items()}
 
 
 def razorpay_client():
@@ -231,6 +256,7 @@ class PlanIn(BaseModel):
     description: str = ""
     benefits: List[str] = []
     discount_percent: float = 0
+    price_overrides: dict = {}
     active: bool = True
 
 
@@ -246,6 +272,7 @@ class ProductIn(BaseModel):
     city: str = "All India"
     inventory: int = 100
     member_discount_percent: float = 10
+    price_overrides: dict = {}
     active: bool = True
 
 
@@ -266,6 +293,12 @@ class CheckoutIn(BaseModel):
     item_id: str
     quantity: int = 1
     coupon_code: str = ""
+    currency: str = "INR"
+
+
+class ReviewIn(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = ""
 
 
 class VerifyPaymentIn(BaseModel):
@@ -545,8 +578,12 @@ async def list_events(q: str = "", city: str = "", category: str = "", max_price
         flt["featured"] = True
     if when == "upcoming":
         flt["starts_at"] = {"$gte": iso(now_utc())}
+    if when == "past":
+        flt["status"] = "completed"
+    elif sort == "rating":
+        flt["status"] = {"$in": ["published", "completed"]}
     total = await db.events.count_documents(flt)
-    sort_key = [("participant_count", -1)] if sort == "popular" else [("starts_at", 1)]
+    sort_key = [("rating", -1)] if sort == "rating" else [("participant_count", -1)] if sort == "popular" else [("starts_at", 1)]
     docs = await db.events.find(flt).sort(sort_key).skip((page - 1) * limit).limit(limit).to_list(limit)
     return {"items": [clean(d) for d in docs], "total": total, "page": page}
 
@@ -560,9 +597,12 @@ async def get_event(event_id: str, user: Optional[dict] = Depends(optional_user)
     if not doc:
         raise HTTPException(status_code=404, detail="Event not found")
     ev = clean(doc)
-    if ev["status"] != "published" and not (user and (user["role"] == "admin" or ev.get("partner_id") == user["id"])):
+    if ev["status"] not in ("published", "completed") and not (user and (user["role"] == "admin" or ev.get("partner_id") == user["id"])):
         raise HTTPException(status_code=403, detail="This event is not published yet.")
     parts = await db.event_participants.find({"event_id": event_id, "status": "confirmed"}).to_list(200)
+    revs = await db.reviews.find({"event_id": event_id, "status": {"$ne": "hidden"}}, {"rating": 1}).to_list(500)
+    ev["rating"] = round(sum(r["rating"] for r in revs) / len(revs), 2) if revs else 0
+    ev["rating_count"] = len(revs)
     ev["participants"] = []
     for p in parts[:20]:
         u = await db.users.find_one({"_id": ObjectId(p["user_id"])},
@@ -582,6 +622,8 @@ async def join_event(event_id: str, user: dict = Depends(get_current_user)):
     ev = await db.events.find_one({"_id": ObjectId(event_id), "status": "published"})
     if not ev:
         raise HTTPException(status_code=404, detail="Event not found")
+    if (ev.get("ends_at") or ev["starts_at"]) < iso(now_utc()):
+        raise HTTPException(status_code=400, detail="This experience has already finished.")
     if await db.event_participants.find_one({"event_id": event_id, "user_id": user["id"]}):
         raise HTTPException(status_code=400, detail="You have already joined or requested this event.")
     count = await db.event_participants.count_documents({"event_id": event_id, "status": "confirmed"})
@@ -689,9 +731,16 @@ async def partner_stats(user: dict = Depends(partner_only)):
     parts = await db.event_participants.count_documents({"event_id": {"$in": ids}})
     orders = await db.orders.find({"ref_id": {"$in": ids}, "payment_status": "paid"}).to_list(1000)
     revenue = sum(o.get("total", 0) for o in orders)
+    payouts = await db.payouts.find({"partner_id": user["id"]}).to_list(500)
+    revs = await db.reviews.find({"partner_id": user["id"], "status": {"$ne": "hidden"}}, {"rating": 1}).to_list(2000)
     return {"events": len(evs), "published": sum(1 for e in evs if e.get("status") == "published"),
             "pending": sum(1 for e in evs if e.get("status") == "submitted"),
-            "participants": parts, "revenue": revenue, "payout_due": round(revenue * 0.85, 2)}
+            "completed": sum(1 for e in evs if e.get("status") == "completed"),
+            "participants": parts, "revenue": revenue,
+            "payout_due": round(sum(p["net"] for p in payouts if p["status"] == "pending"), 2),
+            "payout_paid": round(sum(p["net"] for p in payouts if p["status"] == "paid"), 2),
+            "rating": round(sum(r["rating"] for r in revs) / len(revs), 2) if revs else 0,
+            "rating_count": len(revs)}
 
 
 @api.get("/partner/events/{event_id}/participants")
@@ -778,13 +827,35 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
     taxable = subtotal - discount
     tax = round(taxable * tax_pct / 100, 2)
     total = round(taxable + tax, 2)
+
+    currency = (payload.currency or "INR").upper()
+    rates = await fx_rates()
+    if currency not in rates:
+        raise HTTPException(status_code=400, detail="We don't support that currency yet.")
+    rate = rates[currency]
+    override = (item.get("price_overrides") or {}).get(currency)
+    if override and currency != "INR":
+        # Admin-set price for this currency wins over the auto-converted amount.
+        c_sub = round(float(override) * max(payload.quantity, 1), 2)
+        ratio = (c_sub / subtotal) if subtotal else rate
+        c_disc = round(discount * ratio, 2)
+        c_tax = round((c_sub - c_disc) * tax_pct / 100, 2)
+        c_total = round(c_sub - c_disc + c_tax, 2)
+        rate = (c_total / total) if total else ratio
+    else:
+        c_sub, c_disc = round(subtotal * rate, 2), round(discount * rate, 2)
+        c_tax, c_total = round(tax * rate, 2), round(total * rate, 2)
+
     order = {
         "order_no": "BUD" + uuid.uuid4().hex[:8].upper(), "user_id": user["id"], "user_email": user["email"],
         "kind": payload.kind, "ref_id": payload.item_id, "item_name": name, "quantity": payload.quantity,
         "subtotal": subtotal, "discount": discount, "tax": tax, "total": total,
-        "coupon": coupon["code"] if coupon else "", "currency": "INR",
+        "coupon": coupon["code"] if coupon else "", "currency": currency, "fx_rate": rate,
+        "base_currency": "INR", "charge_subtotal": c_sub, "charge_discount": c_disc,
+        "charge_tax": c_tax, "charge_total": c_total,
         "payment_status": "pending", "order_status": "created", "refund_status": "none",
-        "gateway": "razorpay_sim", "transaction_id": "", "created_at": iso(now_utc()),
+        "gateway": "razorpay_sim" if currency == "INR" else "stripe",
+        "transaction_id": "", "created_at": iso(now_utc()),
     }
     res = await db.orders.insert_one(order)
     return {"order": clean(await db.orders.find_one({"_id": res.inserted_id}))}
@@ -877,8 +948,110 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
 @api.get("/payments/config")
 async def payment_config():
     kid = os.environ.get("RAZORPAY_KEY_ID", "")
-    return {"gateway": "razorpay", "live": bool(kid and razorpay_client()), "key_id": kid,
-            "currency": "INR", "methods": ["upi", "card", "netbanking", "wallet"]}
+    conf = await currency_config()
+    return {"razorpay_live": bool(kid and razorpay_client()), "razorpay_key_id": kid,
+            "stripe_enabled": bool(os.environ.get("STRIPE_API_KEY")),
+            "base_currency": "INR", "currencies": [{"code": k, **v} for k, v in conf.items()],
+            "methods": {"INR": ["upi", "card", "netbanking", "wallet"], "other": ["card"]}}
+
+
+def stripe_checkout_client(request: Request):
+    from emergentintegrations.payments.stripe.checkout import StripeCheckout
+    key = os.environ.get("STRIPE_API_KEY")
+    if not key:
+        raise HTTPException(status_code=503, detail="International payments are not configured yet.")
+    return StripeCheckout(api_key=key, webhook_url=f"{str(request.base_url)}api/webhook/stripe")
+
+
+@api.post("/payments/stripe/session")
+async def create_stripe_session(body: dict, request: Request, user: dict = Depends(get_current_user)):
+    from emergentintegrations.payments.stripe.checkout import CheckoutSessionRequest
+    order = await db.orders.find_one({"_id": ObjectId(body.get("order_id")), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order["payment_status"] == "paid":
+        raise HTTPException(status_code=400, detail="This order is already paid.")
+    origin = (body.get("origin_url") or FRONTEND_URL).rstrip("/")
+    client_sc = stripe_checkout_client(request)
+    amount = float(order.get("charge_total") or order["total"])
+    req = CheckoutSessionRequest(
+        amount=amount, currency=order.get("currency", "INR").lower(),
+        success_url=f"{origin}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{origin}/payment/cancel",
+        metadata={"order_id": str(order["_id"]), "user_id": user["id"], "kind": order["kind"]})
+    try:
+        session = await client_sc.create_checkout_session(req)
+    except Exception as e:
+        logger.error(f"Stripe session failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not open the payment window. Please try again.")
+    await db.payment_transactions.insert_one({
+        "session_id": session.session_id, "order_id": str(order["_id"]), "user_id": user["id"],
+        "amount": amount, "currency": order.get("currency", "INR"), "status": "initiated",
+        "payment_status": "pending", "created_at": iso(now_utc()), "updated_at": iso(now_utc())})
+    await db.orders.update_one({"_id": order["_id"]},
+                               {"$set": {"gateway": "stripe", "gateway_order_id": session.session_id}})
+    return {"checkout_url": session.url, "session_id": session.session_id}
+
+
+async def settle_stripe_session(session_id: str, payment_status: str, txn: str = ""):
+    rec = await db.payment_transactions.find_one({"session_id": session_id})
+    if not rec:
+        return None
+    if payment_status == "paid" and rec.get("payment_status") != "paid":
+        await db.payment_transactions.update_one(
+            {"session_id": session_id, "payment_status": {"$ne": "paid"}},
+            {"$set": {"status": "completed", "payment_status": "paid", "transaction_id": txn,
+                      "updated_at": iso(now_utc())}})
+        order = await db.orders.find_one({"_id": ObjectId(rec["order_id"])})
+        if order:
+            await fulfil_order(order, txn or session_id, "stripe")
+    elif payment_status in ("failed", "expired") and rec.get("payment_status") != "paid":
+        await db.payment_transactions.update_one({"session_id": session_id},
+                                                 {"$set": {"status": payment_status,
+                                                           "payment_status": payment_status,
+                                                           "updated_at": iso(now_utc())}})
+        order = await db.orders.find_one({"_id": ObjectId(rec["order_id"])})
+        if order:
+            await mark_failed(order, f"stripe {payment_status}")
+    return await db.payment_transactions.find_one({"session_id": session_id})
+
+
+@api.get("/payments/status/{session_id}")
+async def stripe_status(session_id: str, request: Request):
+    rec = await db.payment_transactions.find_one({"session_id": session_id})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if rec.get("payment_status") != "paid":
+        try:
+            status = await stripe_checkout_client(request).get_checkout_status(session_id)
+            if status.payment_status == "paid" or status.status == "complete":
+                rec = await settle_stripe_session(session_id, "paid", session_id)
+            elif status.status == "expired":
+                rec = await settle_stripe_session(session_id, "expired")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.info(f"stripe status poll: {e}")
+    return {"session_id": session_id, "status": rec.get("status"), "payment_status": rec.get("payment_status")}
+
+
+@app.post("/api/webhook/stripe")
+async def stripe_webhook(request: Request):
+    body = await request.body()
+    try:
+        res = await stripe_checkout_client(request).handle_webhook(body, request.headers.get("Stripe-Signature"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Rejected Stripe webhook: {e}")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    await db.webhook_events.insert_one({"source": "stripe", "event": res.event_type,
+                                        "session_id": res.session_id, "received_at": iso(now_utc())})
+    if res.payment_status == "paid":
+        await settle_stripe_session(res.session_id, "paid", res.session_id)
+    elif res.event_type in ("checkout.session.expired", "checkout.session.async_payment_failed"):
+        await settle_stripe_session(res.session_id, "failed")
+    return {"status": "ok"}
 
 
 @api.post("/payments/razorpay/order")
@@ -1183,8 +1356,10 @@ async def meta():
     cities = await db.cities.find({}).to_list(100)
     cats = await db.event_categories.find({}).to_list(100)
     ints = await db.interests.find({}).to_list(200)
+    conf = await currency_config()
     return {"cities": [c["name"] for c in cities], "categories": [c["name"] for c in cats],
             "interests": [i["name"] for i in ints],
+            "currencies": [{"code": k, **v} for k, v in conf.items()],
             "settings": clean(await db.settings.find_one({}) or {"_id": ObjectId(), "platform_name": "Buddilio"})}
 
 
@@ -1229,6 +1404,7 @@ async def admin_stats(days: int = 30, user: dict = Depends(admin_only)):
         "refunds": await db.orders.count_documents({"refund_status": {"$in": ["requested", "refunded"]}}),
         "pending_events": await db.events.count_documents({"status": "submitted"}),
         "open_reports": await db.reports.count_documents({"status": "open"}),
+        "flagged_reviews": await db.reviews.count_documents({"flag_count": {"$gt": 0}, "status": {"$ne": "hidden"}}),
         "revenue_series": [{"date": k, "amount": v} for k, v in sorted(series.items())],
         "registration_series": [{"date": k, "count": v} for k, v in sorted(reg_series.items())],
     }
@@ -1320,7 +1496,8 @@ async def refund_order(oid: str, user: dict = Depends(admin_only)):
         part = await db.event_participants.find_one({"order_id": oid})
         if part:
             await db.event_participants.delete_one({"_id": part["_id"]})
-            await db.events.update_one({"_id": ObjectId(order["ref_id"])}, {"$inc": {"participant_count": -1}})
+            count = await db.event_participants.count_documents({"event_id": order["ref_id"], "status": "confirmed"})
+            await db.events.update_one({"_id": ObjectId(order["ref_id"])}, {"$set": {"participant_count": count}})
     await audit(user, "order.refund", "order", oid, {"amount": order["total"], "refund_id": gateway_ref})
     await notify(order["user_id"], "Refund processed",
                  f"₹{order['total']:.0f} for {order['item_name']} has been refunded. "
@@ -1424,6 +1601,323 @@ async def update_settings(body: dict, user: dict = Depends(admin_only)):
     return clean(await db.settings.find_one({}))
 
 
+@api.post("/uploads")
+async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    ext = (file.filename or "img.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in MIME_TYPES:
+        raise HTTPException(status_code=400, detail="Please upload a JPG, PNG, WEBP or GIF image.")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Images must be under 5MB.")
+    content_type = file.content_type or MIME_TYPES[ext]
+    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+    try:
+        result = await asyncio.to_thread(put_object, path, data, content_type)
+    except Exception as e:
+        logger.error(f"upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Upload failed. Please try again.")
+    await db.files.insert_one({"storage_path": result["path"], "owner_id": user["id"],
+                               "original_filename": file.filename, "content_type": content_type,
+                               "size": result.get("size", len(data)), "is_deleted": False,
+                               "created_at": iso(now_utc())})
+    return {"url": f"/api/files/{result['path']}", "path": result["path"], "size": result.get("size", len(data))}
+
+
+@api.get("/files/{path:path}")
+async def serve_file(path: str):
+    rec = await db.files.find_one({"storage_path": path, "is_deleted": False})
+    if not rec:
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        data, content_type = await asyncio.to_thread(get_object, path)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found")
+    return Response(content=data, media_type=rec.get("content_type", content_type),
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+# ---------------- reviews ----------------
+VISIBLE_REVIEW = {"status": {"$ne": "hidden"}}
+
+
+async def recompute_ratings(event_id: str, partner_id: str = "") -> tuple[float, int]:
+    revs = await db.reviews.find({"event_id": event_id, **VISIBLE_REVIEW}, {"rating": 1}).to_list(1000)
+    avg = round(sum(r["rating"] for r in revs) / len(revs), 2) if revs else 0
+    await db.events.update_one({"_id": ObjectId(event_id)},
+                               {"$set": {"rating": avg, "rating_count": len(revs)}})
+    if partner_id:
+        pr = await db.reviews.find({"partner_id": partner_id, **VISIBLE_REVIEW}, {"rating": 1}).to_list(5000)
+        await db.users.update_one({"_id": ObjectId(partner_id)},
+                                  {"$set": {"rating": round(sum(r["rating"] for r in pr) / len(pr), 2) if pr else 0,
+                                            "rating_count": len(pr)}})
+    return avg, len(revs)
+
+
+async def review_or_404(rid: str) -> dict:
+    try:
+        rev = await db.reviews.find_one({"_id": ObjectId(rid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid review id")
+    if not rev:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return rev
+
+
+async def review_author(r: dict) -> dict:
+    u = await db.users.find_one({"_id": ObjectId(r["user_id"])}, {"full_name": 1, "photo": 1, "email": 1})
+    r["user_name"] = u["full_name"] if u else "Member"
+    r["user_photo"] = u.get("photo", "") if u else ""
+    r["user_email"] = u.get("email", "") if u else ""
+    return r
+
+
+@api.get("/events/{event_id}/reviews")
+async def list_reviews(event_id: str, user: Optional[dict] = Depends(optional_user)):
+    is_admin = bool(user and user.get("role") == "admin")
+    flt = {"event_id": event_id} if is_admin else {"event_id": event_id, **VISIBLE_REVIEW}
+    docs = await db.reviews.find(flt).sort([("created_at", -1)]).to_list(100)
+    out = []
+    for d in docs:
+        r = await review_author(clean(d))
+        r.pop("user_email", None)
+        r["mine"] = bool(user and r["user_id"] == user["id"])
+        out.append(r)
+    visible = [r for r in out if r.get("status") != "hidden"]
+    avg = round(sum(r["rating"] for r in visible) / len(visible), 2) if visible else 0
+    return {"items": out, "average": avg, "count": len(visible)}
+
+
+@api.post("/events/{event_id}/reviews")
+async def create_review(event_id: str, payload: ReviewIn, user: dict = Depends(get_current_user)):
+    ev = await db.events.find_one({"_id": ObjectId(event_id)})
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found")
+    ended = ev.get("ends_at") or ev["starts_at"]
+    if ended > iso(now_utc()):
+        raise HTTPException(status_code=400, detail="You can review this experience once it has finished.")
+    part = await db.event_participants.find_one({"event_id": event_id, "user_id": user["id"], "status": "confirmed"})
+    if not part:
+        raise HTTPException(status_code=403, detail="Only confirmed attendees can review this experience.")
+    if await db.reviews.find_one({"event_id": event_id, "user_id": user["id"]}):
+        raise HTTPException(status_code=400, detail="You have already reviewed this experience.")
+    await db.reviews.insert_one({"event_id": event_id, "user_id": user["id"], "partner_id": ev.get("partner_id", ""),
+                                 "rating": payload.rating, "comment": payload.comment.strip()[:1000],
+                                 "status": "published", "flag_count": 0, "flagged": False, "reply": None,
+                                 "created_at": iso(now_utc())})
+    avg, count = await recompute_ratings(event_id, ev.get("partner_id", ""))
+    if ev.get("partner_id"):
+        await notify(ev["partner_id"], "New review",
+                     f"{user['full_name']} rated {ev['title']} {payload.rating}/5.", "event", "/partner")
+    return {"average": avg, "count": count}
+
+
+@api.get("/me/reviewable")
+async def reviewable(user: dict = Depends(get_current_user)):
+    parts = await db.event_participants.find({"user_id": user["id"], "status": "confirmed"}).to_list(200)
+    out = []
+    for p in parts:
+        if await db.reviews.find_one({"event_id": p["event_id"], "user_id": user["id"]}):
+            continue
+        try:
+            ev = await db.events.find_one({"_id": ObjectId(p["event_id"])})
+        except Exception:
+            continue
+        if ev and (ev.get("ends_at") or ev["starts_at"]) < iso(now_utc()):
+            out.append(clean(ev))
+    return {"items": out}
+
+
+@api.post("/reviews/{rid}/report")
+async def report_review(rid: str, body: dict, user: dict = Depends(get_current_user)):
+    rev = await review_or_404(rid)
+    if rev["user_id"] == user["id"]:
+        raise HTTPException(status_code=400, detail="You cannot report your own review.")
+    if await db.reports.find_one({"target_type": "review", "target_id": rid, "reporter_id": user["id"]}):
+        raise HTTPException(status_code=400, detail="You have already reported this review.")
+    reason = (body.get("reason") or "Inappropriate content").strip()[:200]
+    await db.reports.insert_one({
+        "reporter_id": user["id"], "reporter_email": user["email"], "target_type": "review",
+        "target_id": rid, "reason": reason, "details": (body.get("details") or "").strip()[:500],
+        "status": "open", "meta": {"event_id": rev["event_id"]}, "created_at": iso(now_utc())})
+    await db.reviews.update_one({"_id": rev["_id"]}, {"$inc": {"flag_count": 1}, "$set": {"flagged": True}})
+    admin = await db.users.find_one({"role": "admin"})
+    if admin:
+        await notify(str(admin["_id"]), "Review flagged",
+                     f"A member reported a review: {reason}", "moderation", "/admin")
+    return {"message": "Thanks — our safety team will look at this review."}
+
+
+@api.post("/reviews/{rid}/reply")
+async def reply_to_review(rid: str, body: dict, user: dict = Depends(partner_only)):
+    rev = await review_or_404(rid)
+    if user["role"] != "admin" and rev.get("partner_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="You can only reply to reviews on your own events.")
+    text = (body.get("body") or "").strip()[:800]
+    if not text:
+        raise HTTPException(status_code=400, detail="Write a reply before posting it.")
+    reply = {"body": text, "by": user["id"], "by_name": user.get("org_name") or user["full_name"],
+             "at": iso(now_utc())}
+    await db.reviews.update_one({"_id": rev["_id"]}, {"$set": {"reply": reply}})
+    await notify(rev["user_id"], "The organiser replied to your review",
+                 f"{reply['by_name']}: {text[:120]}", "event", f"/events/{rev['event_id']}", email=False)
+    return {"reply": reply}
+
+
+@api.get("/partner/reviews")
+async def partner_reviews(user: dict = Depends(partner_only)):
+    docs = await db.reviews.find({"partner_id": user["id"]}).sort([("created_at", -1)]).to_list(300)
+    out = []
+    for d in docs:
+        r = await review_author(clean(d))
+        r.pop("user_email", None)
+        try:
+            ev = await db.events.find_one({"_id": ObjectId(r["event_id"])}, {"title": 1})
+        except Exception:
+            ev = None
+        r["event_title"] = ev["title"] if ev else "Experience"
+        out.append(r)
+    visible = [r for r in out if r.get("status") != "hidden"]
+    return {"items": out,
+            "average": round(sum(r["rating"] for r in visible) / len(visible), 2) if visible else 0,
+            "count": len(visible),
+            "unanswered": sum(1 for r in visible if not r.get("reply"))}
+
+
+@api.get("/admin/reviews")
+async def admin_reviews(status: str = "", user: dict = Depends(admin_only)):
+    if status == "flagged":
+        flt: dict[str, Any] = {"flag_count": {"$gt": 0}, "status": {"$ne": "hidden"}}
+    elif status:
+        flt = {"status": status}
+    else:
+        flt = {}
+    docs = await db.reviews.find(flt).sort([("flag_count", -1), ("created_at", -1)]).to_list(300)
+    out = []
+    for d in docs:
+        r = await review_author(clean(d))
+        try:
+            ev = await db.events.find_one({"_id": ObjectId(r["event_id"])}, {"title": 1, "partner_name": 1})
+        except Exception:
+            ev = None
+        r["event_title"] = ev["title"] if ev else "Experience"
+        r["partner_name"] = (ev or {}).get("partner_name", "")
+        r["reports"] = [{"reason": rp["reason"], "by": rp["reporter_email"], "at": rp["created_at"]}
+                        for rp in await db.reports.find({"target_type": "review", "target_id": r["id"]}).to_list(20)]
+        out.append(r)
+    return {"items": out,
+            "flagged": await db.reviews.count_documents({"flag_count": {"$gt": 0}, "status": {"$ne": "hidden"}}),
+            "hidden": await db.reviews.count_documents({"status": "hidden"}),
+            "total": await db.reviews.count_documents({})}
+
+
+@api.post("/admin/reviews/{rid}/moderate")
+async def moderate_review(rid: str, body: dict, user: dict = Depends(admin_only)):
+    action = body.get("action")
+    if action not in ("hide", "publish", "delete"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+    rev = await review_or_404(rid)
+    if action == "delete":
+        await db.reviews.delete_one({"_id": rev["_id"]})
+    elif action == "hide":
+        await db.reviews.update_one({"_id": rev["_id"]},
+                                   {"$set": {"status": "hidden", "moderation_note": (body.get("note") or "")[:300],
+                                             "moderated_at": iso(now_utc())}})
+    else:
+        await db.reviews.update_one({"_id": rev["_id"]},
+                                   {"$set": {"status": "published", "flag_count": 0, "flagged": False,
+                                             "moderated_at": iso(now_utc())}})
+    await db.reports.update_many({"target_type": "review", "target_id": rid, "status": "open"},
+                                 {"$set": {"status": "resolved", "resolution": action,
+                                           "resolved_at": iso(now_utc())}})
+    await recompute_ratings(rev["event_id"], rev.get("partner_id", ""))
+    await audit(user, f"review.{action}", "review", rid, {"event_id": rev["event_id"]})
+    if action in ("hide", "delete"):
+        await notify(rev["user_id"], "Your review was removed",
+                     "One of your event reviews was removed because it did not meet our community guidelines.",
+                     "moderation", "/dashboard", email=False)
+    return {"status": action}
+
+
+# ---------------- payouts ----------------
+PLATFORM_FEE = float(os.environ.get("PLATFORM_FEE_PERCENT", "15"))
+PAYOUT_HOLD_HOURS = int(os.environ.get("PAYOUT_HOLD_HOURS", "48"))
+
+
+async def generate_payouts():
+    """Marks finished events completed and creates one payout ledger row per event."""
+    cutoff = iso(now_utc() - timedelta(hours=PAYOUT_HOLD_HOURS))
+    events = await db.events.find({"status": {"$in": ["published", "completed"]},
+                                   "$or": [{"ends_at": {"$lt": cutoff, "$ne": ""}},
+                                           {"starts_at": {"$lt": cutoff}}]}).to_list(500)
+    created = 0
+    for ev in events:
+        eid = str(ev["_id"])
+        if ev.get("status") == "published":
+            await db.events.update_one({"_id": ev["_id"]}, {"$set": {"status": "completed"}})
+        if not ev.get("partner_id") or await db.payouts.find_one({"event_id": eid}):
+            continue
+        orders = await db.orders.find({"kind": "event", "ref_id": eid, "payment_status": "paid",
+                                       "refund_status": "none"}).to_list(1000)
+        gross = round(sum(o["subtotal"] - o["discount"] for o in orders), 2)
+        fee = round(gross * PLATFORM_FEE / 100, 2)
+        await db.payouts.insert_one({
+            "partner_id": ev["partner_id"], "event_id": eid, "event_title": ev["title"],
+            "orders": len(orders), "gross": gross, "fee_percent": PLATFORM_FEE, "fee": fee,
+            "net": round(gross - fee, 2), "currency": "INR", "status": "pending",
+            "created_at": iso(now_utc())})
+        created += 1
+        await notify(ev["partner_id"], "Payout ready",
+                     f"Your payout for {ev['title']} (₹{round(gross - fee):,}) is queued for settlement.",
+                     "order", "/partner")
+    return created
+
+
+@api.get("/partner/payouts")
+async def partner_payouts(user: dict = Depends(partner_only)):
+    docs = await db.payouts.find({"partner_id": user["id"]}).sort([("created_at", -1)]).to_list(300)
+    items = [clean(d) for d in docs]
+    return {"items": items,
+            "pending_total": round(sum(i["net"] for i in items if i["status"] == "pending"), 2),
+            "paid_total": round(sum(i["net"] for i in items if i["status"] == "paid"), 2)}
+
+
+@api.get("/admin/payouts")
+async def admin_payouts(status: str = "", user: dict = Depends(admin_only)):
+    flt = {"status": status} if status else {}
+    docs = await db.payouts.find(flt).sort([("created_at", -1)]).to_list(500)
+    out = []
+    for d in docs:
+        p = clean(d)
+        partner = await db.users.find_one({"_id": ObjectId(p["partner_id"])}, {"full_name": 1, "org_name": 1, "email": 1})
+        p["partner"] = clean(partner) if partner else None
+        out.append(p)
+    return {"items": out}
+
+
+@api.post("/admin/payouts/{pid}/pay")
+async def pay_payout(pid: str, body: dict, user: dict = Depends(admin_only)):
+    payout = await db.payouts.find_one({"_id": ObjectId(pid)})
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    if payout["status"] == "paid":
+        raise HTTPException(status_code=400, detail="This payout is already settled.")
+    ref = body.get("reference") or "UTR" + uuid.uuid4().hex[:10].upper()
+    await db.payouts.update_one({"_id": payout["_id"]},
+                                {"$set": {"status": "paid", "reference": ref, "paid_at": iso(now_utc())}})
+    await audit(user, "payout.pay", "payout", pid, {"net": payout["net"], "reference": ref})
+    await notify(payout["partner_id"], "Payout settled",
+                 f"₹{payout['net']:,.0f} for {payout['event_title']} has been transferred. Reference {ref}.",
+                 "order", "/partner")
+    return {"status": "paid", "reference": ref}
+
+
+@api.post("/admin/payouts/generate")
+async def run_payout_generation(user: dict = Depends(admin_only)):
+    created = await generate_payouts()
+    await audit(user, "payout.generate", "payout", "", {"created": created})
+    return {"created": created}
+
+
 @api.get("/")
 async def root():
     return {"service": "Buddilio API", "status": "ok"}
@@ -1463,6 +1957,17 @@ async def ws_chat(websocket: WebSocket, token: str = Query("")):
         await hub.disconnect(uid, websocket)
         if not hub.is_online(uid):
             await hub.send_to(peers, {"type": "presence", "user_id": uid, "online": False})
+
+
+async def payout_loop():
+    while True:
+        try:
+            n = await generate_payouts()
+            if n:
+                logger.info(f"generated {n} partner payouts")
+        except Exception as e:
+            logger.error(f"payout loop error: {e}")
+        await asyncio.sleep(3600)
 
 
 async def reminder_loop():
@@ -1518,6 +2023,8 @@ async def startup():
     await db.messages.create_index([("conversation_id", 1), ("created_at", 1)])
     await db.notifications.create_index([("user_id", 1), ("read", 1)])
     await db.orders.create_index([("user_id", 1), ("created_at", -1)])
+    await db.payouts.create_index("event_id", unique=True)
+    await db.reviews.create_index([("event_id", 1), ("user_id", 1)], unique=True)
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]
@@ -1533,6 +2040,12 @@ async def startup():
         await db.users.update_one({"_id": existing["_id"]},
                                   {"$set": {"password_hash": hash_password(os.environ["ADMIN_PASSWORD"])}})
     asyncio.create_task(reminder_loop())
+    asyncio.create_task(payout_loop())
+    try:
+        await asyncio.to_thread(init_storage)
+        logger.info("Object storage initialised")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
 
 
 @app.on_event("shutdown")

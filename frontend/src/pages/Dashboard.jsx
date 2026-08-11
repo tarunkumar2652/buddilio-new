@@ -4,13 +4,17 @@ import { api, money } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { EventCard, PersonCard } from "@/components/Cards";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
-import { Compass, Ticket, MessageCircle, Bell, Heart, CalendarDays } from "lucide-react";
+import { Compass, Ticket, MessageCircle, Bell, Heart, CalendarDays, Star } from "lucide-react";
 
 export default function Dashboard() {
   const { user } = useAuth();
   const [d, setD] = useState(null);
+  const [reviewable, setReviewable] = useState([]);
 
-  useEffect(() => { api.get("/me/dashboard").then(({ data }) => setD(data)).catch(() => setD({})); }, []);
+  useEffect(() => {
+    api.get("/me/dashboard").then(({ data }) => setD(data)).catch(() => setD({}));
+    api.get("/me/reviewable").then(({ data }) => setReviewable(data.items)).catch(() => {});
+  }, []);
 
   if (!d) return <Spinner label="Loading your dashboard" />;
 
@@ -63,8 +67,7 @@ export default function Dashboard() {
       </div>
 
       <section className="mt-14">
-        <h2 className="text-2xl font-bold">Your upcoming events</h2>
-        <div className="mt-5">
+        <h2 className="text-2xl font-bold">Your upcoming events</h2>        <div className="mt-5">
           {d.upcoming_events?.length ? (
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">{d.upcoming_events.map((e) => <EventCard key={e.id} ev={e} />)}</div>
           ) : (
@@ -73,6 +76,26 @@ export default function Dashboard() {
           )}
         </div>
       </section>
+
+      {reviewable.length > 0 && (
+        <section className="mt-14" data-testid="reviewable-section">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6">
+            <div className="flex items-center gap-2">
+              <Star className="h-5 w-5" />
+              <h2 className="text-xl font-bold">Rate your recent experiences</h2>
+            </div>
+            <p className="text-sm text-slate-500 mt-1">Your review helps other members pick the right night out.</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {reviewable.map((e) => (
+                <Link key={e.id} to={`/events/${e.id}`} data-testid={`review-prompt-${e.id}`}
+                  className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold hover:border-slate-900">
+                  Review {e.title}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="mt-14">
         <h2 className="text-2xl font-bold">Recommended companions</h2>
@@ -132,7 +155,11 @@ export function Orders() {
               {o.coupon && <p className="text-xs text-emerald-600 mt-1">Coupon {o.coupon} applied</p>}
             </div>
             <div className="text-right">
-              <p className="font-display font-bold">{money(o.total)}</p>
+              <p className="font-display font-bold">
+                {o.currency && o.currency !== "INR"
+                  ? `${o.currency} ${Number(o.charge_total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`
+                  : money(o.total)}
+              </p>
               <div className="mt-1 flex gap-1.5 justify-end">
                 <Badge tone={o.payment_status === "paid" ? "green" : o.payment_status === "failed" ? "red" : "amber"}>{o.payment_status}</Badge>
                 {o.refund_status !== "none" && <Badge tone="red">{o.refund_status}</Badge>}

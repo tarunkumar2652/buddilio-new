@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useCurrency } from "@/context/CurrencyContext";
 import { EventCard } from "@/components/Cards";
 import { SEO } from "@/components/Shared";
 import { ShieldCheck, Sparkles, UserCheck, Ticket, ArrowRight, Star, Check, MessageCircle } from "lucide-react";
@@ -25,6 +26,7 @@ const TESTIMONIALS = [
 ];
 
 export default function Home() {
+  const { fmt } = useCurrency();
   const [featured, setFeatured] = useState([]);
   const [popular, setPopular] = useState([]);
   const [plans, setPlans] = useState([]);
@@ -168,7 +170,7 @@ export default function Home() {
                 {i === 2 && <span className="overline text-slate-500">Best value</span>}
                 <p className="font-display font-semibold text-2xl mt-1">{p.name}</p>
                 <p className={`mt-2 text-sm ${i === 2 ? "text-slate-600" : "text-slate-400"}`}>{p.description}</p>
-                <p className="mt-6 text-3xl font-display font-bold">{p.price === 0 ? "Free" : `₹${p.price.toLocaleString("en-IN")}`}
+                <p className="mt-6 text-3xl font-display font-bold">{p.price === 0 ? "Free" : fmt(p.price)}
                   <span className="text-sm font-normal opacity-60"> / {p.duration_days} days</span></p>
                 <ul className="mt-6 space-y-2.5 text-sm">
                   {p.benefits.map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}

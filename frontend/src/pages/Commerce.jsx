@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { api, errMsg, money } from "@/lib/api";
+import { api, errMsg, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { useCurrency } from "@/context/CurrencyContext";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
-import { Check, ShieldCheck, CreditCard, Smartphone, Building2 } from "lucide-react";
+import { Check, ShieldCheck, CreditCard, Smartphone, Building2, Globe } from "lucide-react";
 
 export function Membership() {
   const { user } = useAuth();
+  const { fmt, code, list } = useCurrency();
   const nav = useNavigate();
   const [plans, setPlans] = useState(null);
   const [mine, setMine] = useState(null);
@@ -18,6 +20,12 @@ export function Membership() {
   }, [user]);
 
   if (!plans) return <Spinner />;
+
+  const symbol = list.find((c) => c.code === code)?.symbol || "";
+  const priceFor = (p) => {
+    const ov = p.price_overrides?.[code];
+    return ov ? `${symbol}${Number(ov).toLocaleString()}` : fmt(p.price);
+  };
 
   const pick = (p) => {
     if (!user) return nav("/login");
@@ -48,7 +56,7 @@ export function Membership() {
             {i === 2 && <span className="overline text-slate-400">Best value</span>}
             <p className="font-display font-semibold text-2xl mt-1">{p.name}</p>
             <p className={`text-sm mt-2 ${i === 2 ? "text-slate-400" : "text-slate-500"}`}>{p.description}</p>
-            <p className="mt-6 text-4xl font-display font-bold">{p.price === 0 ? "Free" : money(p.price)}</p>
+            <p className="mt-6 text-4xl font-display font-bold">{p.price === 0 ? "Free" : priceFor(p)}</p>
             <p className={`text-xs mt-1 ${i === 2 ? "text-slate-400" : "text-slate-500"}`}>for {p.duration_days} days{p.discount_percent > 0 && ` · ${p.discount_percent}% off all passes`}</p>
             <ul className="mt-6 space-y-2.5 text-sm">
               {p.benefits.map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}
@@ -64,8 +72,15 @@ export function Membership() {
   );
 }
 
+function useCurrencySymbol(code) {
+  const { list } = useCurrency();
+  return list.find((c) => c.code === code)?.symbol || "";
+}
+
+
 export function Passes() {
   const { user } = useAuth();
+  const { fmt } = useCurrency();
   const nav = useNavigate();
   const [items, setItems] = useState(null);
   const [city, setCity] = useState("");
@@ -92,7 +107,7 @@ export function Passes() {
             const final = p.price * (1 - p.discount_percent / 100);
             return (
               <div key={p.id} data-testid={`product-card-${p.id}`} className="rounded-2xl border border-slate-200 bg-white overflow-hidden hover-lift">
-                <img src={p.image} alt={p.name} loading="lazy" className="aspect-[16/10] w-full object-cover" />
+                <img src={fileUrl(p.image)} alt={p.name} loading="lazy" className="aspect-[16/10] w-full object-cover" />
                 <div className="p-6">
                   <div className="flex items-start justify-between gap-3">
                     <h3 className="font-display font-semibold text-lg">{p.name}</h3>
@@ -100,8 +115,8 @@ export function Passes() {
                   </div>
                   <p className="mt-2 text-sm text-slate-500 leading-relaxed">{p.description}</p>
                   <div className="mt-4 flex items-baseline gap-2">
-                    <p className="text-2xl font-display font-bold">{money(final)}</p>
-                    {p.discount_percent > 0 && <p className="text-sm text-slate-400 line-through">{money(p.price)}</p>}
+                    <p className="text-2xl font-display font-bold">{fmt(final)}</p>
+                    {p.discount_percent > 0 && <p className="text-sm text-slate-400 line-through">{fmt(p.price)}</p>}
                   </div>
                   <p className="text-xs text-slate-500 mt-1">Valid {p.validity_days} days · {p.city} · +{p.tax_percent}% GST</p>
                   <button onClick={() => user ? nav(`/checkout?kind=product&id=${p.id}`) : nav("/login")}
@@ -122,26 +137,32 @@ export function Checkout() {
   const [params] = useSearchParams();
   const nav = useNavigate();
   const { user } = useAuth();
+  const { code, list } = useCurrency();
   const kind = params.get("kind");
   const itemId = params.get("id");
   const [order, setOrder] = useState(null);
   const [coupon, setCoupon] = useState("");
   const [busy, setBusy] = useState(false);
   const [method, setMethod] = useState("upi");
-  const [cfg, setCfg] = useState({ live: false });
+  const [cfg, setCfg] = useState({ razorpay_live: false, stripe_enabled: false });
+  const [currency, setCurrency] = useState(code);
 
   useEffect(() => { api.get("/payments/config").then(({ data }) => setCfg(data)).catch(() => {}); }, []);
 
-  const create = async (code = "") => {
+  const symbol = list.find((c) => c.code === currency)?.symbol || "";
+  const amt = (n) => `${symbol}${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: currency === "INR" ? 0 : 2, maximumFractionDigits: currency === "INR" ? 0 : 2 })}`;
+
+  const create = async (cur = currency, code2 = coupon) => {
     setBusy(true);
     try {
-      const { data } = await api.post("/checkout", { kind, item_id: itemId, quantity: 1, coupon_code: code });
+      const { data } = await api.post("/checkout", { kind, item_id: itemId, quantity: 1, coupon_code: code2, currency: cur });
       setOrder(data.order);
-      if (code) toast.success("Coupon applied");
+      setCurrency(data.order.currency);
+      if (code2) toast.success("Coupon applied");
     } catch (e) { toast.error(errMsg(e)); if (!order) nav(-1); } finally { setBusy(false); }
   };
 
-  useEffect(() => { if (kind && itemId) create(""); /* eslint-disable-next-line */ }, [kind, itemId]);
+  useEffect(() => { if (kind && itemId) create(code, ""); /* eslint-disable-next-line */ }, [kind, itemId]);
 
   const done = () => nav(kind === "membership" ? "/membership" : kind === "event" ? `/events/${itemId}` : "/orders");
 
@@ -154,29 +175,22 @@ export function Checkout() {
     document.body.appendChild(s);
   });
 
-  const payLive = async () => {
+  const payRazorpay = async () => {
     setBusy(true);
     try {
       const ok = await loadRazorpayScript();
       if (!ok) throw new Error("Could not load the payment window. Check your connection.");
       const { data } = await api.post("/payments/razorpay/order", { order_id: order.id });
       const rz = new window.Razorpay({
-        key: data.key_id,
-        amount: data.amount,
-        currency: data.currency,
-        order_id: data.razorpay_order_id,
-        name: "Buddilio",
-        description: order.item_name,
+        key: data.key_id, amount: data.amount, currency: data.currency,
+        order_id: data.razorpay_order_id, name: "Buddilio", description: order.item_name,
         prefill: { name: user?.full_name, email: user?.email, contact: user?.mobile || "" },
         theme: { color: "#0F172A" },
         handler: async (res) => {
           try {
             await api.post("/payments/razorpay/verify", {
-              order_id: order.id,
-              razorpay_order_id: res.razorpay_order_id,
-              razorpay_payment_id: res.razorpay_payment_id,
-              razorpay_signature: res.razorpay_signature,
-            });
+              order_id: order.id, razorpay_order_id: res.razorpay_order_id,
+              razorpay_payment_id: res.razorpay_payment_id, razorpay_signature: res.razorpay_signature });
             toast.success("Payment successful");
             done();
           } catch (e) { toast.error(errMsg(e)); }
@@ -186,6 +200,14 @@ export function Checkout() {
       rz.on("payment.failed", (r) => toast.error(r?.error?.description || "Payment failed. Please try another method."));
       rz.open();
     } catch (e) { toast.error(errMsg(e) || e.message); } finally { setBusy(false); }
+  };
+
+  const payStripe = async () => {
+    setBusy(true);
+    try {
+      const { data } = await api.post("/payments/stripe/session", { order_id: order.id, origin_url: window.location.origin });
+      window.location.href = data.checkout_url;
+    } catch (e) { toast.error(errMsg(e)); setBusy(false); }
   };
 
   const paySim = async (simulate) => {
@@ -199,6 +221,10 @@ export function Checkout() {
 
   if (!order) return <Spinner label="Preparing your order" />;
 
+  const isINR = currency === "INR";
+  const canRazorpay = isINR && cfg.razorpay_live;
+  const canStripe = !isINR && cfg.stripe_enabled;
+
   return (
     <div className="mx-auto max-w-3xl px-4 sm:px-6 py-10 pb-28" data-testid="checkout-page">
       <SEO title="Checkout" />
@@ -206,18 +232,29 @@ export function Checkout() {
       <p className="mt-2 text-sm text-slate-500">Order #{order.order_no}</p>
 
       <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6">
-        <p className="font-semibold">{order.item_name}</p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="font-semibold">{order.item_name}</p>
+          <label className="flex items-center gap-2 text-xs font-bold text-slate-600">
+            <Globe className="h-4 w-4" />Pay in
+            <select data-testid="checkout-currency" value={currency}
+              onChange={(e) => { setCurrency(e.target.value); create(e.target.value, coupon); }}
+              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-bold">
+              {list.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+            </select>
+          </label>
+        </div>
         <div className="mt-5 space-y-2 text-sm">
-          <div className="flex justify-between"><span className="text-slate-500">Subtotal</span><span>{money(order.subtotal)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Discount</span><span className="text-emerald-600">− {money(order.discount)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">GST</span><span>{money(order.tax)}</span></div>
-          <div className="flex justify-between border-t border-slate-200 pt-3 font-bold text-base"><span>Total payable</span><span data-testid="order-total">{money(order.total)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Subtotal</span><span>{amt(order.charge_subtotal)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Discount</span><span className="text-emerald-600">− {amt(order.charge_discount)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Tax</span><span>{amt(order.charge_tax)}</span></div>
+          <div className="flex justify-between border-t border-slate-200 pt-3 font-bold text-base"><span>Total payable</span><span data-testid="order-total">{amt(order.charge_total)}</span></div>
+          {!isINR && <p className="text-xs text-slate-400">Billed in {currency} · ₹{order.total.toLocaleString("en-IN")} equivalent</p>}
         </div>
 
         <div className="mt-6 flex gap-2">
           <input data-testid="coupon-input" value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} placeholder="Coupon code"
             className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm" />
-          <button onClick={() => create(coupon)} disabled={busy} data-testid="apply-coupon"
+          <button onClick={() => create(currency, coupon)} disabled={busy} data-testid="apply-coupon"
             className="rounded-xl border border-slate-900 px-5 py-2.5 text-sm font-bold">Apply</button>
         </div>
         <p className="text-xs text-slate-400 mt-2">Try BUDDY20 or FIRSTNIGHT</p>
@@ -225,30 +262,43 @@ export function Checkout() {
 
       <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
         <p className="overline">Payment method</p>
-        <div className="mt-4 grid sm:grid-cols-3 gap-3">
-          {[["upi", "UPI", Smartphone], ["card", "Card", CreditCard], ["netbanking", "Net banking", Building2]].map(([v, l, Icon]) => (
-            <button key={v} onClick={() => setMethod(v)} data-testid={`pay-method-${v}`}
-              className={`rounded-xl border p-4 text-left ${method === v ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
-              <Icon className="h-5 w-5" /><p className="mt-2 text-sm font-semibold">{l}</p>
-            </button>
-          ))}
-        </div>
-        <p className="mt-4 text-xs text-slate-500 flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4" />
-          {cfg.live
-            ? "Secured by Razorpay. UPI, cards, net banking and wallets. Payment is verified on our server before your order is confirmed."
-            : "Razorpay is wired up but awaiting live API keys — checkout runs in simulation mode. Every payment is still verified server-side."}
+        {isINR ? (
+          <div className="mt-4 grid sm:grid-cols-3 gap-3">
+            {[["upi", "UPI", Smartphone], ["card", "Card", CreditCard], ["netbanking", "Net banking", Building2]].map(([v, l, Icon]) => (
+              <button key={v} onClick={() => setMethod(v)} data-testid={`pay-method-${v}`}
+                className={`rounded-xl border p-4 text-left ${method === v ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
+                <Icon className="h-5 w-5" /><p className="mt-2 text-sm font-semibold">{l}</p>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-4 rounded-xl border border-slate-900 bg-slate-50 p-4 flex items-center gap-3">
+            <CreditCard className="h-5 w-5" />
+            <div><p className="text-sm font-semibold">International card</p>
+              <p className="text-xs text-slate-500">Visa, Mastercard, Amex and local wallets via Stripe</p></div>
+          </div>
+        )}
+        <p className="mt-4 text-xs text-slate-500 flex items-start gap-2">
+          <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" />
+          {canStripe ? "Secured by Stripe. You'll be taken to a hosted payment page; we confirm the payment on our server before releasing your order."
+            : canRazorpay ? "Secured by Razorpay. UPI, cards, net banking and wallets, all verified server-side."
+            : "Razorpay for India is wired up and awaiting live keys — INR checkout runs in simulation mode. Payments are always verified server-side."}
         </p>
-        {cfg.live ? (
-          <button onClick={payLive} disabled={busy} data-testid="pay-razorpay-btn"
+        {canStripe ? (
+          <button onClick={payStripe} disabled={busy} data-testid="pay-stripe-btn"
             className="mt-6 w-full rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
-            {busy ? "Opening secure checkout…" : `Pay ${money(order.total)} with Razorpay`}
+            {busy ? "Opening secure checkout…" : `Pay ${amt(order.charge_total)} with card`}
+          </button>
+        ) : canRazorpay ? (
+          <button onClick={payRazorpay} disabled={busy} data-testid="pay-razorpay-btn"
+            className="mt-6 w-full rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
+            {busy ? "Opening secure checkout…" : `Pay ${amt(order.charge_total)} with Razorpay`}
           </button>
         ) : (
           <div className="mt-6 grid sm:grid-cols-2 gap-3">
             <button onClick={() => paySim("success")} disabled={busy} data-testid="pay-success-btn"
               className="rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
-              {busy ? "Processing…" : `Pay ${money(order.total)}`}
+              {busy ? "Processing…" : `Pay ${amt(order.charge_total)}`}
             </button>
             <button onClick={() => paySim("failure")} disabled={busy} data-testid="pay-failure-btn"
               className="rounded-full border border-slate-200 py-3.5 text-sm font-bold text-slate-500">Simulate failed payment</button>

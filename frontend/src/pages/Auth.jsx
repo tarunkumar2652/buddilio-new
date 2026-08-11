@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { api, errMsg } from "@/lib/api";
+import { ImageUpload } from "@/components/ImageUpload";
 import { SEO } from "@/components/Shared";
 
 const Field = ({ label, ...p }) => (
@@ -128,15 +129,6 @@ export function Register() {
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
 
-  const photo = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 3_000_000) return toast.error("Please pick an image under 3MB.");
-    const r = new FileReader();
-    r.onload = () => setF((p) => ({ ...p, photo: r.result }));
-    r.readAsDataURL(file);
-  };
-
   return (
     <AuthShell title={isPartner ? "Partner with Buddilio" : "Join Buddilio"} sub={`Step ${step + 1} of 4 · ${STEPS[step]}`}>
       <SEO title="Join Buddilio" />
@@ -178,12 +170,7 @@ export function Register() {
                 placeholder="What do you enjoy doing on a night off?"
                 className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-slate-900" />
             </label>
-            <label className="block">
-              <span className="text-xs font-bold text-slate-600">Profile photo</span>
-              <input type="file" accept="image/*" onChange={photo} data-testid="reg-photo"
-                className="mt-1.5 w-full text-sm file:mr-3 file:rounded-full file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-white file:text-xs file:font-bold" />
-            </label>
-            {f.photo && <img src={f.photo} alt="preview" className="h-20 w-20 rounded-xl object-cover" />}
+            <ImageUpload value={f.photo} onChange={(url) => setF({ ...f, photo: url })} label="Profile photo" testid="reg-photo" />
           </>
         )}
 
