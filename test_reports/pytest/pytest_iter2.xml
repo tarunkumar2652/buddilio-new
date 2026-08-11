@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="15" time="21.375" timestamp="2026-08-11T18:44:09.359252+00:00" hostname="agent-env-d662383c-22bc-4e4f-8810-0902a1000b08"><testcase classname="tests.test_iteration2.TestPaymentsConfig" name="test_payments_config_simulation_mode" time="0.269" /><testcase classname="tests.test_iteration2.TestWebSocket" name="test_ws_rejects_bad_token" time="0.322"><failure message="websockets.exceptions.InvalidStatus: server rejected WebSocket connection: HTTP 403">backend/tests/test_iteration2.py:214: in test_ws_rejects_bad_token
+    async with websockets.connect(f"{WS_URL}?token=BAD_TOKEN") as ws:
+/root/.venv/lib/python3.11/site-packages/websockets/asyncio/client.py:601: in __aenter__
+    return await self
+           ^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/websockets/asyncio/client.py:557: in __await_impl__
+    await self.connection.handshake(
+/root/.venv/lib/python3.11/site-packages/websockets/asyncio/client.py:115: in handshake
+    raise self.protocol.handshake_exc
+/root/.venv/lib/python3.11/site-packages/websockets/client.py:327: in parse
+    self.process_response(response)
+/root/.venv/lib/python3.11/site-packages/websockets/client.py:144: in process_response
+    raise InvalidStatus(response)
+E   websockets.exceptions.InvalidStatus: server rejected WebSocket connection: HTTP 403</failure></testcase><testcase classname="tests.test_iteration2.TestWebSocket" name="test_ws_rejects_missing_token" time="0.298"><failure message="websockets.exceptions.InvalidStatus: server rejected WebSocket connection: HTTP 403">backend/tests/test_iteration2.py:226: in test_ws_rejects_missing_token
+    async with websockets.connect(WS_URL) as ws:
+/root/.venv/lib/python3.11/site-packages/websockets/asyncio/client.py:601: in __aenter__
+    return await self
+           ^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/websockets/asyncio/client.py:557: in __await_impl__
+    await self.connection.handshake(
+/root/.venv/lib/python3.11/site-packages/websockets/asyncio/client.py:115: in handshake
+    raise self.protocol.handshake_exc
+/root/.venv/lib/python3.11/site-packages/websockets/client.py:327: in parse
+    self.process_response(response)
+/root/.venv/lib/python3.11/site-packages/websockets/client.py:144: in process_response
+    raise InvalidStatus(response)
+E   websockets.exceptions.InvalidStatus: server rejected WebSocket connection: HTTP 403</failure></testcase><testcase classname="tests.test_iteration2.TestPaymentsConfig" name="test_razorpay_order_returns_503_without_keys" time="0.908" /><testcase classname="tests.test_iteration2.TestWebSocket" name="test_ws_valid_token_connects_and_gets_ready" time="0.709" /><testcase classname="tests.test_iteration2.TestPaymentsConfig" name="test_razorpay_webhook_returns_503_without_keys" time="0.128" /><testcase classname="tests.test_iteration2.TestPaymentsConfig" name="test_razorpay_webhook_cannot_mark_paid_without_signature" time="0.670" /><testcase classname="tests.test_iteration2.TestWebSocket" name="test_ws_two_users_typing_and_presence" time="1.310" /><testcase classname="tests.test_iteration2.TestFulfilment" name="test_paid_event_purchase_grants_chat_and_participation" time="15.997" /><testcase classname="tests.test_iteration2.TestEventChatAccess" name="test_free_event_joiner_gets_403" time="15.767" /><testcase classname="tests.test_iteration2.TestFulfilment" name="test_pay_failure_marks_order_failed" time="0.563" /><testcase classname="tests.test_iteration2.TestEventChatAccess" name="test_random_user_gets_403" time="0.797" /><testcase classname="tests.test_iteration2.TestRefundFallback" name="test_admin_refund_internal_fallback" time="1.576" /><testcase classname="tests.test_iteration2.TestEventChatAccess" name="test_organiser_gets_access" time="1.555" /><testcase classname="tests.test_iteration2.TestEmailNonBlocking" name="test_register_new_example_com_still_succeeds" time="0.779" /></testsuite></testsuites>

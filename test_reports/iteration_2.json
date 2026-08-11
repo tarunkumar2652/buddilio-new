@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 2 full stack testing. Backend: 49/49 pytest passing (34 regression + 15 new iteration-2 tests). Verified Razorpay simulation mode (config.live=false, /razorpay/order -> 503, /razorpay/webhook -> 503 and cannot mark order paid), paid event purchase via simulate=success grants event group chat access, free-event joiner + random user get 403 with 'paid ticket' message, organiser (partner) gets 200, admin refund still works with no keys (internal fallback -> refund_status=refunded), simulate=failure returns 402 and marks order failed, registration succeeds even when @example.com email is undeliverable, WebSocket rejects bad/missing tokens (server closes before accept -> handshake fails at HTTP layer, 403), valid token yields ready+online payload, typing events fan out between two users. Frontend: /messages ws-status='Live', chat-presence='Online now' shown when peer connected, cross-context real-time typing indicator works, message thread updates without refresh, checkout page shows only pay-success-btn + pay-failure-btn (NOT pay-razorpay-btn) and displays 'awaiting live API keys' copy, event group chat appears with 'group' badge in convo list, event-group-chat-btn visible on paid-event detail for ticket holders, mobile 390px chat-back works, discover-card-{id} testids present (12 cards). Regression fixes from iteration 1 confirmed: per-email lockout keyed on 'email:<email>' triggers 429, CORS_ORIGINS set to explicit frontend origin, mobile length validation server-side, discover-card testids present.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "WebSocket /api/ws", "issue": "When token is invalid, the server calls websocket.close(4401) BEFORE websocket.accept(), so Starlette/uvicorn returns HTTP 403 at the handshake instead of ever completing an upgrade with close-code 4401. Browsers therefore see a plain 'connection failed' rather than a specific close code. Not blocking; connection is refused as required. If the exact 4401 close code is required for clients to distinguish auth errors from network drops, accept() first and then close(4401)."},
+      {"endpoint": "POST /api/payments/razorpay/webhook", "issue": "app-level route (not the /api router) — works, but note that a stripped payload with only 'event' returns 503 first (missing signature branch never reached before the keys check). This is fine for now but once keys are set the order of checks should be: signature required THEN parse. Currently keys+client are checked before signature verification which is correct while in sim mode."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Messages.jsx", "issue": "Two shipped source bugs that would have crashed the page in prod: (1) trailing garbage 'v>\\n  );\\n}' after the component's real end causing a Babel Unexpected token; (2) threadRef used on lines 43+177 but never declared with useRef. Fixed both during testing so the /messages page compiles and scrolling works.", "selector": "/app/frontend/src/pages/Messages.jsx", "priority": "HIGH (was crashing the /messages route entirely)"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/events cards", "issues": ["Several seeded events share the same stock image (Street Food Crawl and Sunday Brunch cards look identical). Consider varying category images so users can visually distinguish events."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_iteration2.py",
+    "/app/test_reports/pytest/pytest_iter2_full.xml"
+  ],
+  "action_items": [
+    "Optional: accept() before close(4401) in @app.websocket('/api/ws') so clients receive an actual close-code 4401 instead of a handshake failure.",
+    "Diversify event card imagery in seed_data.py so category cards don't visually collide.",
+    "Nothing else blocking — iteration 2 features are functional."
+  ],
+  "critical_code_review_comments": [
+    "Messages.jsx shipped with a syntax error and an undeclared threadRef; suggests the file was last saved after a partial refactor and never actually run by the developer. Add a pre-commit `yarn build` or CI check.",
+    "server.py is 1540 lines — still monolithic. Split routers now that we have websockets + payments + reminders piled on.",
+    "reminder_loop() catches Exception broadly; wrap the DB queries with a timeout so an ObjectId decode error on a corrupted event doc doesn't spin the loop hot (currently mitigated by the outer sleep(3600), so low priority).",
+    "The webhook handler is defined on `@app.post('/api/payments/razorpay/webhook')` while the rest of the payments live on the `api` router — consistent, but flag that CORS/deps configured on the router don't apply here. Fine because webhooks come server-to-server.",
+    "ensure_event_chat() adds any caller into `conv.members` — safe because the caller of ensure_event_chat is always the gated /events/{id}/chat endpoint that has already checked eligibility, but callers should not assume ensure_event_chat is safe to expose directly."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration2.py",
+    "/app/backend/pytest.ini (added asyncio_mode = auto)",
+    "/app/frontend/src/pages/Messages.jsx (declared threadRef; removed trailing garbage causing SyntaxError)"
+  ],
+  "success_rate": {"backend": "100% (49/49)", "frontend": "100% of iteration-2 flows tested"},
+  "test_credentials": "Admin admin@buddilio.com/Admin@123; Partner partner@buddilio.com/Partner@123; Users *@example.com/User@123; delivered@resend.dev for real email delivery.",
+  "seed_data_creation": "Test suite creates TEST_-prefixed users/plans/events/orders and purchases 'Street Food Crawl: Old Delhi' passes for aarav.mehta and other paid orders. All state is idempotent-safe and non-destructive. Aarav's membership remains active (kept from iteration 1). Diya is now a member of the Street Food Crawl event group chat.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Two backend test files now: backend_test.py (regression) and test_iteration2.py (new features). Run both with `export $(grep -v '^#' /app/frontend/.env | xargs) && pytest /app/backend/tests/ -v`. pytest.ini has asyncio_mode=auto so WebSocket tests using pytest-asyncio work out of the box. WebSocket URL: wss://<REACT_APP_BACKEND_URL>/api/ws?token=<jwt>. Payment mode is controlled by RAZORPAY_KEY_ID env var — currently empty; if the user provides real keys, expect /payments/config live=true and /razorpay/order to return 200 with razorpay_order_id (needs internet reachability to api.razorpay.com from the pod). Do NOT downgrade websockets library; the InvalidStatus (not InvalidStatusCode) exception in websockets>=14 is what test_ws_rejects_bad_token catches.",
+  "rca of the issue": "Messages.jsx was DOA on iteration 2 — the file compiled with a Babel SyntaxError ('Unexpected token' at end of file) because a stale duplicate closing block 'v>\\n  );\\n}' was left after the real component body ended. Additionally `threadRef` was referenced from useEffect and the JSX `<div ref={threadRef}>` but never created with useRef, which would have thrown ReferenceError once the syntax error was fixed. Both were fixed by (1) trimming the trailing 3 lines and (2) adding `const threadRef = useRef(null);` next to endRef. Root cause: the developer likely applied a merge/refactor to add ws + typing state and pasted a partial diff, but never `yarn start`ed the frontend to catch the compile error before handing off to testing."
+}

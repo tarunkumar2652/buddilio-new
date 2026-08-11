@@ -5,6 +5,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import os
+import asyncio
 import jwt
 import bcrypt
 import uuid
@@ -13,12 +14,20 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 from pydantic import BaseModel, Field, BeforeValidator, EmailStr, ConfigDict
+
+from emailer import send_email, wrap
+from realtime import hub
+
+try:
+    import razorpay
+except ImportError:
+    razorpay = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("buddilio")
@@ -114,11 +123,36 @@ async def audit(actor: dict, action: str, entity: str, entity_id: str = "", meta
     })
 
 
-async def notify(user_id: str, title: str, body: str, ntype: str = "system", link: str = ""):
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
+
+
+def razorpay_client():
+    kid, secret = os.environ.get("RAZORPAY_KEY_ID"), os.environ.get("RAZORPAY_KEY_SECRET")
+    if not kid or not secret or razorpay is None:
+        return None
+    return razorpay.Client(auth=(kid, secret))
+
+
+EMAIL_TYPES = {"registration", "membership", "order", "event", "refund", "message", "reminder", "moderation"}
+
+
+async def notify(user_id: str, title: str, body: str, ntype: str = "system", link: str = "",
+                 email: bool = True, cta: str = ""):
     await db.notifications.insert_one({
         "user_id": user_id, "title": title, "body": body, "type": ntype, "link": link,
         "read": False, "created_at": iso(now_utc()),
     })
+    if not email or ntype not in EMAIL_TYPES:
+        return
+    try:
+        user = await db.users.find_one({"_id": ObjectId(user_id)}, {"email": 1, "notification_prefs": 1, "full_name": 1})
+    except Exception:
+        return
+    if not user or not (user.get("notification_prefs") or {}).get("email", True):
+        return
+    greeting = f"<p>Hi {user.get('full_name', 'there').split(' ')[0]},</p><p>{body}</p>"
+    html = wrap(title, greeting, cta or ("Open Buddilio" if link else ""), f"{FRONTEND_URL}{link}" if link else "")
+    await send_email(user["email"], f"{title} · Buddilio", html)
 
 
 async def membership_active(user_id: str) -> Optional[dict]:
@@ -298,6 +332,14 @@ async def register(payload: RegisterIn, response: Response):
     res = await db.users.insert_one(doc)
     uid = str(res.inserted_id)
     await notify(uid, "Welcome to Buddilio", "Complete your profile to get better companion matches.", "registration", "/profile")
+    await send_email(email, "Welcome to Buddilio", wrap(
+        f"Welcome to Buddilio, {payload.full_name.split(' ')[0]}",
+        "<p>Your account is live. Here's how members get the most out of Buddilio:</p>"
+        "<p><b>1.</b> Finish your profile so we can match you with the right companions.<br/>"
+        "<b>2.</b> Browse curated experiences in your city.<br/>"
+        "<b>3.</b> Message a member, then pick a night out together.</p>"
+        "<p>Remember: always meet in public venues and never send money to another member.</p>",
+        "Open my dashboard", f"{FRONTEND_URL}/dashboard"))
     token = create_access_token(uid, email, role)
     set_cookies(response, token)
     user = clean(await db.users.find_one({"_id": res.inserted_id}))
@@ -350,6 +392,13 @@ async def forgot_password(body: dict):
             "token": token, "user_id": str(user["_id"]), "used": False,
             "expires_at": now_utc() + timedelta(hours=1)})
         logger.info(f"[Buddilio] Password reset link: /reset-password?token={token}")
+        html = wrap("Reset your Buddilio password",
+                    f"<p>Hi {user.get('full_name','there').split(' ')[0]},</p>"
+                    "<p>We received a request to reset your Buddilio password. "
+                    "This link expires in one hour and can only be used once.</p>"
+                    "<p>If you didn't ask for this, you can safely ignore this email.</p>",
+                    "Choose a new password", f"{FRONTEND_URL}/reset-password?token={token}")
+        await send_email(user["email"], "Reset your Buddilio password", html)
     return {"message": "If that email exists, a reset link has been sent."}
 
 
@@ -741,55 +790,202 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
     return {"order": clean(await db.orders.find_one({"_id": res.inserted_id}))}
 
 
+async def mark_failed(order: dict, reason: str = ""):
+    await db.orders.update_one({"_id": order["_id"]},
+                               {"$set": {"payment_status": "failed", "order_status": "failed",
+                                         "failure_reason": reason}})
+    await db.payments.insert_one({"order_id": str(order["_id"]), "user_id": order["user_id"],
+                                  "amount": order["total"], "status": "failed", "reason": reason,
+                                  "created_at": iso(now_utc())})
+
+
+async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> dict:
+    """Single source of truth for post-payment fulfilment. Idempotent."""
+    if order["payment_status"] == "paid":
+        return clean(order)
+    uid = order["user_id"]
+    await db.orders.update_one({"_id": order["_id"]},
+                               {"$set": {"payment_status": "paid", "order_status": "completed",
+                                         "transaction_id": txn, "gateway": gateway,
+                                         "paid_at": iso(now_utc())}})
+    await db.payments.insert_one({"order_id": str(order["_id"]), "user_id": uid,
+                                  "amount": order["total"], "status": "captured", "gateway": gateway,
+                                  "transaction_id": txn, "created_at": iso(now_utc())})
+    if order.get("coupon"):
+        await db.coupon_usage.insert_one({"code": order["coupon"], "user_id": uid,
+                                          "order_id": str(order["_id"]), "created_at": iso(now_utc())})
+    receipt = (f"<p><b>{order['item_name']}</b></p>"
+               f"<p>Order <b>#{order['order_no']}</b><br/>Amount paid: <b>₹{order['total']:,.0f}</b>"
+               f" (incl. ₹{order['tax']:,.0f} GST)<br/>Payment ID: {txn}</p>")
+
+    if order["kind"] == "membership":
+        plan = await db.membership_plans.find_one({"_id": ObjectId(order["ref_id"])})
+        await db.user_memberships.update_many({"user_id": uid, "status": "active"},
+                                              {"$set": {"status": "replaced"}})
+        ends = now_utc() + timedelta(days=plan.get("duration_days", 365))
+        await db.user_memberships.insert_one({
+            "user_id": uid, "plan_id": order["ref_id"], "plan_name": plan["name"],
+            "status": "active", "starts_at": iso(now_utc()), "ends_at": iso(ends),
+            "order_id": str(order["_id"]), "created_at": iso(now_utc())})
+        await notify(uid, "Membership activated",
+                     f"Your {plan['name']} membership is active until {ends.strftime('%d %b %Y')}.",
+                     "membership", "/membership", email=False)
+        u = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1})
+        if u:
+            await send_email(u["email"], "Your Buddilio membership is active", wrap(
+                f"{plan['name']} is live", receipt +
+                f"<p>Valid until <b>{ends.strftime('%d %b %Y')}</b>. Member pricing is applied automatically at checkout.</p>",
+                "See member benefits", f"{FRONTEND_URL}/membership"))
+    elif order["kind"] == "event":
+        ev = await db.events.find_one({"_id": ObjectId(order["ref_id"])})
+        part = await db.event_participants.find_one({"event_id": order["ref_id"], "user_id": uid})
+        if ev and not part:
+            st = "confirmed" if ev.get("approval_mode") == "instant" else "pending"
+            await db.event_participants.insert_one({"event_id": order["ref_id"], "user_id": uid,
+                                                     "status": st, "order_id": str(order["_id"]),
+                                                     "created_at": iso(now_utc())})
+            await db.events.update_one({"_id": ev["_id"]}, {"$inc": {"participant_count": 1}})
+            if st == "confirmed":
+                await ensure_event_chat(order["ref_id"], uid)
+        elif part and part.get("status") == "confirmed":
+            await db.event_participants.update_one({"_id": part["_id"]}, {"$set": {"order_id": str(order["_id"])}})
+            await ensure_event_chat(order["ref_id"], uid)
+        await notify(uid, "Event pass confirmed", f"You're going to {order['item_name']}!",
+                     "event", f"/events/{order['ref_id']}", email=False)
+        u = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1})
+        if u and ev:
+            starts = datetime.fromisoformat(ev["starts_at"])
+            await send_email(u["email"], f"You're going to {ev['title']}", wrap(
+                "Booking confirmed", receipt +
+                f"<p><b>When:</b> {starts.strftime('%a %d %b %Y, %I:%M %p')}<br/>"
+                f"<b>Where:</b> {ev.get('venue','')}, {ev['city']}<br/>"
+                f"<b>Host:</b> {ev.get('partner_name','Buddilio')}</p>"
+                f"<p><b>Cancellation:</b> {ev.get('cancellation_policy','')}</p>"
+                "<p>Your paid-ticket group chat is now open — say hi before the night.</p>",
+                "Open event", f"{FRONTEND_URL}/events/{order['ref_id']}"))
+    else:
+        await notify(uid, "Purchase successful", f"{order['item_name']} is now in your account.",
+                     "order", "/orders", email=False)
+        u = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1})
+        if u:
+            await send_email(u["email"], "Your Buddilio purchase", wrap(
+                "Purchase confirmed", receipt + "<p>You can view this any time under My Orders.</p>",
+                "View my orders", f"{FRONTEND_URL}/orders"))
+    return clean(await db.orders.find_one({"_id": order["_id"]}))
+
+
+@api.get("/payments/config")
+async def payment_config():
+    kid = os.environ.get("RAZORPAY_KEY_ID", "")
+    return {"gateway": "razorpay", "live": bool(kid and razorpay_client()), "key_id": kid,
+            "currency": "INR", "methods": ["upi", "card", "netbanking", "wallet"]}
+
+
+@api.post("/payments/razorpay/order")
+async def create_razorpay_order(body: dict, user: dict = Depends(get_current_user)):
+    client_rp = razorpay_client()
+    if not client_rp:
+        raise HTTPException(status_code=503, detail="Online payments are not configured yet.")
+    order = await db.orders.find_one({"_id": ObjectId(body.get("order_id")), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order["payment_status"] == "paid":
+        raise HTTPException(status_code=400, detail="This order is already paid.")
+    try:
+        rp = await asyncio.to_thread(client_rp.order.create, {
+            "amount": int(round(order["total"] * 100)), "currency": "INR",
+            "receipt": order["order_no"][:40], "payment_capture": 1,
+            "notes": {"buddilio_order": str(order["_id"]), "kind": order["kind"]}})
+    except Exception as e:
+        logger.error(f"Razorpay order create failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not reach the payment gateway. Please try again.")
+    await db.orders.update_one({"_id": order["_id"]},
+                               {"$set": {"gateway": "razorpay", "gateway_order_id": rp["id"]}})
+    return {"razorpay_order_id": rp["id"], "amount": rp["amount"], "currency": rp["currency"],
+            "key_id": os.environ["RAZORPAY_KEY_ID"], "order_no": order["order_no"]}
+
+
+@api.post("/payments/razorpay/verify")
+async def verify_razorpay(body: dict, user: dict = Depends(get_current_user)):
+    client_rp = razorpay_client()
+    if not client_rp:
+        raise HTTPException(status_code=503, detail="Online payments are not configured yet.")
+    order = await db.orders.find_one({"_id": ObjectId(body.get("order_id")), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    try:
+        client_rp.utility.verify_payment_signature({
+            "razorpay_order_id": body.get("razorpay_order_id"),
+            "razorpay_payment_id": body.get("razorpay_payment_id"),
+            "razorpay_signature": body.get("razorpay_signature")})
+    except Exception:
+        await mark_failed(order, "signature verification failed")
+        raise HTTPException(status_code=400, detail="We could not verify this payment. You have not been charged.")
+    try:
+        payment = await asyncio.to_thread(client_rp.payment.fetch, body.get("razorpay_payment_id"))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not confirm payment with the gateway. Please contact support.")
+    if payment.get("status") not in ("captured", "authorized"):
+        await mark_failed(order, payment.get("error_description") or payment.get("status", "failed"))
+        raise HTTPException(status_code=402, detail="Payment did not go through. No amount was captured.")
+    if int(payment.get("amount", 0)) != int(round(order["total"] * 100)):
+        await mark_failed(order, "amount mismatch")
+        raise HTTPException(status_code=400, detail="Payment amount did not match the order. Please contact support.")
+    out = await fulfil_order(order, payment["id"], "razorpay")
+    return {"status": "paid", "order": out, "method": payment.get("method")}
+
+
+@app.post("/api/payments/razorpay/webhook")
+async def razorpay_webhook(request: Request):
+    client_rp = razorpay_client()
+    secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+    raw = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    if not client_rp or not secret:
+        raise HTTPException(status_code=503, detail="Webhooks are not configured.")
+    try:
+        client_rp.utility.verify_webhook_signature(raw.decode(), signature, secret)
+    except Exception:
+        logger.warning("Rejected Razorpay webhook with invalid signature")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    body = await request.json()
+    event = body.get("event", "")
+    entity = (body.get("payload", {}).get("payment", {}) or {}).get("entity", {})
+    await db.webhook_events.insert_one({"event": event, "payment_id": entity.get("id"),
+                                        "received_at": iso(now_utc())})
+    internal_id = (entity.get("notes") or {}).get("buddilio_order")
+    order = None
+    if internal_id:
+        order = await db.orders.find_one({"_id": ObjectId(internal_id)})
+    elif entity.get("order_id"):
+        order = await db.orders.find_one({"gateway_order_id": entity["order_id"]})
+    if not order:
+        return {"status": "ignored"}
+    if event in ("payment.captured", "payment.authorized"):
+        await fulfil_order(order, entity.get("id", ""), "razorpay")
+    elif event == "payment.failed":
+        await mark_failed(order, entity.get("error_description", "gateway reported failure"))
+    elif event.startswith("refund."):
+        await db.orders.update_one({"_id": order["_id"]},
+                                   {"$set": {"refund_status": "refunded", "order_status": "refunded",
+                                             "refunded_at": iso(now_utc())}})
+    return {"status": "processed"}
+
+
 @api.post("/payments/verify")
 async def verify_payment(payload: VerifyPaymentIn, user: dict = Depends(get_current_user)):
+    """Simulation path — used until live Razorpay keys are configured."""
     order = await db.orders.find_one({"_id": ObjectId(payload.order_id), "user_id": user["id"]})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if order["payment_status"] == "paid":
         return {"status": "paid", "order": clean(order)}
     if payload.simulate == "failure":
-        await db.orders.update_one({"_id": order["_id"]},
-                                   {"$set": {"payment_status": "failed", "order_status": "failed"}})
-        await db.payments.insert_one({"order_id": str(order["_id"]), "user_id": user["id"],
-                                      "amount": order["total"], "status": "failed",
-                                      "created_at": iso(now_utc())})
+        await mark_failed(order, "simulated failure")
         raise HTTPException(status_code=402, detail="Payment failed. No amount was charged. Please try again.")
     txn = payload.gateway_payment_id or "pay_" + uuid.uuid4().hex[:14]
-    await db.orders.update_one({"_id": order["_id"]},
-                               {"$set": {"payment_status": "paid", "order_status": "completed",
-                                         "transaction_id": txn, "paid_at": iso(now_utc())}})
-    await db.payments.insert_one({"order_id": str(order["_id"]), "user_id": user["id"],
-                                  "amount": order["total"], "status": "captured",
-                                  "transaction_id": txn, "created_at": iso(now_utc())})
-    if order.get("coupon"):
-        await db.coupon_usage.insert_one({"code": order["coupon"], "user_id": user["id"],
-                                          "order_id": str(order["_id"]), "created_at": iso(now_utc())})
-    if order["kind"] == "membership":
-        plan = await db.membership_plans.find_one({"_id": ObjectId(order["ref_id"])})
-        await db.user_memberships.update_many({"user_id": user["id"], "status": "active"},
-                                              {"$set": {"status": "replaced"}})
-        await db.user_memberships.insert_one({
-            "user_id": user["id"], "plan_id": order["ref_id"], "plan_name": plan["name"],
-            "status": "active", "starts_at": iso(now_utc()),
-            "ends_at": iso(now_utc() + timedelta(days=plan.get("duration_days", 365))),
-            "order_id": str(order["_id"]), "created_at": iso(now_utc())})
-        await notify(user["id"], "Membership activated",
-                     f"Your {plan['name']} membership is now active.", "membership", "/membership")
-    elif order["kind"] == "event":
-        ev = await db.events.find_one({"_id": ObjectId(order["ref_id"])})
-        if ev and not await db.event_participants.find_one({"event_id": order["ref_id"], "user_id": user["id"]}):
-            st = "confirmed" if ev.get("approval_mode") == "instant" else "pending"
-            await db.event_participants.insert_one({"event_id": order["ref_id"], "user_id": user["id"],
-                                                     "status": st, "order_id": str(order["_id"]),
-                                                     "created_at": iso(now_utc())})
-            await db.events.update_one({"_id": ev["_id"]}, {"$inc": {"participant_count": 1}})
-        await notify(user["id"], "Event pass confirmed", f"You're going to {order['item_name']}!",
-                     "event", f"/events/{order['ref_id']}")
-    else:
-        await notify(user["id"], "Purchase successful", f"{order['item_name']} is now in your account.",
-                     "order", "/orders")
-    return {"status": "paid", "order": clean(await db.orders.find_one({"_id": order["_id"]}))}
+    out = await fulfil_order(order, txn, "razorpay_sim")
+    return {"status": "paid", "order": out}
 
 
 @api.get("/me/orders")
@@ -831,6 +1027,7 @@ async def list_conversations(user: dict = Depends(get_current_user)):
             c["other_id"] = oid
         c["unread"] = await db.messages.count_documents(
             {"conversation_id": c["id"], "sender_id": {"$ne": user["id"]}, "read": False})
+        c["online"] = bool(hub.online_among([m for m in c["members"] if m != user["id"]])) if c["type"] == "direct" else False
         out.append(c)
     return {"items": out}
 
@@ -850,7 +1047,43 @@ async def get_messages(cid: str, user: dict = Depends(get_current_user)):
         m["sender_name"] = u["full_name"] if u else "Member"
         m["sender_photo"] = u.get("photo", "") if u else ""
         out.append(m)
+    await hub.send_to([m for m in conv["members"] if m != user["id"]],
+                      {"type": "read", "conversation_id": cid, "by": user["id"]})
     return {"items": out}
+
+
+async def ensure_event_chat(event_id: str, user_id: str) -> Optional[str]:
+    """Event group chat is limited to paid ticket holders plus the organiser."""
+    ev = await db.events.find_one({"_id": ObjectId(event_id)})
+    if not ev:
+        return None
+    conv = await db.conversations.find_one({"type": "event", "event_id": event_id})
+    if not conv:
+        res = await db.conversations.insert_one({
+            "type": "event", "event_id": event_id, "members": [ev["partner_id"]] if ev.get("partner_id") else [],
+            "title": ev["title"], "last_message": "", "updated_at": iso(now_utc()),
+            "created_at": iso(now_utc())})
+        conv = await db.conversations.find_one({"_id": res.inserted_id})
+    if user_id not in conv["members"]:
+        await db.conversations.update_one({"_id": conv["_id"]}, {"$addToSet": {"members": user_id}})
+    return str(conv["_id"])
+
+
+@api.get("/events/{event_id}/chat")
+async def event_chat(event_id: str, user: dict = Depends(get_current_user)):
+    ev = await db.events.find_one({"_id": ObjectId(event_id)})
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found")
+    is_organiser = ev.get("partner_id") == user["id"] or user["role"] == "admin"
+    part = await db.event_participants.find_one({"event_id": event_id, "user_id": user["id"], "status": "confirmed"})
+    paid = False
+    if part and part.get("order_id"):
+        order = await db.orders.find_one({"_id": ObjectId(part["order_id"]), "payment_status": "paid"})
+        paid = bool(order)
+    if not (is_organiser or paid):
+        raise HTTPException(status_code=403, detail="The group chat opens once your paid ticket is confirmed.")
+    cid = await ensure_event_chat(event_id, user["id"])
+    return {"conversation_id": cid}
 
 
 @api.post("/conversations/{cid}/messages")
@@ -867,8 +1100,12 @@ async def send_message(cid: str, payload: MessageIn, user: dict = Depends(get_cu
                                       {"$set": {"last_message": doc["body"][:80], "updated_at": iso(now_utc())}})
     for m in conv["members"]:
         if m != user["id"]:
-            await notify(m, "New message", f"{user['full_name']}: {doc['body'][:60]}", "message", "/messages")
-    return clean(await db.messages.find_one({"_id": res.inserted_id}))
+            await notify(m, "New message", f"{user['full_name']}: {doc['body'][:60]}", "message", "/messages", email=False)
+    out = clean(await db.messages.find_one({"_id": res.inserted_id}))
+    out["sender_name"] = user["full_name"]
+    out["sender_photo"] = user.get("photo", "")
+    await hub.send_to(conv["members"], {"type": "message", "conversation_id": cid, "message": out})
+    return out
 
 
 @api.delete("/conversations/{cid}")
@@ -1064,15 +1301,31 @@ async def refund_order(oid: str, user: dict = Depends(admin_only)):
     order = await db.orders.find_one({"_id": ObjectId(oid)})
     if not order or order["payment_status"] != "paid":
         raise HTTPException(status_code=400, detail="Only paid orders can be refunded.")
+    gateway_ref = ""
+    client_rp = razorpay_client()
+    if client_rp and order.get("gateway") == "razorpay" and order.get("transaction_id"):
+        try:
+            rf = await asyncio.to_thread(client_rp.payment.refund, order["transaction_id"],
+                                         {"amount": int(round(order["total"] * 100)), "speed": "normal"})
+            gateway_ref = rf.get("id", "")
+        except Exception as e:
+            logger.error(f"Razorpay refund failed: {e}")
+            raise HTTPException(status_code=502, detail="The gateway rejected this refund. Please retry from the Razorpay dashboard.")
     await db.orders.update_one({"_id": order["_id"]},
                                {"$set": {"refund_status": "refunded", "order_status": "refunded",
-                                         "refunded_at": iso(now_utc())}})
+                                         "refund_id": gateway_ref, "refunded_at": iso(now_utc())}})
     if order["kind"] == "membership":
         await db.user_memberships.update_many({"order_id": oid}, {"$set": {"status": "cancelled"}})
-    await audit(user, "order.refund", "order", oid, {"amount": order["total"]})
+    if order["kind"] == "event":
+        part = await db.event_participants.find_one({"order_id": oid})
+        if part:
+            await db.event_participants.delete_one({"_id": part["_id"]})
+            await db.events.update_one({"_id": ObjectId(order["ref_id"])}, {"$inc": {"participant_count": -1}})
+    await audit(user, "order.refund", "order", oid, {"amount": order["total"], "refund_id": gateway_ref})
     await notify(order["user_id"], "Refund processed",
-                 f"₹{order['total']:.0f} for {order['item_name']} has been refunded.", "refund", "/orders")
-    return {"refund_status": "refunded"}
+                 f"₹{order['total']:.0f} for {order['item_name']} has been refunded. "
+                 "It reaches your original payment method in 5-7 working days.", "refund", "/orders")
+    return {"refund_status": "refunded", "refund_id": gateway_ref}
 
 
 @api.get("/admin/reports")
@@ -1176,6 +1429,75 @@ async def root():
     return {"service": "Buddilio API", "status": "ok"}
 
 
+@app.websocket("/api/ws")
+async def ws_chat(websocket: WebSocket, token: str = Query("")):
+    try:
+        payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=[JWT_ALGORITHM])
+        uid = payload["sub"]
+    except Exception:
+        await websocket.accept()
+        await websocket.close(code=4401)
+        return
+    await hub.connect(uid, websocket)
+    convs = await db.conversations.find({"members": uid}, {"members": 1}).to_list(200)
+    peers = {m for c in convs for m in c["members"] if m != uid}
+    await hub.send_to(peers, {"type": "presence", "user_id": uid, "online": True})
+    await websocket.send_json({"type": "ready", "online": hub.online_among(peers)})
+    try:
+        while True:
+            data = await websocket.receive_json()
+            kind = data.get("type")
+            cid = data.get("conversation_id")
+            if kind in ("typing", "stop_typing") and cid:
+                conv = await db.conversations.find_one({"_id": ObjectId(cid)})
+                if conv and uid in conv["members"]:
+                    await hub.send_to([m for m in conv["members"] if m != uid],
+                                      {"type": kind, "conversation_id": cid, "user_id": uid})
+            elif kind == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.info(f"ws closed: {e}")
+    finally:
+        await hub.disconnect(uid, websocket)
+        if not hub.is_online(uid):
+            await hub.send_to(peers, {"type": "presence", "user_id": uid, "online": False})
+
+
+async def reminder_loop():
+    """Sends a one-time email + in-app reminder ~24h before each event starts."""
+    while True:
+        try:
+            window_end = iso(now_utc() + timedelta(hours=24))
+            events = await db.events.find({"status": "published", "starts_at": {"$gte": iso(now_utc()), "$lte": window_end}}).to_list(200)
+            for ev in events:
+                eid = str(ev["_id"])
+                parts = await db.event_participants.find({"event_id": eid, "status": "confirmed"}).to_list(500)
+                starts = datetime.fromisoformat(ev["starts_at"])
+                for p in parts:
+                    if p.get("reminded"):
+                        continue
+                    await db.event_participants.update_one({"_id": p["_id"]}, {"$set": {"reminded": True}})
+                    await notify(p["user_id"], "Event reminder",
+                                 f"{ev['title']} starts {starts.strftime('%a %d %b at %I:%M %p')} — {ev.get('venue','')}, {ev['city']}.",
+                                 "reminder", f"/events/{eid}", email=False)
+                    u = await db.users.find_one({"_id": ObjectId(p["user_id"])},
+                                                {"email": 1, "full_name": 1, "notification_prefs": 1})
+                    if u and (u.get("notification_prefs") or {}).get("email", True):
+                        await send_email(u["email"], f"Tomorrow: {ev['title']}", wrap(
+                            "See you tomorrow",
+                            f"<p>Hi {u['full_name'].split(' ')[0]},</p>"
+                            f"<p><b>{ev['title']}</b> starts <b>{starts.strftime('%a %d %b, %I:%M %p')}</b>.</p>"
+                            f"<p><b>Venue:</b> {ev.get('venue','')}, {ev['city']}<br/>"
+                            f"<b>Host:</b> {ev.get('partner_name','Buddilio')}</p>"
+                            "<p>Carry a government photo ID. Meet other members in the public venue only.</p>",
+                            "View event", f"{FRONTEND_URL}/events/{eid}"))
+        except Exception as e:
+            logger.error(f"reminder loop error: {e}")
+        await asyncio.sleep(3600)
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
@@ -1210,6 +1532,7 @@ async def startup():
     elif not verify_password(os.environ["ADMIN_PASSWORD"], existing.get("password_hash", "")):
         await db.users.update_one({"_id": existing["_id"]},
                                   {"$set": {"password_hash": hash_password(os.environ["ADMIN_PASSWORD"])}})
+    asyncio.create_task(reminder_loop())
 
 
 @app.on_event("shutdown")

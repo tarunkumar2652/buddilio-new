@@ -6,7 +6,6 @@ import { useAuth } from "@/context/AuthContext";
 import { EventCard } from "@/components/Cards";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert } from "lucide-react";
-
 export function Events() {
   const [meta, setMeta] = useState({ cities: [], categories: [] });
   const [f, setF] = useState({ q: "", city: "", category: "", max_price: -1, when: "", sort: "date" });
@@ -118,8 +117,14 @@ export function EventDetail() {
     catch (e) { toast.error(errMsg(e)); }
   };
 
-  const share = async () => {
-    const url = window.location.href;
+  const openGroupChat = async () => {
+    try {
+      const { data } = await api.get(`/events/${ev.id}/chat`);
+      nav(`/messages?c=${data.conversation_id}`);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const share = async () => {    const url = window.location.href;
     try {
       if (navigator.share) await navigator.share({ title: ev.title, url });
       else { await navigator.clipboard.writeText(url); toast.success("Link copied to clipboard"); }
@@ -223,6 +228,10 @@ export function EventDetail() {
                 <div className="rounded-xl bg-emerald-50 text-emerald-700 px-4 py-3 text-sm font-semibold text-center" data-testid="my-participation">
                   Your spot is {ev.my_status}
                 </div>
+                <button onClick={openGroupChat} data-testid="event-group-chat-btn"
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-slate-900 text-white py-3 text-sm font-bold">
+                  <Users className="h-4 w-4" />Open group chat
+                </button>
                 <button onClick={cancel} data-testid="cancel-participation"
                   className="w-full rounded-full border border-slate-200 py-3 text-sm font-bold">Cancel participation</button>
               </div>

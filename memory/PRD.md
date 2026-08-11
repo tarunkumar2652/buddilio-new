@@ -40,12 +40,19 @@ Adults only (21+ enforced server-side); auth required for private features; part
 - SEO: dynamic titles/description/OG/canonical, robots.txt (dashboards disallowed), sitemap.xml.
 - Demo data: 22 users, 17 events, 2 partners, 3 plans, 5 products, 3 coupons, memberships, orders, conversations, reports, 8 CMS pages.
 
+## Implemented — iteration 2 (June 2026)
+- **Transactional email** via Emergent-managed Resend (`backend/emailer.py`): welcome, password reset link, booking confirmation with venue/time/cancellation policy, membership activation, purchase receipt, refund notice, and 24h event reminders. Respects each user's `notification_prefs.email`; send failures are logged and never break the request.
+- **Realtime chat** over WebSocket `/api/ws?token=` (`backend/realtime.py` hub): instant message delivery, typing indicators, online presence, read receipts, auto-reconnect, `ws-status` badge. Polling removed.
+- **Event group chats** restricted to paid ticket holders + the organiser; created automatically on successful payment, 403 with a clear message otherwise.
+- **Live Razorpay**: `/api/payments/config`, `/api/payments/razorpay/order|verify` (signature + amount + status verified server-side), `/api/payments/razorpay/webhook` (HMAC-verified, idempotent fulfilment), gateway refunds from the admin panel. Falls back to the simulated path while keys are absent.
+- Shared `fulfil_order()` is now the single fulfilment path for both simulated and live payments.
+
 ## Backlog
-**P0** — Real Razorpay keys + webhook signature verification; email delivery (Resend) for verification/receipts.
-**P1** — WebSocket chat instead of polling; event group chat UI; object storage for images; event reviews/ratings; partner payout records.
+**P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to `backend/.env` to flip checkout live; register the webhook URL in the Razorpay dashboard. Evaluate 2Checkout/global gateway for international expansion.
+**P1** — Object storage for images; event reviews/ratings; partner payout records; split payouts to partners via Razorpay Route.
 **P2** — Referrals, saved searches, retention cohort analytics, multi-country locations, native app clients.
 
 ## Next tasks
-1. Swap simulated gateway for live Razorpay (order create + webhook).
-2. Real email/SMS notification delivery.
-3. Socket-based realtime chat + event group chats.
+1. Supply Razorpay keys + webhook secret to go live (code is complete and tested).
+2. Global payments (2Checkout/Stripe) + multi-currency for international expansion.
+3. Object storage for uploads; split payouts to partners.

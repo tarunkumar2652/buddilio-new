@@ -31,15 +31,22 @@ LIFESTYLE = ["Early Riser", "Night Owl", "Fitness Focused", "Vegetarian", "Socia
 
 EVENT_IMGS = [
     "https://images.unsplash.com/photo-1684285746670-3d2eeed72192?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
-    "https://images.unsplash.com/photo-1762237874410-17ddf6c782a1?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
-    "https://images.unsplash.com/photo-1758272134331-c953bea718a4?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
-    "https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
-    "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
-    "https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
-    "https://images.unsplash.com/photo-1563841930606-67e2bce48b78?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
-    "https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg?auto=compress&w=1200",
+    "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
     "https://images.pexels.com/photos/36729801/pexels-photo-36729801.jpeg?auto=compress&w=1200",
-    "https://images.unsplash.com/photo-1758272134336-7b194099562a?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1762237874410-17ddf6c782a1?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.pexels.com/photos/36425046/pexels-photo-36425046.jpeg?auto=compress&w=1200",
+    "https://images.unsplash.com/photo-1622993288089-18298ec89b78?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1675716921224-e087a0cca69a?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1509710398975-6454dcdf049f?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1602231235593-7b55e5db426b?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1563841930606-67e2bce48b78?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1758272134331-c953bea718a4?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1599458252573-56ae36120de1?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.unsplash.com/photo-1506880648420-aafaa650d147?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "https://images.pexels.com/photos/17057034/pexels-photo-17057034.jpeg?auto=compress&w=1200",
+    "https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg?auto=compress&w=1200",
+    "https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
 ]
 
 NAMES = [

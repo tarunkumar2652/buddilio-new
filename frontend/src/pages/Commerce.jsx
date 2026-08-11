@@ -121,12 +121,16 @@ export function Passes() {
 export function Checkout() {
   const [params] = useSearchParams();
   const nav = useNavigate();
+  const { user } = useAuth();
   const kind = params.get("kind");
   const itemId = params.get("id");
   const [order, setOrder] = useState(null);
   const [coupon, setCoupon] = useState("");
   const [busy, setBusy] = useState(false);
   const [method, setMethod] = useState("upi");
+  const [cfg, setCfg] = useState({ live: false });
+
+  useEffect(() => { api.get("/payments/config").then(({ data }) => setCfg(data)).catch(() => {}); }, []);
 
   const create = async (code = "") => {
     setBusy(true);
@@ -139,12 +143,57 @@ export function Checkout() {
 
   useEffect(() => { if (kind && itemId) create(""); /* eslint-disable-next-line */ }, [kind, itemId]);
 
-  const pay = async (simulate) => {
+  const done = () => nav(kind === "membership" ? "/membership" : kind === "event" ? `/events/${itemId}` : "/orders");
+
+  const loadRazorpayScript = () => new Promise((resolve) => {
+    if (window.Razorpay) return resolve(true);
+    const s = document.createElement("script");
+    s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.body.appendChild(s);
+  });
+
+  const payLive = async () => {
+    setBusy(true);
+    try {
+      const ok = await loadRazorpayScript();
+      if (!ok) throw new Error("Could not load the payment window. Check your connection.");
+      const { data } = await api.post("/payments/razorpay/order", { order_id: order.id });
+      const rz = new window.Razorpay({
+        key: data.key_id,
+        amount: data.amount,
+        currency: data.currency,
+        order_id: data.razorpay_order_id,
+        name: "Buddilio",
+        description: order.item_name,
+        prefill: { name: user?.full_name, email: user?.email, contact: user?.mobile || "" },
+        theme: { color: "#0F172A" },
+        handler: async (res) => {
+          try {
+            await api.post("/payments/razorpay/verify", {
+              order_id: order.id,
+              razorpay_order_id: res.razorpay_order_id,
+              razorpay_payment_id: res.razorpay_payment_id,
+              razorpay_signature: res.razorpay_signature,
+            });
+            toast.success("Payment successful");
+            done();
+          } catch (e) { toast.error(errMsg(e)); }
+        },
+        modal: { ondismiss: () => toast.error("Payment cancelled. Your order is still pending.") },
+      });
+      rz.on("payment.failed", (r) => toast.error(r?.error?.description || "Payment failed. Please try another method."));
+      rz.open();
+    } catch (e) { toast.error(errMsg(e) || e.message); } finally { setBusy(false); }
+  };
+
+  const paySim = async (simulate) => {
     setBusy(true);
     try {
       await api.post("/payments/verify", { order_id: order.id, simulate });
       toast.success("Payment successful");
-      nav(kind === "membership" ? "/membership" : kind === "event" ? `/events/${itemId}` : "/orders");
+      done();
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
 
@@ -185,16 +234,26 @@ export function Checkout() {
           ))}
         </div>
         <p className="mt-4 text-xs text-slate-500 flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4" /> Razorpay-ready gateway in simulation mode. Payment is always verified on our server.
+          <ShieldCheck className="h-4 w-4" />
+          {cfg.live
+            ? "Secured by Razorpay. UPI, cards, net banking and wallets. Payment is verified on our server before your order is confirmed."
+            : "Razorpay is wired up but awaiting live API keys — checkout runs in simulation mode. Every payment is still verified server-side."}
         </p>
-        <div className="mt-6 grid sm:grid-cols-2 gap-3">
-          <button onClick={() => pay("success")} disabled={busy} data-testid="pay-success-btn"
-            className="rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
-            {busy ? "Processing…" : `Pay ${money(order.total)}`}
+        {cfg.live ? (
+          <button onClick={payLive} disabled={busy} data-testid="pay-razorpay-btn"
+            className="mt-6 w-full rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
+            {busy ? "Opening secure checkout…" : `Pay ${money(order.total)} with Razorpay`}
           </button>
-          <button onClick={() => pay("failure")} disabled={busy} data-testid="pay-failure-btn"
-            className="rounded-full border border-slate-200 py-3.5 text-sm font-bold text-slate-500">Simulate failed payment</button>
-        </div>
+        ) : (
+          <div className="mt-6 grid sm:grid-cols-2 gap-3">
+            <button onClick={() => paySim("success")} disabled={busy} data-testid="pay-success-btn"
+              className="rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
+              {busy ? "Processing…" : `Pay ${money(order.total)}`}
+            </button>
+            <button onClick={() => paySim("failure")} disabled={busy} data-testid="pay-failure-btn"
+              className="rounded-full border border-slate-200 py-3.5 text-sm font-bold text-slate-500">Simulate failed payment</button>
+          </div>
+        )}
       </div>
       <Link to="/orders" className="mt-6 inline-block text-sm font-bold border-b-2 border-slate-900 pb-0.5">View my orders</Link>
     </div>
