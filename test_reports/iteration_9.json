@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend-only verification of iteration 9 (guide photography, more Gulf events, public leaderboard). All major flows pass. Guide photos render (naturalWidth>0) and are visually distinct across Dubai/London/Tokyo/Goa/Abu Dhabi. Dubai city page shows 6 events with AED prices when currency=AED and chips include Arts/Food/Music/Nightlife/Sports. Abu Dhabi city page shows 4 events, 4 area cards, stats block (4 experiences / 2 members), and faces strip. Event detail (Desert Camp Dinner Under the Stars) shows AED price with 'Priced by the organiser in AED' note when currency=INR. Public /leaderboard as guest: renders with July 2026 champion (Sofia M.), champion-prize, 5 rows (Tara J. 6 / Sofia M. 4 / Liam O. 3 / Kabir N. 2 / Omar R. 1), guest CTA → /register, no leaderboard-me. Names shortened. Month picker switches without crash. Footer Explore → Leaderboard link works. Member (tara.joshi@example.com): /referrals shows leaderboard-section inline with leaderboard-me '#1 this month', my-badge Ambassador, row-1 highlighted 'Tara J. · you', no guest CTA, referral-code=TARAJO03DC. /leaderboard while logged in: leaderboard-me YES, no guest CTA, bottom CTA reads 'Open invite & earn' → /referrals. Regression: no runtime console errors on /, /events, /cities, /city/dubai, /city/abu-dhabi, /leaderboard, /referrals. Mobile 390x844: /leaderboard and /city/abu-dhabi have zero horizontal overflow (scrollWidth=390=innerWidth).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Cities.jsx / city_guides.py Gurugram entry",
+        "issue": "Review spec expected /city/gurugram to render 4 neighbourhood cards (3 real photos + 1 fallback night-out image). Actual page only renders 3 cards (city-area-1..3); city-area-4 / city-area-photo-4 do not exist because backend CITY_GUIDES['Gurugram'].areas has only 3 items (CyberHub, Sector 29, Golf Course Road). AREA_PHOTOS + FALLBACK_PHOTOS never get consulted for a 4th area because the areas list itself is length 3. Visually it looks fine, but it fails the '4 photo cards' assertion and is inconsistent with Delhi/Mumbai/Bengaluru/Goa which now all have 4. Fix: add a 4th area entry to CITY_GUIDES['Gurugram'] (e.g. 'MG Road / Sikanderpur' or 'DLF Cyber City rooftops') so the fallback photo kicks in, or update the review expectation.",
+        "selector": "[data-testid='city-area-4']",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional: add a 4th neighbourhood entry for Gurugram in backend/city_guides.py so /city/gurugram renders 4 area cards like the other flagship cities (fallback photo would then be used for the 4th)."
+  ],
+  "critical_code_review_comments": [
+    "Events.jsx <select><option> nesting emits a React hydration warning ('<span> cannot be a child of <option>') on /events — noise only, but should be cleaned up when time permits.",
+    "Currency picker is a native <select>; on mobile it uses the OS wheel which is fine, but the same select being used inside <option> is what triggers the hydration warning above."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "~97% (1 minor spec mismatch on Gurugram 4th card)"},
+  "test_credentials": "Used tara.joshi@example.com / User@123 (existing seed). No new accounts, no waitlist rows, no seed data created.",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend not tested this iteration (main agent already verified 6/6 on test_iteration9.py). Guide photo URLs are Unsplash CDN and render fast; images are visually distinct within each city. Currency picker: use page.select_option('select', 'AED') — it's the FIRST native <select> in the navbar. Event detail path is /events/{id} (not /event/{id}). Public leaderboard is at /leaderboard and works with and without auth; member view swaps guest-cta for leaderboard-me and swaps bottom CTA text to 'Open invite & earn' → /referrals.",
+  "rca of the issue": "Gurugram 4th card missing: CITY_GUIDES['Gurugram']['areas'] in /app/backend/city_guides.py contains only 3 tuples, so guide_for() returns a 3-item areas list and Cities.jsx renders exactly 3 area cards. The FALLBACK_PHOTOS pool is only consulted when an area exists but has no matching AREA_PHOTOS entry — it does not synthesise a missing area. Reproduction: GET /api/city-guide/gurugram → 4 doesn't exist (endpoint actually returned None in my probe, page reads guide from the /api/cities/{slug} payload). Mitigation options: (a) add a 4th area entry for Gurugram, or (b) in Cities.jsx pad the array to 4 with a shared 'A night out in {city}' generic card using FALLBACK_PHOTOS. Option (a) is cleaner and matches how Goa was fixed last iteration."
+}

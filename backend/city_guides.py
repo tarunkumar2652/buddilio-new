@@ -22,6 +22,7 @@ CITY_GUIDES = {
             ["CyberHub", "Dozens of restaurants and bars in one walkable block — the default post-work meetup."],
             ["Sector 29", "Loud, cheerful and value-driven; big-group nights and open-air seating."],
             ["Golf Course Road", "Quieter cocktail bars and chef-led tasting rooms inside the hotels."],
+            ["MG Road & Sikanderpur", "Metro-side pubs and late eating for the crowd living on the Delhi border."],
         ],
         "when": "Wednesday and Thursday nights are surprisingly good here; weekends fill by 9pm.",
         "around": "Rapid Metro plus cabs. Parking is easier than Delhi, so drivers often host the carpool.",
@@ -34,6 +35,7 @@ CITY_GUIDES = {
             ["Sector 18", "Atta Market and the malls: cinema, food halls and casual bars in one loop."],
             ["Sector 38A", "The Great India Place strip — bowling, arcades and big-table dinners."],
             ["Sector 32", "Brahmaputra Market's street food, best explored as a group crawl."],
+            ["Sector 62 & Film City", "Studio-district cafés, comedy tapings and after-work meetups."],
         ],
         "when": "Friday and Saturday evenings; Sunday brunches are the fastest-growing meetup here.",
         "around": "Blue and Aqua line metros cover most sectors; cabs are cheap after hours.",
@@ -72,6 +74,7 @@ CITY_GUIDES = {
             ["Jubilee Hills", "Rooftop lounges and chef-driven restaurants above the lake."],
             ["Financial District & Gachibowli", "Brewery halls and late kitchens for the tech-corridor crowd."],
             ["Banjara Hills", "Cocktail bars, galleries and the city's most reliable dinner tables."],
+            ["Hussain Sagar & Necklace Road", "Sunset walks, boat rides and street-food carts along the water."],
         ],
         "when": "Friday and Saturday from 8pm. Ramadan and festival weeks bring exceptional food nights.",
         "around": "Metro to Jubilee Hills Check Post, cabs beyond. Distances are long — carpool.",
@@ -84,6 +87,7 @@ CITY_GUIDES = {
             ["Koregaon Park", "Leafy lanes, German Bakery culture, jazz nights and long dinners."],
             ["Baner & Balewadi", "Brewery-and-bowling territory for big groups."],
             ["Kalyani Nagar", "Cocktail bars and rooftop dinners with the calmest crowd in the city."],
+            ["Viman Nagar", "Mall-side cinemas, breweries and the easiest weekday plan in the east."],
         ],
         "when": "Friday and Saturday nights; Sunday morning rides and treks fill up fast.",
         "around": "Autos and cabs. Nothing is more than 30 minutes away outside peak hours.",
@@ -162,6 +166,7 @@ CITY_GUIDES = {
             ["Northern Quarter", "Independent bars, record shops and small live rooms; the city's social heart."],
             ["Ancoats", "New-wave restaurants and neighbourhood wine bars in the old mills."],
             ["Deansgate & Spinningfields", "Bigger rooms, rooftops and after-work crowds."],
+            ["Chorlton & Didsbury", "Neighbourhood pubs, brunch tables and a calmer south-Manchester evening."],
         ],
         "when": "Thursday to Sunday. Match days reshape the whole city — check the fixture before you book.",
         "around": "Trams (Metrolink) and a very walkable centre; cabs for the outer suburbs.",
@@ -213,6 +218,7 @@ CITY_GUIDES = {
             ["Rainey Street", "Converted bungalow bars with food trucks and big shared tables."],
             ["East Sixth", "Dive bars, taquerias and the city's best mid-week live music."],
             ["South Congress", "Rooftops, vintage shopping and Sunday-afternoon patios."],
+            ["Zilker & Barton Springs", "Spring-fed swimming, paddleboards and picnics before a gig."],
         ],
         "when": "Any night has live music; Thursday to Saturday are busiest. SXSW and ACL reshape spring and autumn.",
         "around": "Rideshare and scooters; the centre is walkable between Rainey and East Sixth.",
@@ -264,6 +270,7 @@ CITY_GUIDES = {
             ["Fitzroy & Collingwood", "Brunswick Street bars, live rooms and vintage shopping."],
             ["CBD laneways", "Hidden rooftops, wine bars and the coffee culture that started it all."],
             ["St Kilda", "Beachfront sunsets, cake shops and Sunday markets."],
+            ["Carlton & Brunswick", "Lygon Street pasta, Turkish grills and student-priced live music."],
         ],
         "when": "Wednesday to Saturday. Winter is indoor-bar season and the city genuinely thrives in it.",
         "around": "Trams (free in the CBD zone), trains and a compact, walkable centre.",
@@ -350,5 +357,78 @@ CITY_GUIDES = {
 }
 
 
+PHOTO = "https://images.unsplash.com/photo-{}?crop=entropy&cs=srgb&fm=jpg&w=900&q=80"
+
+# One photo per neighbourhood card, in the same order as CITY_GUIDES[city]["areas"].
+AREA_PHOTOS = {
+    "Delhi NCR": ["1641221611236-26ff5eb92aba", "1639843208133-438926b0bf53",
+                  "1610153602032-5f2c6133b8ac", "1639843378958-f4e403a9a612"],
+    "Gurugram": ["1695667424131-a9680e0307ee", "1610153602032-5f2c6133b8ac",
+                 "1641221611236-26ff5eb92aba", "1639843208133-438926b0bf53"],
+    "Noida": ["1723137466281-65dad0f0423d", "1676815560046-b5276b260877",
+              "1676815560086-d0795ebe744b", "1639843378958-f4e403a9a612"],
+    "Mumbai": ["1687236572487-63cb08ad926c", "1595660981167-fe72e31f6a40",
+               "1676050266974-9d3f534b3c16", "1670948351730-0afd343abebf"],
+    "Bengaluru": ["1722416054927-d3360fbbb1c5", "1687712936173-bcfadf94699e",
+                  "1700234678818-b354a49ef9de", "1700234678717-1cd4871c55ff"],
+    "Hyderabad": ["1589820745312-e04227bf8843", "1688658475871-cbb49a044f42",
+                  "1563702194173-a054ed36a5f2", "1570795876989-bcec725b8e72"],
+    "Pune": ["1656662738309-b22ac2039b2e", "1714983007778-b370188238b8",
+             "1766763548613-bcb77505fc7b", "1715957374254-0e426ead90f5"],
+    "Goa": ["1623815616454-f4de13de2634", "1736347505109-f02e0e5a0200",
+            "1700539690903-f95917cbf882", "1586940740260-acecfc29c180"],
+    "Dubai": ["1590264539175-39df72442833", "1677824437185-7f8893605152",
+              "1629577358348-6a9ab759dc74", "1527354711091-dfe0e5f699be"],
+    "Abu Dhabi": ["1758952519367-a761da38a69b", "1762687508992-effc04be64b8",
+                  "1761859310226-cbb2bc29375f", "1615136522013-f02b12245fa9"],
+    "Singapore": ["1648366325468-76fcf6290008", "1642241235220-b7eec84de2c5",
+                  "1505810743967-501d7aa52e2b", "1700525058733-e42b8c4bb3f9"],
+    "London": ["1660233868899-f800885dca59", "1514729797186-944d57303199",
+               "1510997017461-3c4b81f07779", "1652110329694-acaa1f2b21e7"],
+    "Manchester": ["1683567496097-23ba0a535b72", "1759433568598-a35b05d6c14c",
+                   "1646311239002-ce846a942cda", "1699720482039-f705f0aae2a9"],
+    "New York": ["1642873800464-e90630704e04", "1541702467897-41915a07d3a7",
+                 "1679089391720-dab2bca0ffc5", "1505811210036-052144988918"],
+    "Los Angeles": ["1578699247963-cef167926cac", "1653638268218-67b0df099ee5",
+                    "1661688625912-8d0191156923", "1631655799235-4c007d8b4f4a"],
+    "Miami": ["1533106497176-45ae19e68ba2", "1589066724013-06f34f2cc17c",
+              "1543968332-f99478b1ebdc", "1652112428671-fceb3e666710"],
+    "Austin": ["1562952144-605710f1e80e", "1601579113444-eb246a749d09",
+               "1686317195254-22f9f202810c", "1623345756568-75a63f6224e8"],
+    "Toronto": ["1684962144204-239afc09b6fb", "1605139633947-13b657771867",
+                "1563138216-8ff2e182ccbd", "1695128751971-b3b050b5e13e"],
+    "Vancouver": ["1647655806923-e8202f4f2b8c", "1522108700534-0e3c5dfa233b",
+                  "1559511260-66a654ae982a", "1660143158587-bddffa026e06"],
+    "Sydney": ["1598948485421-33a1655d3c18", "1532984601283-d68a3ee3e51f",
+               "1599352318473-abbc53b44a9a", "1523608401-53eb5741c1a0"],
+    "Melbourne": ["1686052183140-088f1bd9a49b", "1720522753737-f2e630fdf69c",
+                  "1473225071450-1f1462d5aa92", "1635410650646-3f6105a46b77"],
+    "Berlin": ["1633858051938-38b402e34465", "1601411314620-b58ef01332a0",
+               "1659823880120-bb363d0c63e8", "1580424807188-4022cf7b807f"],
+    "Barcelona": ["1650407949740-5f1bc05a805d", "1672599861885-d191bd5ea60f",
+                  "1579282276770-be054e5c70ff", "1616350769424-933c8e74e7e9"],
+    "Madrid": ["1591375198043-606387f65389", "1589312339947-891682889502",
+               "1708770895811-cb2e53abba52", "1591375136450-09c69cf7fc3e"],
+    "Paris": ["1656112806137-201c4bbc4dbe", "1756890233451-95d0326fd14d",
+              "1590341292028-c49722d375ae", "1622224409736-e803900dfa79"],
+    "Bangkok": ["1694501898583-7caca30dde01", "1587574293340-e0011c4e8ecf",
+                "1628324716243-0c9c29971a58", "1552538962-40822613a09d"],
+    "Tokyo": ["1596713109885-c94bdfd7f19d", "1572291244855-44aa55da2137",
+              "1663511174032-870c8e560a1e", "1554797589-7241bb691973"],
+}
+
+# Used when a city has fewer photos than neighbourhoods.
+FALLBACK_PHOTOS = ["1563138216-8ff2e182ccbd", "1695128751971-b3b050b5e13e",
+                   "1609992185485-d7391e0e3094", "1533030265665-8a0445a83c61"]
+
+
 def guide_for(city: str) -> dict:
-    return CITY_GUIDES.get((city or "").strip(), {})
+    g = CITY_GUIDES.get((city or "").strip(), {})
+    if not g:
+        return {}
+    ids = AREA_PHOTOS.get(city.strip(), [])
+    areas = []
+    for i, (name, blurb) in enumerate(g["areas"]):
+        pid = ids[i] if i < len(ids) else FALLBACK_PHOTOS[i % len(FALLBACK_PHOTOS)]
+        areas.append([name, blurb, PHOTO.format(pid)])
+    return {**g, "areas": areas}

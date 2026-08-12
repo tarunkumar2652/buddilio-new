@@ -239,14 +239,23 @@ export const CityPage = () => {
             <h2 className="mt-1.5 text-2xl font-bold">Where to go out in {d.name}</h2>
             <p className="mt-4 max-w-3xl text-slate-600 leading-relaxed" data-testid="city-guide-intro">{d.guide.intro}</p>
             <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {d.guide.areas.map(([area, blurb], i) => (
+              {d.guide.areas.map(([area, blurb, photo], i) => (
                 <div key={area} data-testid={`city-area-${i + 1}`}
-                  className="rounded-2xl border border-slate-200 bg-white p-5">
-                  <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-magenta">
-                    Area {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <p className="mt-2.5 font-display font-bold">{area}</p>
-                  <p className="mt-1.5 text-sm text-slate-500 leading-relaxed">{blurb}</p>
+                  className="group overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  {photo && (
+                    <div className="h-36 overflow-hidden bg-slate-100">
+                      <img src={photo} alt={`${area}, ${d.name}`} loading="lazy"
+                        data-testid={`city-area-photo-${i + 1}`}
+                        className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-105" />
+                    </div>
+                  )}
+                  <div className="p-5">
+                    <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-magenta">
+                      Area {String(i + 1).padStart(2, "0")}
+                    </span>
+                    <p className="mt-2.5 font-display font-bold">{area}</p>
+                    <p className="mt-1.5 text-sm text-slate-500 leading-relaxed">{blurb}</p>
+                  </div>
                 </div>
               ))}
             </div>

@@ -35,7 +35,7 @@ def test_every_city_has_an_editorial_guide():
             missing.append(c["slug"])
             continue
         assert len(g["areas"]) >= 3, f"{c['slug']} has only {len(g['areas'])} areas"
-        assert all(len(a) == 2 and a[0] and a[1] for a in g["areas"]), c["slug"]
+        assert all(len(a) == 3 and a[0] and a[1] and a[2] for a in g["areas"]), c["slug"]
         assert len(g["intro"]) > 80, f"{c['slug']} intro too thin for SEO"
     assert not missing, f"cities without a guide: {missing}"
 

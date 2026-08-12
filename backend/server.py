@@ -1419,7 +1419,7 @@ async def my_referrals(user: dict = Depends(get_current_user)):
 
 
 @api.get("/referrals/leaderboard")
-async def referral_leaderboard(month: str = "", user: dict = Depends(get_current_user)):
+async def referral_leaderboard(month: str = "", user: Optional[dict] = Depends(optional_user)):
     month = (month or now_utc().strftime("%Y-%m"))[:7]
     docs = await db.referrals.find({"status": "rewarded",
                                     "rewarded_at": {"$regex": f"^{month}"}},
@@ -1438,19 +1438,21 @@ async def referral_leaderboard(month: str = "", user: dict = Depends(get_current
         rows.append({"rank": i + 1, "name": short_name((u or {}).get("full_name", "")),
                      "photo": (u or {}).get("photo", ""), "city": (u or {}).get("city", ""),
                      "invites": count, "credit": round(count * REFERRAL_REWARD, 2),
-                     "badge": badge_for(lifetime)["name"], "me": uid == user["id"]})
-    mine = tally.get(user["id"], 0)
-    lifetime = await db.referrals.count_documents({"referrer_id": user["id"], "status": "rewarded"})
+                     "badge": badge_for(lifetime)["name"], "me": bool(user) and uid == user["id"]})
+    me = None
+    if user:
+        mine = tally.get(user["id"], 0)
+        lifetime = await db.referrals.count_documents({"referrer_id": user["id"], "status": "rewarded"})
+        me = {"rank": next((i + 1 for i, (uid, _) in enumerate(ranked) if uid == user["id"]), 0),
+              "invites": mine, "lifetime": lifetime,
+              "credit": round(mine * REFERRAL_REWARD, 2), "badge": badge_for(lifetime)}
     champ = await db.prizes.find_one({"month": last_month()})
-    return {"month": month, "items": rows, "reward": REFERRAL_REWARD, "prize": PRIZE_LABEL,
-            "me": {"rank": next((i + 1 for i, (uid, _) in enumerate(ranked) if uid == user["id"]), 0),
-                   "invites": mine, "lifetime": lifetime,
-                   "credit": round(mine * REFERRAL_REWARD, 2), "badge": badge_for(lifetime)},
+    return {"month": month, "items": rows, "reward": REFERRAL_REWARD, "prize": PRIZE_LABEL, "me": me,
             "champion": {"month": champ["month"], "month_label": month_label(champ["month"]),
                          "name": champ["name"], "city": champ.get("city", ""),
                          "photo": champ.get("photo", ""), "invites": champ["invites"],
                          "prize": champ.get("prize", PRIZE_LABEL),
-                         "me": champ["user_id"] == user["id"]} if champ else None,
+                         "me": bool(user) and champ["user_id"] == user["id"]} if champ else None,
             "participants": len(ranked)}
 
 

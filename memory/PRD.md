@@ -149,13 +149,33 @@ Adults only (21+ enforced server-side); auth required for private features; part
   idempotency + free-pass order + notifications, champion payload, waitlist email gating) plus a UI pass on
   `/city/london`, `/city/tokyo` (mobile) and the `/referrals` champion card.
 
+## Implemented — iteration 9 (June 2026): guide photography, Gulf calendar, public leaderboard
+- **Per-neighbourhood photography**: `AREA_PHOTOS` in `backend/city_guides.py` maps every city to real
+  Unsplash photo IDs (served at `w=900`), merged into each area by `guide_for()` so the payload is
+  `[name, blurb, photo]`. Neighbourhood cards on `/city/:slug` now lead with a lazy-loaded image that scales on
+  hover. All 27 cities carry exactly 4 neighbourhoods with 4 distinct photos (Gurugram, Noida, Hyderabad, Pune,
+  Manchester, Austin and Melbourne each gained a 4th area in this pass).
+- **Fuller Gulf calendar** (`backend/seed_gulf_events.py`, idempotent): 5 new Dubai nights (Marina yacht
+  sundowner, Alserkal gallery hop, DIFC rooftop jazz, padel + poolside brunch, Old Dubai food walk) and 4 Abu
+  Dhabi nights (desert camp dinner, Louvre late, Corniche sunrise ride, Yas race night) — all published, priced
+  in **AED** with the local-pricing fields, with covers. Plus 4 Gulf members so the faces strip and member counts
+  look real. Dubai now has 6 events / 3 members, Abu Dhabi 4 / 2, across 5 categories.
+- **Public leaderboard**: `GET /api/referrals/leaderboard` now uses `optional_user` — guests get the ranking,
+  the champion card and the prize label, but `me` is `null` and no row is flagged as theirs. The board moved to
+  `frontend/src/components/Leaderboard.jsx` and is rendered both inside `/referrals` and on a new public
+  `/leaderboard` page (SEO copy, how-it-works trio, join CTA, footer link under Explore). Names stay shortened to
+  first name + last initial and the payload exposes no contact details.
+- Verified: `backend/tests/test_iteration9.py` 6/6 (photo coverage + real HTTP 200 image check, Gulf counts and
+  AED pricing, guest vs signed-in leaderboard payloads) plus UI checks on `/city/dubai`, `/city/abu-dhabi`
+  (mobile) and `/leaderboard`.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only
 `delivered@resend.dev` works in this sandbox). Confirm the Google sign-in flow end-to-end (never user-verified).
 **P1** — Live FX rate feed instead of static rates; Razorpay Route / Stripe Connect for automatic partner
-transfers; saved searches with alerts; make the leaderboard visible to guests as social proof; admin UI for the
-prize history and city waitlists; per-city editorial photography.
+transfers; saved searches with alerts; admin UI for prize history and city waitlists; grow the calendar in the
+cities that are still empty (Melbourne, Vancouver, Manchester and the other 11 with zero events).
 **P2** — Retention cohorts, native app clients, splitting `server.py` into routers, silencing the
 visual-editor dev hydration warning.
 

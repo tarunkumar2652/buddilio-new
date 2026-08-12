@@ -98,11 +98,13 @@ def test_leaderboard_ranks_and_badges():
     assert me["rank"] >= 1 and me["invites"] >= 1 and me["badge"]["name"]
 
 
-def test_leaderboard_month_filter_and_auth():
+def test_leaderboard_month_filter_and_public_access():
     h = _login("tara.joshi@example.com")
     d = requests.get(f"{API}/referrals/leaderboard", params={"month": "2019-01"}, headers=h, timeout=15).json()
     assert d["month"] == "2019-01" and d["items"] == [] and d["me"]["rank"] == 0
-    assert requests.get(f"{API}/referrals/leaderboard", timeout=15).status_code in (401, 403)
+    # the board is public social proof — guests see the ranking but no personal block
+    guest = requests.get(f"{API}/referrals/leaderboard", timeout=15)
+    assert guest.status_code == 200 and guest.json()["me"] is None
 
 
 def test_referral_code_lookup_still_works():

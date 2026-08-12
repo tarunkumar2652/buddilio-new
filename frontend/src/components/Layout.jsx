@@ -208,7 +208,7 @@ export const Navbar = () => {
 
 const FOOT_LINKS = [
   ["Explore", [["Events", "/events"], ["Cities", "/cities"], ["Passes", "/passes"], ["Membership", "/membership"],
-    ["Discover", "/discover"], ["Invite & earn", "/referrals"]]],
+    ["Discover", "/discover"], ["Leaderboard", "/leaderboard"], ["Invite & earn", "/referrals"]]],
   ["Company", [["About", "/p/about"], ["Contact", "/p/contact"], ["FAQ", "/p/faq"],
     ["Partner with us", "/register?role=partner"]]],
   ["Trust & Safety", [["Safety Center", "/safety"], ["Community Guidelines", "/p/guidelines"],
