@@ -1,0 +1,54 @@
+{
+  "summary": "Frontend-only regression for iteration 7 (Buddilio: real socials, city SEO pages, monthly leaderboard, local pricing). Tested guest flows (/cities, /city/dubai, /city/london, /city/vancouver waitlist, /city/atlantis not-found, footer socials, city→events prefill), member leaderboard (Tara J.), partner event create+edit with currency, and Omar's currency picker on Events. 6/7 critical flows pass. One real UI bug: mobile 390px horizontal overflow (scrollWidth=457 vs innerWidth=390) on both /city/dubai and /cities. Also minor spec deviations documented.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CityPage + CityIndex (mobile)", "issue": "Horizontal overflow on 390x844: scrollWidth=457 vs innerWidth=390 (~67px overflow) on both /city/dubai AND /cities. Spec required scrollWidth === innerWidth. Hero/stat cards or grid likely using min-widths / fixed paddings that exceed viewport.", "selector": "[data-testid='city-page'], [data-testid='city-stats'], /cities country groups", "priority": "HIGH"},
+      {"component": "Waitlist form (Cities.jsx)", "issue": "Invalid email path does NOT show a sonner error toast — HTML5 type=email native validation short-circuits submit before the client can toast. Spec asked for an explicit error toast. Consider changing input to type=text with regex + toast.error, or add a custom onInvalid handler.", "selector": "[data-testid='city-waitlist-input']", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Partner → Create event → Country change to UAE", "issue": "Auto-switches city to 'Abu Dhabi' (first city in UAE list) instead of 'Dubai' as spec required. Currency correctly auto-switches to AED. In Partner.jsx line 156: `city: c?.cities?.[0] || f.city` — picks first city. If Dubai should be default for UAE, either reorder cities array (put Dubai first) or add a country→default-city map.", "affected_selectors": ["[data-testid='event-country']", "[data-testid='event-city']"]},
+      {"flow": "Monthly leaderboard seed data", "issue": "Row 1 shows 'Tara J. · 7 invites · ₹1,750 earned' but spec expected 6 invites / ₹1,500. All other rows match spec exactly (Sofia M. 4/₹1,000, Liam O. 3/₹750, Kabir N. 2/₹500, Omar R. 1/₹250). Likely seed_referrals.py granted 7 rewarded invites to Tara instead of 6. Ordering, badges (Ambassador), highlight, name masking (First L.), and 'you' badge all correct.", "affected_selectors": ["[data-testid='leaderboard-row-1']"]},
+      {"flow": "Local pricing end-to-end AED display", "issue": "Could NOT fully verify 'organiser-priced-in-AED shows exact AED on card + event detail' because NO live/published event has price_overrides populated in seed data. The only override event created during this test (TEST_Dubai_AED_Event) is in draft state and city defaulted to Abu Dhabi. However: code paths in Cards.jsx (fmtOf(ev.price, ev.price_overrides)), Events.jsx (data-testid='event-price', event-local-price), and CurrencyContext.jsx (fmtOf exact override wins over FX) are all correctly implemented. Recommend seeding at least one PUBLISHED Dubai event with price_overrides={AED: <n>} so this can be verified visually.", "affected_selectors": ["[data-testid='event-price']", "[data-testid='event-local-price']"]}
+    ],
+    "design_issues": []
+  },
+  "passed_flows": [
+    "/cities: 'Find your city' heading + 27 city cards + city-link-dubai navigation ✓",
+    "/city/dubai: title 'Things to do in Dubai — events & people to go with | Buddilio', meta desc contains Dubai + AED, canonical link, city-jsonld (452 chars), city-page/city-stats/city-categories/city-events/city-nearby all present, AED + VAT 5% + emergency 999 all shown ✓",
+    "/city/london: correct title, GBP + 20% + 999 shown ✓",
+    "/city/vancouver: waitlist form visible; valid email → 'You're on the list for Vancouver — we'll email you the moment we open.' success toast ✓",
+    "/city/atlantis: [data-testid='city-not-found'] rendered with 'Browse all cities' link — NO crash ✓",
+    "/city/dubai → city-browse-events → lands on /events?city=Dubai with events-city select = 'Dubai' ✓",
+    "Footer socials: instagram=https://www.instagram.com/buddilio ✓ ; facebook=https://www.facebook.com/Buddilio/ ✓ ; x=https://x.com/buddilio_ ✓ ; footer-social-linkedin / youtube = 0 ✓ ; footer-city-dubai = /city/dubai ✓ ; Explore→Cities = /cities ✓",
+    "Leaderboard (Tara): leaderboard-section, leaderboard-me ('#1 this month'), my-badge='Ambassador', leaderboard-list, all 5 rows present, row 1 highlighted with 'you' + brand-magenta bg, all names first+last-initial only ✓",
+    "Leaderboard month picker: 3 months (2026-08, 2026-07, 2026-06); switching to 2026-06 shows [data-testid='leaderboard-empty']; switching back restores row-1 ✓",
+    "Partner Create event: [data-testid='event-price-currency'] present next to event-price ✓ ; Country=UAE auto-sets currency=AED ✓ ; Saved draft priced 250 AED, appears in My events ✓ ; Edit prefills price=250 (local, not INR base) + currency=AED ✓",
+    "Omar currency picker (data-testid='currency-picker'): switching to AED converts INR base prices to AED on event cards (e.g. ₹499 → AED 21.96) — no crashes ✓",
+    "Regression: /, /events, /cities, /city/dubai, /referrals, /partner all load without runtime page errors (filtered: 0 real console errors; only React dev-mode hydration warnings from emergent-tagger injecting <span> inside <option>, which is harmless preview-only noise)"
+  ],
+  "test_report_links": [],
+  "action_items": [
+    "HIGH: Fix mobile horizontal overflow on /city/:slug and /cities (scrollWidth 457 > innerWidth 390 at 390x844). Audit hero, city-stats grid, and category chips for fixed widths / negative margins.",
+    "MEDIUM: When Country changes to United Arab Emirates on partner create-event form, default city should be 'Dubai' not 'Abu Dhabi' (Partner.jsx line 156). Either reorder cities for UAE (Dubai first) or add explicit country→default-city map.",
+    "LOW: Waitlist invalid email should raise a custom toast.error instead of relying on browser native email validation (spec asked for error toast).",
+    "LOW: Seed variance — Tara has 7 rewarded invites (₹1,750) instead of spec's 6 (₹1,500). Reconcile seed_referrals.py or spec.",
+    "LOW: Cleanup 1 TEST_ event created by testing agent: 'TEST_Dubai_AED_Event' (draft, city=Abu Dhabi, price=250 AED) under partner@buddilio.com.",
+    "INFO: To fully verify local-pricing display, seed at least one PUBLISHED Dubai event with price_overrides={AED: n} so [data-testid='event-price'] and [data-testid='event-local-price'] can be verified visually."
+  ],
+  "critical_code_review_comments": [
+    "CurrencyContext.jsx fmtOf: correctly gives override precedence over FX conversion — implementation is sound.",
+    "Cards.jsx EventCard now uses fmtOf(ev.price, ev.price_overrides) — regression from prior 'fmt is not defined' is confirmed fixed.",
+    "Partner.jsx onChange for country: sets city to first cities[0] which is Abu Dhabi for UAE; consider country→default-city map for UX polish (Dubai for UAE, Bangkok for Thailand, etc.).",
+    "Cities.jsx waitlist: uses type=email — browser native validation prevents onSubmit from running with an invalid email, so the toast.error path is unreachable via the UI (only reachable if user disables browser validation). Consider `noValidate` on the form + client regex + toast.error to make the negative flow user-visible.",
+    "Preview environment: emergent-tagger injecting <span> children into <option> elements causes React hydration warnings on Events page and Partner form. Non-blocking but noisy in console."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "~92% (11 of 12 critical checks pass; 1 mobile-overflow real bug + 3 minor spec deviations)"},
+  "test_credentials": "Verified working: tara.joshi@example.com / User@123 ; omar.alrashid@example.com / User@123 ; partner@buddilio.com / Partner@123. Login route is /login (not /auth). Login inputs are wrapped in a Field component, so use `form input` nth-index selectors rather than [data-testid='login-email'] input.",
+  "seed_data_creation": "Created 1 partner draft event: 'TEST_Dubai_AED_Event' (partner@buddilio.com, country=UAE, city=Abu Dhabi (auto-picked, spec wanted Dubai), price=250 AED, draft status). Submitted 1 valid Vancouver waitlist entry (newuser+vanc@example.com).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All new iteration-7 features (city SEO pages, waitlist, leaderboard, price_currency select, footer socials) are wired up and functional. Focus retest on: (1) mobile overflow fix on /city/:slug and /cities, (2) UAE country default city, (3) waitlist error toast, (4) once a live Dubai AED-priced event is seeded, verify [data-testid='event-price'] shows exact AED amount + [data-testid='event-local-price'] shows 'Priced by the organiser in AED' when picker=INR. Login uses /login, not /auth. Use `form input` nth-index for login-email/password (Field wraps input).",
+  "rca of the issue": "Mobile overflow (~67px extra) on /city/dubai and /cities most likely caused by hero content using a fixed grid or the stat cards row exceeding container. Repro: viewport 390x844 → document.documentElement.scrollWidth=457. Likely culprits: (a) footer city marquee running full width, (b) city-stats grid with fixed min-widths, or (c) city category chips row without wrap. Mitigation: audit for min-w-*, w-[>390px], or gap combinations; ensure `overflow-x-hidden` on the page container or use `min-w-0` on flex/grid children; wrap the marquee in an `overflow-hidden` parent."
+}

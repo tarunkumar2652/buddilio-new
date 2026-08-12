@@ -15,6 +15,7 @@ import { Membership, Passes, Checkout } from "@/pages/Commerce";
 import { PaymentSuccess, PaymentCancel } from "@/pages/Payment";
 import { CmsPage, Safety } from "@/pages/Content";
 import Referrals from "@/pages/Referrals";
+import { CityIndex, CityPage } from "@/pages/Cities";
 import PartnerDashboard from "@/pages/Partner";
 import Admin from "@/pages/Admin";
 import "@/index.css";
@@ -40,6 +41,8 @@ function Shell() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/events" element={<Events />} />
+          <Route path="/cities" element={<CityIndex />} />
+          <Route path="/city/:slug" element={<CityPage />} />
           <Route path="/events/:id" element={<EventDetail />} />
           <Route path="/passes" element={<Passes />} />
           <Route path="/membership" element={<Membership />} />

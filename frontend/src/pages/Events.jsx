@@ -10,8 +10,10 @@ import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert } from "lucide-react";
 export function Events() {
   const { fmt } = useCurrency();
+  const q0 = new URLSearchParams(window.location.search);
   const [meta, setMeta] = useState({ cities: [], countries: [], categories: [] });
-  const [f, setF] = useState({ q: "", country: "", city: "", category: "", max_price: -1, when: "", sort: "date" });
+  const [f, setF] = useState({ q: "", country: "", city: q0.get("city") || "",
+    category: q0.get("category") || "", max_price: -1, when: "", sort: "date" });
   const [data, setData] = useState(null);
   const [page, setPage] = useState(1);
 
@@ -94,7 +96,7 @@ export function EventDetail() {
   const { id } = useParams();
   const nav = useNavigate();
   const { user } = useAuth();
-  const { fmt } = useCurrency();
+  const { fmtOf, code } = useCurrency();
   const [ev, setEv] = useState(null);
   const [busy, setBusy] = useState(false);
   const [reporting, setReporting] = useState(false);
@@ -241,7 +243,14 @@ export function EventDetail() {
 
         <aside className="lg:sticky lg:top-24 h-fit">
           <div className="rounded-2xl border border-slate-200 bg-white p-6">
-            <p className="text-3xl font-display font-bold">{ev.price > 0 ? fmt(ev.price) : "Free"}</p>
+            <p className="text-3xl font-display font-bold" data-testid="event-price">
+              {ev.price > 0 ? fmtOf(ev.price, ev.price_overrides) : "Free"}
+            </p>
+            {ev.price > 0 && ev.price_currency && ev.price_currency !== code && (
+              <p className="mt-1 text-[11px] font-semibold text-slate-400" data-testid="event-local-price">
+                Priced by the organiser in {ev.price_currency}
+              </p>
+            )}
             <p className="text-xs text-slate-500 mt-1">
               {ev.approval_mode === "instant" ? "Instant confirmation" : "Requires organiser approval"} · {ev.participant_count} going
             </p>

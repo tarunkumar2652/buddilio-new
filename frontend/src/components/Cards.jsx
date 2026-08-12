@@ -5,7 +5,7 @@ import { useCurrency } from "@/context/CurrencyContext";
 import { Badge } from "@/components/Shared";
 
 export const EventCard = ({ ev, className = "" }) => {
-  const { fmt } = useCurrency();
+  const { fmtOf } = useCurrency();
   return (
     <Link to={`/events/${ev.id}`} data-testid={`event-card-${ev.id}`}
       className={`group block rounded-2xl overflow-hidden bg-white border border-slate-200 hover-lift ${className}`}>
@@ -23,7 +23,7 @@ export const EventCard = ({ ev, className = "" }) => {
           </span>
         )}
         <p className="absolute bottom-3 left-3 text-white font-semibold text-sm">
-          {ev.price > 0 ? fmt(ev.price) : "Free entry"}
+          {ev.price > 0 ? fmtOf(ev.price, ev.price_overrides) : "Free entry"}
         </p>
       </div>
       <div className="p-5">

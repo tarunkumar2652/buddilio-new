@@ -31,6 +31,9 @@ export const money = (n, currency) => {
   }
 };
 
+export const citySlug = (name) =>
+  (name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
 export const fileUrl = (u) => {
   if (!u) return "";
   if (u.startsWith("http") || u.startsWith("data:")) return u;

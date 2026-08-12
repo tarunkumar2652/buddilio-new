@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useCurrency } from "@/context/CurrencyContext";
-import { api, fileUrl } from "@/lib/api";
+import { api, fileUrl, citySlug } from "@/lib/api";
 import {
   Menu, X, Search, Bell, LayoutGrid, Compass, CalendarDays, MessageCircle, User,
-  Instagram, Linkedin, Youtube, MapPin, Sparkles,
+  Facebook, Instagram, Twitter, MapPin, Sparkles,
 } from "lucide-react";
 
 const MARK = "/brand/mark.png";
@@ -130,7 +130,7 @@ export const Navbar = () => {
             </div>
 
             <div className="ml-auto md:ml-0 flex items-center gap-2">
-              <CurrencyPicker />
+              <span className="hidden sm:block"><CurrencyPicker /></span>
               {user ? (
                 <>
                   <Link to="/notifications" className="relative p-2 rounded-full hover:bg-slate-100 transition-colors" data-testid="nav-notifications">
@@ -148,10 +148,10 @@ export const Navbar = () => {
                 </>
               ) : (
                 <>
-                  <Link to="/login" data-testid="nav-login" className="text-sm font-bold px-3 py-2 rounded-lg hover:bg-slate-100">Log in</Link>
+                  <Link to="/login" data-testid="nav-login" className="hidden sm:block text-sm font-bold px-3 py-2 rounded-lg hover:bg-slate-100">Log in</Link>
                   <Link to="/register" data-testid="nav-join"
-                    className="brand-gradient text-white text-sm font-bold rounded-full px-5 py-2.5 shadow-[0_6px_18px_rgba(232,30,124,0.26)] transition-transform hover:scale-[1.03] active:scale-[.98]">
-                    Join Buddilio
+                    className="brand-gradient text-white text-sm font-bold rounded-full px-4 sm:px-5 py-2.5 shadow-[0_6px_18px_rgba(232,30,124,0.26)] transition-transform hover:scale-[1.03] active:scale-[.98]">
+                    Join<span className="hidden sm:inline"> Buddilio</span>
                   </Link>
                 </>
               )}
@@ -176,8 +176,15 @@ export const Navbar = () => {
                   <button onClick={() => { logout(); nav("/"); }} className="block w-full text-left px-3 py-2.5 rounded-lg text-sm font-bold text-red-600" data-testid="mnav-logout">Log out</button>
                 </>
               ) : (
-                <Link to="/register" className="block px-3 py-2.5 rounded-full text-sm font-bold brand-gradient text-white text-center" data-testid="mnav-join">Join Buddilio</Link>
+                <>
+                  <Link to="/login" className="block px-3 py-2.5 rounded-lg text-sm font-bold hover:bg-slate-50" data-testid="mnav-login">Log in</Link>
+                  <Link to="/register" className="block px-3 py-2.5 rounded-full text-sm font-bold brand-gradient text-white text-center" data-testid="mnav-join">Join Buddilio</Link>
+                </>
               )}
+              <div className="sm:hidden flex items-center justify-between px-3 pt-3 border-t border-slate-100">
+                <span className="text-xs font-bold text-slate-500">Currency</span>
+                <CurrencyPicker />
+              </div>
             </div>
           )}
         </div>
@@ -200,7 +207,7 @@ export const Navbar = () => {
 };
 
 const FOOT_LINKS = [
-  ["Explore", [["Events", "/events"], ["Passes", "/passes"], ["Membership", "/membership"],
+  ["Explore", [["Events", "/events"], ["Cities", "/cities"], ["Passes", "/passes"], ["Membership", "/membership"],
     ["Discover", "/discover"], ["Invite & earn", "/referrals"]]],
   ["Company", [["About", "/p/about"], ["Contact", "/p/contact"], ["FAQ", "/p/faq"],
     ["Partner with us", "/register?role=partner"]]],
@@ -208,8 +215,11 @@ const FOOT_LINKS = [
     ["Terms", "/p/terms"], ["Privacy", "/p/privacy"], ["Refund Policy", "/p/refund"]]],
 ];
 
-const SOCIALS = [[Instagram, "instagram", "https://instagram.com"], [Linkedin, "linkedin", "https://linkedin.com"],
-  [Youtube, "youtube", "https://youtube.com"]];
+const SOCIALS = [
+  [Instagram, "instagram", "https://www.instagram.com/buddilio"],
+  [Facebook, "facebook", "https://www.facebook.com/Buddilio/"],
+  [Twitter, "x", "https://x.com/buddilio_"],
+];
 
 export const Footer = () => (
   <footer className="relative mt-28 overflow-hidden bg-brand-ink text-white grain" data-testid="footer">
@@ -253,9 +263,10 @@ export const Footer = () => (
       <div className="mt-14 rounded-2xl border border-white/10 bg-white/[0.04] py-4 overflow-hidden" data-testid="footer-cities">
         <div className="flex w-max animate-marquee gap-8 pr-8">
           {[...CITY_STRIP, ...CITY_STRIP].map((c, i) => (
-            <span key={`${c}-${i}`} className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-white/45 whitespace-nowrap">
+            <Link key={`${c}-${i}`} to={`/city/${citySlug(c)}`} data-testid={i < CITY_STRIP.length ? `footer-city-${citySlug(c)}` : undefined}
+              className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-white/45 whitespace-nowrap transition-colors hover:text-brand-pink">
               <Sparkles className="h-3 w-3 text-brand-pink" />{c}
-            </span>
+            </Link>
           ))}
         </div>
       </div>

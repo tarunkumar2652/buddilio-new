@@ -10,7 +10,7 @@ import { Plus, Send } from "lucide-react";
 
 const blank = {
   title: "", description: "", category: "Parties", city: "Delhi NCR", country: "India", venue: "",
-  starts_at: "", ends_at: "", cover_image: "", gallery: [], price: 0, capacity: 50,
+  starts_at: "", ends_at: "", cover_image: "", gallery: [], price: 0, price_currency: "INR", capacity: 50,
   rules: "Government ID required at entry. 21+ only.",
   cancellation_policy: "Full refund up to 48 hours before start.",
   approval_mode: "instant", featured: false,
@@ -117,7 +117,9 @@ export default function PartnerDashboard() {
               </div>
               <Badge tone={statusTone(ev.status)}>{ev.status}</Badge>
               <div className="flex gap-2">
-                <button onClick={() => { setF({ ...blank, ...ev, starts_at: ev.starts_at?.slice(0, 16), ends_at: ev.ends_at?.slice(0, 16) }); setEditing(ev.id); setTab("create"); }}
+                <button onClick={() => { setF({ ...blank, ...ev, price: ev.price_input ?? ev.price,
+                  price_currency: ev.price_currency || "INR",
+                  starts_at: ev.starts_at?.slice(0, 16), ends_at: ev.ends_at?.slice(0, 16) }); setEditing(ev.id); setTab("create"); }}
                   data-testid={`edit-event-${ev.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Edit</button>
                 <button onClick={() => viewParticipants(ev)} data-testid={`participants-event-${ev.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Participants</button>
                 {(ev.status === "draft" || ev.status === "rejected") && (
@@ -151,7 +153,8 @@ export default function PartnerDashboard() {
               <select data-testid="event-country" value={f.country}
                 onChange={(e) => {
                   const c = (meta.countries || []).find((x) => x.name === e.target.value);
-                  setF({ ...f, country: e.target.value, city: c?.cities?.[0] || f.city });
+                  setF({ ...f, country: e.target.value, city: c?.primary_city || c?.cities?.[0] || f.city,
+                    price_currency: c?.currency || f.price_currency });
                 }}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
                 {(meta.countries || []).map((c) => <option key={c.code} value={c.name}>{c.name}</option>)}
@@ -167,9 +170,17 @@ export default function PartnerDashboard() {
             <label className="block"><span className="text-xs font-bold text-slate-600">Ends at</span>
               <input type="datetime-local" data-testid="event-ends" value={f.ends_at} onChange={(e) => setF({ ...f, ends_at: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
-            <label className="block"><span className="text-xs font-bold text-slate-600">Ticket price ({meta.base_currency || "INR"}, 0 = free)</span>
+            <label className="block"><span className="text-xs font-bold text-slate-600">Ticket price (0 = free)</span>
               <input type="number" data-testid="event-price" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
+            <label className="block"><span className="text-xs font-bold text-slate-600">Price currency</span>
+              <select data-testid="event-price-currency" value={f.price_currency} onChange={(e) => setF({ ...f, price_currency: e.target.value })}
+                className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
+                {(meta.currencies || []).map((c) => <option key={c.code} value={c.code}>{c.code} — {c.label}</option>)}
+              </select>
+              <span className="mt-1.5 block text-[11px] text-slate-500">
+                Locals pay exactly this in {f.price_currency}. Other currencies convert automatically.
+              </span></label>
             <label className="block"><span className="text-xs font-bold text-slate-600">Capacity</span>
               <input type="number" data-testid="event-capacity" value={f.capacity} onChange={(e) => setF({ ...f, capacity: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>

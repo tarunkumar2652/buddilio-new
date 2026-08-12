@@ -52,5 +52,11 @@ export function CurrencyProvider({ children }) {
   // Prices are stored in the platform base currency and converted for display.
   const fmt = (base) => money(Number(base || 0) * Number(active?.rate || 1), active?.code);
 
-  return <Ctx.Provider value={{ list, countries, code: active?.code, set, active, fmt }}>{children}</Ctx.Provider>;
+  // An exact amount set by the organiser in this currency beats the FX conversion.
+  const fmtOf = (base, overrides) => {
+    const exact = overrides?.[active?.code];
+    return exact === undefined || exact === null ? fmt(base) : money(Number(exact), active?.code);
+  };
+
+  return <Ctx.Provider value={{ list, countries, code: active?.code, set, active, fmt, fmtOf }}>{children}</Ctx.Provider>;
 }

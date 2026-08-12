@@ -101,17 +101,43 @@ Adults only (21+ enforced server-side); auth required for private features; part
 - Hero refresh (tagline chip, gradient headline, gradient CTA), branded offline page and install prompt.
 - Verified by testing agent iteration 6: 19 routes swept, zero UI bugs, zero console errors, 100% of scope.
 
+## Implemented — iteration 7 (June 2026): city SEO pages, leaderboard, local pricing
+- **Real social profiles** in the footer: Instagram `/buddilio`, Facebook `/Buddilio/`, X `/buddilio_`
+  (LinkedIn/YouTube placeholders removed).
+- **City pages for SEO**: `GET /api/cities` (27 cities × events/members counts) and `GET /api/cities/{slug}`
+  (hero image, upcoming events, categories, member faces, top review quotes, local currency + tax + emergency
+  number, nearby cities). Frontend `/cities` index grouped by country and `/city/:slug` landing pages with
+  per-city `<title>`/meta description/canonical + `CollectionPage` JSON-LD. Cities with no events show an email
+  waitlist (`POST /api/cities/{slug}/waitlist`, unique per city+email). `sitemap.xml` lists `/cities` and all 27
+  `/city/*` URLs; the footer city marquee and an Explore → Cities link feed internal links.
+- **Monthly referral leaderboard**: `GET /api/referrals/leaderboard?month=YYYY-MM` ranks rewarded invites for the
+  month (top 10), returns each inviter as *First L.* only, their city, invites, credit earned and lifetime badge
+  (Starter 1 → Connector 3 → Ambassador 5 → Legend 10). `/referrals` renders the board with crown/trophy/medal
+  ranks, your own row highlighted, a "you are #N" summary with next-badge progress and a 3-month picker.
+  `backend/seed_referrals.py` seeds a demo ladder (6/4/3/2/1 invites).
+- **Organiser local pricing**: `EventIn.price_currency`; `price_event()` stores the organiser's exact amount in
+  `price_input` + `price_overrides[currency]` and the converted base amount in `price`, so locals pay the typed
+  figure (AED 300 → AED 315 with 5% VAT) while other currencies auto-convert. Partner form has a currency select
+  that defaults to the event country's currency (`meta.countries[].primary_city|currency`); event cards and detail
+  use `fmtOf()` so an exact local price always beats the FX conversion, with a "Priced by the organiser in AED"
+  note when viewing in another currency. `backend/localize_prices.py` migrated all 23 priced events to their own
+  city currency (AED 285 Dubai, GBP 90 London, JPY 7,500 Tokyo, THB 700 Bangkok…).
+- Fixed a pre-existing mobile header overflow (390px guests: currency picker + Log in moved into the mobile menu,
+  compact "Join" CTA) — `/`, `/events`, `/cities`, `/city/*` now have zero horizontal scroll.
+- Verified: `backend/tests/test_iteration7.py` 9/9 and the full suite 107 passed / 2 skipped; testing agent
+  iteration 7 frontend sweep (all city/leaderboard/pricing/social flows) plus a follow-up self-test of the fixes.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only
 `delivered@resend.dev` works in this sandbox). Confirm the Google sign-in flow end-to-end (never user-verified).
 **P1** — Live FX rate feed instead of static rates; Razorpay Route / Stripe Connect for automatic partner
-transfers; per-country pricing overrides for organisers (they currently price in the base currency);
-saved searches with alerts; referral leaderboard.
+transfers; saved searches with alerts; leaderboard prizes/rewards for the monthly winner; city-page editorial
+content (neighbourhood guides) for stronger SEO; email the city waitlist when a city opens.
 **P2** — Retention cohorts, native app clients, splitting `server.py` into routers, silencing the
 visual-editor dev hydration warning.
 
 ## Next tasks
 1. User acceptance pass on mobile: install the PWA, turn on phone alerts, run a referral + checkout end to end.
 2. Supply Razorpay keys + webhook secret to go live (code complete, tested in simulation).
-3. Localised city landing pages (`/city/dubai`) for SEO now that the footprint is global.
+3. Decide leaderboard rewards (badge-only today) and whether the board should be public to guests.
