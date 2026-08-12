@@ -127,17 +127,40 @@ Adults only (21+ enforced server-side); auth required for private features; part
 - Verified: `backend/tests/test_iteration7.py` 9/9 and the full suite 107 passed / 2 skipped; testing agent
   iteration 7 frontend sweep (all city/leaderboard/pricing/social flows) plus a follow-up self-test of the fixes.
 
+## Implemented — iteration 8 (June 2026): city guides, leaderboard prize, waitlist emails
+- **Editorial city guides** (`backend/city_guides.py`): a hand-written guide for all 27 cities — intro
+  paragraph, 3–4 named neighbourhoods with what each is for, when the city goes out, how to get around and a
+  local tip. Served inside `GET /api/cities/{slug}` as `guide` and rendered on `/city/:slug` as an "Where to go
+  out in {city}" section. Each city page also renders 5 city-specific FAQs (`city-faq-*`) and emits both
+  `CollectionPage` and `FAQPage` JSON-LD so the answers can win rich results.
+- **Monthly leaderboard prize**: `award_monthly_prize()` finds the previous month's top inviter, books them the
+  highest-value active pass as a ₹0 paid order (`gateway: leaderboard_prize`, unique index on `prizes.month`, so
+  it can never double-award), notifies the winner by email + in-app and tells the runners-up who won.
+  `GET /api/referrals/leaderboard` now returns `prize` and `champion`, rendered as a plum "July 2026 champion"
+  card on `/referrals`. Driven by the platform cron `monthly-prize` (`0 3 1 * *`).
+- **City waitlist emails**: `city_waitlist` rows carry `notified_at`; `notify_city_waitlist(city)` emails everyone
+  waiting the moment that city has a published event — triggered immediately when an admin approves the first
+  event in a city (`/api/admin/events/{id}/moderate`) and swept daily by the `city-openings` cron (`0 9 * * *`).
+  One email per address, ever. Signing up for an already-live city now says so instead of promising an email.
+- **Platform crons** in `.emergent/crons.yml` → `POST /api/cron/monthly-prize` and `POST /api/cron/city-openings`,
+  both guarded by `WEBHOOK_CRON_SECRET` (constant-time compare, 401 otherwise) and both ack immediately and do
+  the work in a background task.
+- Verified: `backend/tests/test_iteration8.py` 6/6 (all 27 guides present and city-specific, cron auth, prize
+  idempotency + free-pass order + notifications, champion payload, waitlist email gating) plus a UI pass on
+  `/city/london`, `/city/tokyo` (mobile) and the `/referrals` champion card.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only
 `delivered@resend.dev` works in this sandbox). Confirm the Google sign-in flow end-to-end (never user-verified).
 **P1** — Live FX rate feed instead of static rates; Razorpay Route / Stripe Connect for automatic partner
-transfers; saved searches with alerts; leaderboard prizes/rewards for the monthly winner; city-page editorial
-content (neighbourhood guides) for stronger SEO; email the city waitlist when a city opens.
+transfers; saved searches with alerts; make the leaderboard visible to guests as social proof; admin UI for the
+prize history and city waitlists; per-city editorial photography.
 **P2** — Retention cohorts, native app clients, splitting `server.py` into routers, silencing the
 visual-editor dev hydration warning.
 
 ## Next tasks
 1. User acceptance pass on mobile: install the PWA, turn on phone alerts, run a referral + checkout end to end.
 2. Supply Razorpay keys + webhook secret to go live (code complete, tested in simulation).
-3. Decide leaderboard rewards (badge-only today) and whether the board should be public to guests.
+3. Decide whether the leaderboard and city guides should be visible to guests (both are member-gated / public
+   respectively today) and whether the monthly prize should scale with invite count.

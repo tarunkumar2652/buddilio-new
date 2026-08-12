@@ -53,12 +53,37 @@ const Leaderboard = () => {
           <h2 className="mt-1.5 text-2xl font-bold flex items-center gap-2">
             <Trophy className="h-5 w-5 text-brand-magenta" />Top inviters
           </h2>
+          <p className="mt-2 text-sm text-slate-500">
+            The month's number one wins {d?.prize || "a free Buddilio pass"} — awarded automatically on the 1st.
+          </p>
         </div>
         <select value={month} onChange={(e) => setMonth(e.target.value)} data-testid="leaderboard-month"
           className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-brand-magenta">
           {months.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
       </div>
+
+      {d?.champion && (
+        <div className="mt-5 rounded-2xl bg-brand-ink text-white p-5 flex flex-wrap items-center gap-4 relative overflow-hidden" data-testid="leaderboard-champion">
+          <div className="aurora opacity-60" />
+          <span className="relative h-11 w-11 rounded-2xl bg-white/10 grid place-items-center">
+            <Crown className="h-5 w-5 text-brand-pink" />
+          </span>
+          {d.champion.photo && <img src={fileUrl(d.champion.photo)} alt="" className="relative h-11 w-11 rounded-full object-cover ring-2 ring-white/20" />}
+          <div className="relative flex-1 min-w-[200px]">
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-white/50">
+              {d.champion.month_label} champion
+            </p>
+            <p className="mt-1 text-sm font-semibold">
+              {d.champion.me ? "You" : d.champion.name} won with {d.champion.invites} invite{d.champion.invites === 1 ? "" : "s"}
+              {d.champion.city ? ` · ${d.champion.city}` : ""}
+            </p>
+          </div>
+          <span className="relative rounded-full bg-white/10 px-3.5 py-1.5 text-xs font-bold text-white/85" data-testid="champion-prize">
+            Won {d.champion.prize}
+          </span>
+        </div>
+      )}
 
       {badge && (
         <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 flex flex-wrap items-center gap-4" data-testid="leaderboard-me">

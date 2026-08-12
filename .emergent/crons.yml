@@ -1,0 +1,15 @@
+crons:
+  - name: monthly-prize
+    description: "Awards a free pass to the top referral inviter of the previous month on the 1st"
+    cron: "0 3 1 * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/monthly-prize"
+    method: POST
+    enabled: true
+  - name: city-openings
+    description: "Emails city waitlists once Buddilio goes live in their city"
+    cron: "0 9 * * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/city-openings"
+    method: POST
+    enabled: true

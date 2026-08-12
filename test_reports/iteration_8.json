@@ -1,0 +1,48 @@
+{
+  "summary": "Frontend-only regression for iteration 8 (Buddilio: per-city guides, monthly leaderboard champion + prize, waitlist emails). All 8 spec items verified end-to-end. Guest: London/Dubai/Tokyo/Bangkok/Goa/Madrid all have unique per-city intros + neighbourhood areas + When to go out/Getting around/Local tip panels. London FAQ has 5 expandable <details>, first opens on click, JSON-LD is an ARRAY containing CollectionPage + FAQPage with 5 questions matching visible ones. Vancouver FAQ correctly says 'Not yet', invalid waitlist email shows toast 'Enter a valid email address.', valid email shows success toast. Dubai FAQ confirms live with '1 experience in Dubai and 1 verified member'. Member: Tara's /referrals shows leaderboard-champion 'JULY 2026 CHAMPION — Sofia M. won with 3 invites · Barcelona' + champion-prize 'Won Festival Season Pass', header states 'The month's number one wins a free Buddilio pass — awarded automatically on the 1st.', 5 rows intact, month picker switches to empty 2026-06 without crash. Sofia notif='You won July 2026 on the leaderboard' + Orders shows 'Festival Season Pass' ₹0 paid. Liam+Kabir both see 'Sofia M. won July 2026' notif. Zero console errors on /cities /city/london /city/vancouver /referrals /orders /notifications. Mobile 390x844 overflow FIXED: scrollWidth=innerWidth=390 on /city/london and /city/tokyo (previous iter-7 bug resolved). Two minor spec deviations found (see below).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Goa city guide", "issue": "Only 3 neighbourhood cards render (city-area-1..3), missing city-area-4. Every other city checked (London, Dubai, Tokyo, Bangkok, Madrid) has 4. Spec implied 4 across the board (London example was 1..4).", "affected_selectors": ["[data-testid='city-area-4']"]},
+      {"flow": "Monthly leaderboard — Tara's row seed (carryover from iter-7)", "issue": "Row 1 still shows 'Tara J. · 7 invites · ₹1,750 earned' but spec expects '6 invites'. Also the champion header profile card above says '7 rewarded invites this month · ₹1,750 earned'. Sofia M. row 2 shows 4 invites (not spec's expected count either, but spec did not restate the ladder). This deviation was reported in iteration_7 and remains unfixed.", "affected_selectors": ["[data-testid='leaderboard-row-1']", "[data-testid='leaderboard-me']"]}
+    ],
+    "design_issues": []
+  },
+  "passed_flows": [
+    "GUEST /city/london: city-guide + intro + 4 areas (Soho / Shoreditch & Hackney / Peckham & Deptford / Notting Hill & Portobello) + all 3 panels ✓",
+    "GUEST /city/dubai, /city/tokyo, /city/bangkok, /city/madrid: DIFFERENT per-city intros + 4 unique areas + 3 panels ✓ (Goa has only 3 areas — see integration issue)",
+    "GUEST /city/london FAQ: 5 <details> questions, click summary opens (details.open=true), '+' rotates via CSS ✓",
+    "GUEST /city/london JSON-LD: script#city-jsonld is JSON ARRAY of [CollectionPage, FAQPage], FAQPage.mainEntity has 5 Question entries starting with 'Is Buddilio live in London?' matching visible questions ✓",
+    "GUEST /city/vancouver: FAQ1 = 'Not yet — Vancouver is on our opening list. Add your email...' ✓ ; invalid email 'abc' → toast 'Enter a valid email address.' ✓ ; valid email → toast 'You\\'re on the list for Vancouver — we\\'ll email you the moment we open.' ✓",
+    "GUEST /city/dubai FAQ1: 'Yes. There is 1 Buddilio experience in Dubai and 1 verified member nearby...' ✓",
+    "MEMBER Tara /referrals: leaderboard-champion = 'JULY 2026 CHAMPION — Sofia M. won with 3 invites · Barcelona' + champion-prize = 'Won Festival Season Pass' ✓ ; leaderboard header states 'The month\\'s number one wins a free Buddilio pass — awarded automatically on the 1st.' ✓ ; 5 rows present, Tara J. row 1 highlighted + Ambassador badge ✓ ; month picker (2026-08/07/06) switches to 06 → leaderboard-empty renders without crash, and restores ✓",
+    "MEMBER Sofia /notifications: 'You won July 2026 on the leaderboard — You brought 3 friends to Buddilio last month — the most of anyone. Festival Season Pass is now in your orders, on us.' ✓",
+    "MEMBER Sofia /orders: 'Festival Season Pass' ₹0 paid (product order) ✓",
+    "MEMBER Liam /notifications: 'Sofia M. won July 2026 — Sofia M. topped the invite leaderboard with 3 friends. You finished with 2 — the new month\\'s board is open, and the top inviter wins a free Buddilio pass.' ✓",
+    "MEMBER Kabir /notifications: same template, 'You finished with 1' ✓",
+    "REGRESSION: 0 console errors on /cities, /city/london, /city/vancouver, /referrals, /orders, /notifications ✓",
+    "MOBILE 390x844: /city/london scrollWidth=390, /city/tokyo scrollWidth=390 (iter-7 mobile overflow bug is FIXED) ✓"
+  ],
+  "test_report_links": [],
+  "action_items": [
+    "LOW: Add a 4th neighbourhood card to Goa in CITY_GUIDES so it matches the 4-area convention of the other cities (backend/city_guides.py). Current Goa: Assagao & Anjuna / Panjim / Palolem — needs one more (e.g. Morjim & Ashwem, or Vagator).",
+    "LOW (carryover from iter-7): Seed Tara's ladder to 6 rewarded invites / ₹1,500 to match spec, or update spec. Currently 7 / ₹1,750 in backend/seed_referrals.py."
+  ],
+  "critical_code_review_comments": [
+    "Per-city guide registry (city_guides.py) is well-structured: each city has genuinely local, non-generic copy (Golden Gai for Tokyo, Yaowarat for Bangkok, Alserkal for Dubai, Malasaña for Madrid). No template smell.",
+    "FAQ answers in Cities.jsx are city-parameterised (city name, currency, tax label appear where relevant) — good.",
+    "JSON-LD emitted as a single script#city-jsonld with a JSON array of two schema objects is the correct shape for CollectionPage + FAQPage co-existence.",
+    "Champion notification copy is warm and specific ('You brought 3 friends... the most of anyone. Festival Season Pass is now in your orders, on us.') — nice UX touch.",
+    "Runner-up notifications are personalised with each user's own count (Liam=2, Kabir=1) — implementation reads per-user tally correctly.",
+    "Mobile overflow on /city/:slug is resolved — good fix on the previously flagged iter-7 bug."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "~98% (all 8 spec items pass; 1 minor content gap on Goa 4th area, 1 carryover seed-count deviation)"},
+  "test_credentials": "Verified: tara.joshi@example.com, sofia.marin@example.com, liam.oconnor@example.com, kabir.nair@example.com — all User@123. Login route is /login (email + password inputs are 1st and 2nd form input; the 'Log in' button is a plain <button>, not type=submit — page.get_by_role('button', name='Log in') works).",
+  "seed_data_creation": "Submitted 1 Vancouver waitlist entry via UI: newtester+vanc2@example.com (lowercase, @example.com — email_sent will be false in sandbox as noted). Please purge if needed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All iteration-8 features are wired correctly and match spec verbatim except: (1) Goa guide has only 3 neighbourhood cards vs 4 elsewhere, (2) Tara's seed row is 7 invites / ₹1,750 (iter-7 carryover, expected 6 / ₹1,500). Iteration-7 mobile overflow on /city/:slug is now FIXED. Login button is a plain <button> (not type=submit) — use get_by_role('button', name='Log in') or 'form >> text=Log in'.",
+  "rca of the issue": "N/A — no critical bugs. Goa 4-area gap is a content authoring miss in backend/city_guides.py (CITY_GUIDES['goa']['areas'] has 3 entries instead of 4). Tara seed count deviation was already RCA'd in iteration_7.json."
+}

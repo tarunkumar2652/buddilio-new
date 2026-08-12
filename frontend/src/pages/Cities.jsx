@@ -15,6 +15,21 @@ const jsonLd = (data) => {
   if (!el.parentNode) document.head.appendChild(el);
 };
 
+const cityFaqs = (d) => [
+  [`Is Buddilio live in ${d.name}?`, d.events_total > 0
+    ? `Yes. There ${d.events_total === 1 ? "is" : "are"} ${d.events_total} Buddilio experience${d.events_total === 1 ? "" : "s"} in ${d.name} and ${d.members} verified member${d.members === 1 ? "" : "s"} nearby. Browse what's on and book a spot in minutes.`
+    : `Not yet — ${d.name} is on our opening list. Add your email to the waitlist on this page and we'll email you the day it opens.`],
+  [`How much do Buddilio experiences cost in ${d.name}?`,
+    `Organisers price every ${d.name} experience in ${d.currency}, so you pay the local amount with no conversion surprises. ${d.tax_label} of ${d.tax_percent}% is shown at checkout before you pay, and membership discounts apply automatically.`],
+  [`Where do Buddilio members go out in ${d.name}?`, d.guide?.areas?.length
+    ? `Mostly ${d.guide.areas.map((a) => a[0]).join(", ")}. ${d.guide.when}`
+    : `Across the city — every listing shows the venue and neighbourhood before you book.`],
+  ["Can I come on my own?",
+    `Yes, and most members do. Every ${d.name} booking opens a group chat with the other attendees and the organiser, so you know who you're meeting before you arrive.`],
+  ["Is Buddilio a dating app?",
+    "No. Buddilio is a social discovery platform for finding people to attend events with — parties, dinners, concerts, sport and travel. Members are 21+ and verified, and profiles are not swipeable."],
+];
+
 export const CityIndex = () => {
   const [d, setD] = useState(null);
   useEffect(() => { api.get("/cities").then(({ data }) => setD(data)).catch(() => setD({ items: [] })); }, []);
@@ -113,7 +128,7 @@ export const CityPage = () => {
 
   useEffect(() => {
     if (!d) return;
-    jsonLd({
+    jsonLd([{
       "@context": "https://schema.org", "@type": "CollectionPage",
       name: `Things to do in ${d.name} with Buddilio`,
       about: { "@type": "City", name: d.name, addressCountry: d.country_code },
@@ -122,7 +137,12 @@ export const CityPage = () => {
         "@type": "Event", name: e.title, startDate: e.starts_at,
         location: { "@type": "Place", name: e.venue || d.name, address: `${d.name}, ${d.country}` },
       })),
-    });
+    }, {
+      "@context": "https://schema.org", "@type": "FAQPage",
+      mainEntity: cityFaqs(d).map(([q, a]) => ({
+        "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a },
+      })),
+    }]);
     return () => document.getElementById("city-jsonld")?.remove();
   }, [d]);
 
@@ -213,6 +233,34 @@ export const CityPage = () => {
           </section>
         )}
 
+        {d.guide?.intro && (
+          <section data-testid="city-guide">
+            <p className="overline">City guide</p>
+            <h2 className="mt-1.5 text-2xl font-bold">Where to go out in {d.name}</h2>
+            <p className="mt-4 max-w-3xl text-slate-600 leading-relaxed" data-testid="city-guide-intro">{d.guide.intro}</p>
+            <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {d.guide.areas.map(([area, blurb], i) => (
+                <div key={area} data-testid={`city-area-${i + 1}`}
+                  className="rounded-2xl border border-slate-200 bg-white p-5">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-brand-magenta">
+                    Area {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <p className="mt-2.5 font-display font-bold">{area}</p>
+                  <p className="mt-1.5 text-sm text-slate-500 leading-relaxed">{blurb}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid sm:grid-cols-3 gap-4">
+              {[["When to go out", d.guide.when], ["Getting around", d.guide.around], ["Local tip", d.guide.tip]].map(([label, text]) => (
+                <div key={label} className="rounded-2xl bg-brand-ink/[0.03] border border-slate-200 p-5">
+                  <p className="overline">{label}</p>
+                  <p className="mt-2 text-sm text-slate-600 leading-relaxed">{text}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section>
           <div className="flex items-end justify-between gap-4">
             <h2 className="text-2xl font-bold">Coming up in {d.name}</h2>
@@ -252,6 +300,22 @@ export const CityPage = () => {
         </section>
 
         {d.events_total === 0 && <Waitlist slug={d.slug} city={d.name} waiting={d.waiting} />}
+
+        <section data-testid="city-faq">
+          <p className="overline">Good questions</p>
+          <h2 className="mt-1.5 text-2xl font-bold">Buddilio in {d.name}, answered</h2>
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+            {cityFaqs(d).map(([q, a], i) => (
+              <details key={q} className="group px-5 py-4" data-testid={`city-faq-${i + 1}`}>
+                <summary className="flex cursor-pointer items-center justify-between gap-4 text-sm font-bold marker:content-['']">
+                  {q}
+                  <span className="text-brand-magenta transition-transform group-open:rotate-45">+</span>
+                </summary>
+                <p className="mt-3 text-sm text-slate-600 leading-relaxed">{a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
 
         {d.nearby?.length > 0 && (
           <section>

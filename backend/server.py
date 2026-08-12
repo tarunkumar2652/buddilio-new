@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -25,6 +25,7 @@ from emailer import send_email, wrap
 from realtime import hub
 from push import push_to, push_enabled, vapid_public_key
 from storage import init_storage, put_object, get_object, MIME_TYPES, APP_NAME
+from city_guides import guide_for
 
 try:
     import razorpay
@@ -1440,10 +1441,16 @@ async def referral_leaderboard(month: str = "", user: dict = Depends(get_current
                      "badge": badge_for(lifetime)["name"], "me": uid == user["id"]})
     mine = tally.get(user["id"], 0)
     lifetime = await db.referrals.count_documents({"referrer_id": user["id"], "status": "rewarded"})
-    return {"month": month, "items": rows, "reward": REFERRAL_REWARD,
+    champ = await db.prizes.find_one({"month": last_month()})
+    return {"month": month, "items": rows, "reward": REFERRAL_REWARD, "prize": PRIZE_LABEL,
             "me": {"rank": next((i + 1 for i, (uid, _) in enumerate(ranked) if uid == user["id"]), 0),
                    "invites": mine, "lifetime": lifetime,
                    "credit": round(mine * REFERRAL_REWARD, 2), "badge": badge_for(lifetime)},
+            "champion": {"month": champ["month"], "month_label": month_label(champ["month"]),
+                         "name": champ["name"], "city": champ.get("city", ""),
+                         "photo": champ.get("photo", ""), "invites": champ["invites"],
+                         "prize": champ.get("prize", PRIZE_LABEL),
+                         "me": champ["user_id"] == user["id"]} if champ else None,
             "participants": len(ranked)}
 
 
@@ -1677,6 +1684,139 @@ async def global_search(q: str):
             "products": [clean(p) for p in prods]}
 
 
+CRON_SECRET = os.environ.get("WEBHOOK_CRON_SECRET", "")
+PRIZE_LABEL = "a free Buddilio pass"
+
+
+def cron_guard(authorization: str = Header("")):
+    token = authorization[7:] if authorization[:7].lower() == "bearer " else ""
+    if not CRON_SECRET or not secrets.compare_digest(token, CRON_SECRET):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+async def month_tally(month: str) -> list:
+    docs = await db.referrals.find({"status": "rewarded", "rewarded_at": {"$regex": f"^{month}"}},
+                                   {"referrer_id": 1}).to_list(5000)
+    tally: dict[str, int] = {}
+    for d in docs:
+        tally[d["referrer_id"]] = tally.get(d["referrer_id"], 0) + 1
+    return sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def last_month() -> str:
+    return (now_utc().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+
+
+def month_label(month: str) -> str:
+    try:
+        return datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+    except Exception:
+        return month
+
+
+async def award_monthly_prize(month: str = "") -> dict:
+    """The month's top inviter wins a free pass. Idempotent — one prize per month."""
+    month = month or last_month()
+    existing = await db.prizes.find_one({"month": month})
+    if existing:
+        return {"month": month, "status": "already_awarded", "winner": existing.get("name", "")}
+    ranked = await month_tally(month)
+    if not ranked:
+        return {"month": month, "status": "no_participants"}
+    uid, invites = ranked[0]
+    try:
+        winner = await db.users.find_one({"_id": ObjectId(uid)})
+    except Exception:
+        winner = None
+    if not winner:
+        return {"month": month, "status": "winner_missing"}
+
+    prod = await db.products.find_one({"active": True, "city": winner.get("city", "")},
+                                      sort=[("price", -1)]) \
+        or await db.products.find_one({"active": True}, sort=[("price", -1)])
+    order_id, item = "", PRIZE_LABEL
+    if prod:
+        item = prod["name"]
+        order = {
+            "order_no": "BUD" + uuid.uuid4().hex[:8].upper(), "user_id": uid,
+            "user_email": winner.get("email", ""), "kind": "product", "ref_id": str(prod["_id"]),
+            "item_name": item, "quantity": 1,
+            "subtotal": prod["price"], "discount": prod["price"], "tax": 0.0, "total": 0.0,
+            "tax_percent": 0.0, "tax_label": "Tax", "credit_applied": 0.0, "charge_credit": 0.0,
+            "coupon": "LEADERBOARD", "currency": BASE_CURRENCY, "fx_rate": 1.0,
+            "base_currency": BASE_CURRENCY, "charge_subtotal": prod["price"],
+            "charge_discount": prod["price"], "charge_tax": 0.0, "charge_total": 0.0,
+            "payment_status": "paid", "order_status": "completed", "refund_status": "none",
+            "gateway": "leaderboard_prize", "transaction_id": f"PRIZE-{month}",
+            "prize_month": month, "created_at": iso(now_utc()), "paid_at": iso(now_utc()),
+        }
+        order_id = str((await db.orders.insert_one(order)).inserted_id)
+
+    name = short_name(winner.get("full_name", ""))
+    await db.prizes.insert_one({
+        "month": month, "user_id": uid, "name": name, "city": winner.get("city", ""),
+        "photo": winner.get("photo", ""), "invites": invites, "prize": item,
+        "order_id": order_id, "created_at": iso(now_utc())})
+
+    await notify(uid, f"You won {month_label(month)} on the leaderboard",
+                 f"You brought {invites} friend{'' if invites == 1 else 's'} to Buddilio last month — "
+                 f"the most of anyone. {item} is now in your orders, on us.",
+                 "order", "/orders")
+    for other_id, count in ranked[1:20]:
+        await notify(other_id, f"{name} won {month_label(month)}",
+                     f"{name} topped the invite leaderboard with {invites} friends. You finished with "
+                     f"{count} — the new month's board is open, and the top inviter wins {PRIZE_LABEL}.",
+                     "system", "/referrals", email=False)
+    return {"month": month, "status": "awarded", "winner": name, "invites": invites,
+            "prize": item, "order_id": order_id}
+
+
+async def notify_city_waitlist(city: str) -> int:
+    """Emails everyone waiting on a city the day it opens. One email per address, ever."""
+    if not await db.events.count_documents({"city": city, "status": "published"}):
+        return 0
+    pending = await db.city_waitlist.find({"city": city,
+                                           "notified_at": {"$in": [None, ""]}}).to_list(1000)
+    if not pending:
+        return 0
+    slug = city_slug(city)
+    country = country_for_city(city) or {}
+    live = await db.events.count_documents({"city": city, "status": "published"})
+    for w in pending:
+        ok = await send_email(w["email"], f"Buddilio is now live in {city}", wrap(
+            f"{city} is open",
+            f"<p>You asked us to tell you the moment Buddilio opened in {city} — it just did.</p>"
+            f"<p>There {'is' if live == 1 else 'are'} <b>{live} experience{'' if live == 1 else 's'}</b> "
+            f"on the calendar right now, priced in {country.get('currency', BASE_CURRENCY)}, "
+            "with verified members going to each one.</p>"
+            "<p>Join free, tell us what you enjoy, and book the first night that looks like you.</p>",
+            f"See what's on in {city}", f"{FRONTEND_URL}/city/{slug}"))
+        await db.city_waitlist.update_one({"_id": w["_id"]},
+                                          {"$set": {"notified_at": iso(now_utc()), "email_sent": ok}})
+    logger.info(f"city waitlist: emailed {len(pending)} people about {city}")
+    return len(pending)
+
+
+async def open_city_waitlists() -> dict:
+    cities = await db.city_waitlist.distinct("city", {"notified_at": {"$in": [None, ""]}})
+    sent = {c: await notify_city_waitlist(c) for c in cities}
+    return {"cities": [c for c, n in sent.items() if n], "emails": sum(sent.values())}
+
+
+@api.post("/cron/monthly-prize")
+async def cron_monthly_prize(_: None = Depends(cron_guard)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    asyncio.create_task(award_monthly_prize())
+    return {"ok": True, "queued": "monthly-prize", "month": last_month()}
+
+
+@api.post("/cron/city-openings")
+async def cron_city_openings(_: None = Depends(cron_guard)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    asyncio.create_task(open_city_waitlists())
+    return {"ok": True, "queued": "city-openings"}
+
+
 def city_slug(name: str) -> str:
     out = "".join(ch if ch.isalnum() else "-" for ch in (name or "").lower())
     while "--" in out:
@@ -1752,6 +1892,7 @@ async def city_page(slug: str):
         "members": await db.users.count_documents({"city": city, "role": "user", "status": "active"}),
         "organisers": await db.users.count_documents({"city": city, "role": "partner"}),
         "categories": sorted({e.get("category", "") for e in published if e.get("category")}),
+        "guide": guide_for(city),
         "faces": faces, "quotes": quotes,
         "waiting": await db.city_waitlist.count_documents({"city": city}),
         "nearby": [{"name": n, "slug": city_slug(n)} for n in country["cities"] if n != city][:6],
@@ -1764,11 +1905,14 @@ async def join_city_waitlist(slug: str, body: dict):
     email = (body.get("email") or "").strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
         raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    live = await db.events.count_documents({"city": city, "status": "published"})
     await db.city_waitlist.update_one(
         {"city": city, "email": email},
         {"$set": {"city": city, "email": email, "updated_at": iso(now_utc())},
          "$setOnInsert": {"created_at": iso(now_utc())}}, upsert=True)
-    return {"message": f"You're on the list for {city} — we'll email you the moment we open.",
+    message = (f"Buddilio is already live in {city} — go and see what's on."
+               if live else f"You're on the list for {city} — we'll email you the moment we open.")
+    return {"message": message, "live": live > 0,
             "waiting": await db.city_waitlist.count_documents({"city": city})}
 
 
@@ -1894,6 +2038,8 @@ async def moderate_event(eid: str, body: dict, user: dict = Depends(admin_only))
     if ev.get("partner_id"):
         await notify(ev["partner_id"], f"Event {new_status}",
                      f"{ev['title']} was {new_status} by the Buddilio team.", "event", "/partner")
+    if new_status == "published":
+        asyncio.create_task(notify_city_waitlist(ev["city"]))
     return {"status": new_status}
 
 
@@ -2458,6 +2604,7 @@ async def startup():
     await db.reviews.create_index([("event_id", 1), ("user_id", 1)], unique=True)
     await db.push_subscriptions.create_index("endpoint", unique=True)
     await db.city_waitlist.create_index([("city", 1), ("email", 1)], unique=True)
+    await db.prizes.create_index("month", unique=True)
     await db.push_subscriptions.create_index("user_id")
     await db.referrals.create_index("invitee_id", unique=True)
     await db.referrals.create_index("referrer_id")
