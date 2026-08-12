@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { api, errMsg } from "@/lib/api";
+import { useCurrency } from "@/context/CurrencyContext";
 import { ImageUpload } from "@/components/ImageUpload";
 import { SEO } from "@/components/Shared";
 
@@ -92,6 +93,7 @@ const STEPS = ["Account", "About you", "Interests", "Confirm"];
 
 export function Register() {
   const { register } = useAuth();
+  const { fmt } = useCurrency();
   const nav = useNavigate();
   const [params] = useSearchParams();
   const isPartner = params.get("role") === "partner";
@@ -100,9 +102,16 @@ export function Register() {
   const [meta, setMeta] = useState({ cities: [], categories: [], interests: [] });
   const [f, setF] = useState({
     full_name: "", email: "", mobile: "", password: "", dob: "", gender: "female",
-    city: "Delhi NCR", bio: "", photo: "", interests: [], event_categories: [], lifestyle: [],
+    city: "Delhi NCR", country: "India", bio: "", photo: "", interests: [], event_categories: [], lifestyle: [],
     is_adult: false, accept_terms: false, role: isPartner ? "partner" : "user", org_name: "",
+    referral_code: params.get("ref") || "",
   });
+  const [inviter, setInviter] = useState(null);
+
+  useEffect(() => {
+    const ref = params.get("ref");
+    if (ref) api.get(`/referrals/${ref}`).then(({ data }) => setInviter(data)).catch(() => setInviter(null));
+  }, [params]);
 
   useEffect(() => { api.get("/meta").then(({ data }) => setMeta(data)).catch(() => {}); }, []);
 
@@ -132,6 +141,14 @@ export function Register() {
   return (
     <AuthShell title={isPartner ? "Partner with Buddilio" : "Join Buddilio"} sub={`Step ${step + 1} of 4 · ${STEPS[step]}`}>
       <SEO title="Join Buddilio" />
+      {inviter && (
+        <div className="mb-6 rounded-2xl border border-slate-900/10 bg-slate-900/[0.04] p-4" data-testid="referral-banner">
+          <p className="text-sm font-semibold">{inviter.referrer_name} invited you to Buddilio</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Join with their link and they earn {fmt(inviter.reward)} credit once you make your first booking.
+          </p>
+        </div>
+      )}
       <div className="flex gap-1.5 mb-7">
         {STEPS.map((s, i) => <div key={s} className={`h-1.5 flex-1 rounded-full ${i <= step ? "bg-slate-900" : "bg-slate-200"}`} />)}
       </div>
@@ -158,10 +175,21 @@ export function Register() {
               </select>
             </label>
             <label className="block">
+              <span className="text-xs font-bold text-slate-600">Country</span>
+              <select data-testid="reg-country" value={f.country}
+                onChange={(e) => {
+                  const c = (meta.countries || []).find((x) => x.name === e.target.value);
+                  setF({ ...f, country: e.target.value, city: c?.cities?.[0] || "" });
+                }}
+                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
+                {(meta.countries || []).map((c) => <option key={c.code} value={c.name}>{c.name}</option>)}
+              </select>
+            </label>
+            <label className="block">
               <span className="text-xs font-bold text-slate-600">City</span>
               <select data-testid="reg-city" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                {(meta.cities.length ? meta.cities : ["Delhi NCR"]).map((c) => <option key={c}>{c}</option>)}
+                {(((meta.countries || []).find((c) => c.name === f.country)?.cities) || meta.cities || ["Delhi NCR"]).map((c) => <option key={c}>{c}</option>)}
               </select>
             </label>
             <label className="block">

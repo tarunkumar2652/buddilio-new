@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, BeforeValidator, EmailStr, ConfigDict
 
 from emailer import send_email, wrap
 from realtime import hub
+from push import push_to, push_enabled, vapid_public_key
 from storage import init_storage, put_object, get_object, MIME_TYPES, APP_NAME
 
 try:
@@ -126,6 +127,8 @@ async def audit(actor: dict, action: str, entity: str, entity_id: str = "", meta
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 
+BASE_CURRENCY = os.environ.get("BASE_CURRENCY", "INR")
+
 DEFAULT_CURRENCIES = {
     "INR": {"rate": 1.0, "symbol": "₹", "label": "Indian Rupee", "stripe_min": 4200},
     "USD": {"rate": 0.012, "symbol": "$", "label": "US Dollar", "stripe_min": 50},
@@ -133,8 +136,76 @@ DEFAULT_CURRENCIES = {
     "GBP": {"rate": 0.0094, "symbol": "£", "label": "British Pound", "stripe_min": 30},
     "AED": {"rate": 0.044, "symbol": "AED ", "label": "UAE Dirham", "stripe_min": 200},
     "SGD": {"rate": 0.016, "symbol": "S$", "label": "Singapore Dollar", "stripe_min": 50},
+    "CAD": {"rate": 0.016, "symbol": "C$", "label": "Canadian Dollar", "stripe_min": 50},
+    "AUD": {"rate": 0.018, "symbol": "A$", "label": "Australian Dollar", "stripe_min": 50},
+    "THB": {"rate": 0.39, "symbol": "฿", "label": "Thai Baht", "stripe_min": 1000},
+    "JPY": {"rate": 1.8, "symbol": "¥", "label": "Japanese Yen", "stripe_min": 50},
 }
 ZERO_DECIMAL = {"JPY", "KRW"}
+
+# Buddilio operates city by city. Each country carries its own currency and tax treatment.
+COUNTRIES = [
+    {"code": "IN", "name": "India", "currency": "INR", "tax_percent": 18, "tax_label": "GST",
+     "emergency": "112", "cities": ["Delhi NCR", "Gurugram", "Noida", "Mumbai", "Bengaluru", "Hyderabad", "Pune", "Goa"]},
+    {"code": "AE", "name": "United Arab Emirates", "currency": "AED", "tax_percent": 5, "tax_label": "VAT",
+     "emergency": "999", "cities": ["Dubai", "Abu Dhabi"]},
+    {"code": "SG", "name": "Singapore", "currency": "SGD", "tax_percent": 9, "tax_label": "GST",
+     "emergency": "999", "cities": ["Singapore"]},
+    {"code": "GB", "name": "United Kingdom", "currency": "GBP", "tax_percent": 20, "tax_label": "VAT",
+     "emergency": "999", "cities": ["London", "Manchester"]},
+    {"code": "US", "name": "United States", "currency": "USD", "tax_percent": 8.875, "tax_label": "Sales tax",
+     "emergency": "911", "cities": ["New York", "Los Angeles", "Miami", "Austin"]},
+    {"code": "CA", "name": "Canada", "currency": "CAD", "tax_percent": 13, "tax_label": "HST",
+     "emergency": "911", "cities": ["Toronto", "Vancouver"]},
+    {"code": "AU", "name": "Australia", "currency": "AUD", "tax_percent": 10, "tax_label": "GST",
+     "emergency": "000", "cities": ["Sydney", "Melbourne"]},
+    {"code": "DE", "name": "Germany", "currency": "EUR", "tax_percent": 19, "tax_label": "VAT",
+     "emergency": "112", "cities": ["Berlin"]},
+    {"code": "ES", "name": "Spain", "currency": "EUR", "tax_percent": 21, "tax_label": "VAT",
+     "emergency": "112", "cities": ["Barcelona", "Madrid"]},
+    {"code": "FR", "name": "France", "currency": "EUR", "tax_percent": 20, "tax_label": "VAT",
+     "emergency": "112", "cities": ["Paris"]},
+    {"code": "TH", "name": "Thailand", "currency": "THB", "tax_percent": 7, "tax_label": "VAT",
+     "emergency": "191", "cities": ["Bangkok"]},
+    {"code": "JP", "name": "Japan", "currency": "JPY", "tax_percent": 10, "tax_label": "Consumption tax",
+     "emergency": "110", "cities": ["Tokyo"]},
+]
+COUNTRY_BY_CODE = {c["code"]: c for c in COUNTRIES}
+CITY_COUNTRY = {city: c for c in COUNTRIES for city in c["cities"]}
+
+
+def country_for_city(city: str) -> Optional[dict]:
+    return CITY_COUNTRY.get((city or "").strip())
+
+
+def country_for_currency(currency: str) -> Optional[dict]:
+    return next((c for c in COUNTRIES if c["currency"] == (currency or "").upper()), None)
+
+
+def tax_for(currency: str, fallback_pct: float, country_code: str = "") -> tuple[float, str]:
+    """Tax follows the member's country when it shares the charging currency, else the currency's home country."""
+    cur = (currency or "").upper()
+    home = COUNTRY_BY_CODE.get(country_code or "")
+    if home and home["currency"] == cur:
+        return float(home["tax_percent"]), home["tax_label"]
+    c = country_for_currency(cur)
+    if c:
+        return float(c["tax_percent"]), c["tax_label"]
+    return float(fallback_pct), "Tax"
+
+
+def fmt_money(amount: float, currency: str = "") -> str:
+    cur = (currency or BASE_CURRENCY).upper()
+    conf = DEFAULT_CURRENCIES.get(cur, {})
+    digits = 0 if cur in ZERO_DECIMAL or cur == "INR" else 2
+    return f"{conf.get('symbol', cur + ' ')}{amount:,.{digits}f}"
+
+
+def with_country(doc: dict) -> dict:
+    c = country_for_city(doc.get("city", ""))
+    doc["country"] = doc.get("country") or (c or {}).get("name", "")
+    doc["country_code"] = (c or {}).get("code", "")
+    return doc
 
 
 async def currency_config() -> dict:
@@ -159,6 +230,8 @@ def razorpay_client():
 
 
 EMAIL_TYPES = {"registration", "membership", "order", "event", "refund", "message", "reminder", "moderation"}
+PUSH_TYPES = {"message", "reminder"}
+REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "250"))
 
 
 async def notify(user_id: str, title: str, body: str, ntype: str = "system", link: str = "",
@@ -167,17 +240,26 @@ async def notify(user_id: str, title: str, body: str, ntype: str = "system", lin
         "user_id": user_id, "title": title, "body": body, "type": ntype, "link": link,
         "read": False, "created_at": iso(now_utc()),
     })
-    if not email or ntype not in EMAIL_TYPES:
+    want_email = email and ntype in EMAIL_TYPES
+    want_push = ntype in PUSH_TYPES and push_enabled()
+    if not (want_email or want_push):
         return
     try:
-        user = await db.users.find_one({"_id": ObjectId(user_id)}, {"email": 1, "notification_prefs": 1, "full_name": 1})
+        user = await db.users.find_one({"_id": ObjectId(user_id)},
+                                       {"email": 1, "notification_prefs": 1, "full_name": 1})
     except Exception:
         return
-    if not user or not (user.get("notification_prefs") or {}).get("email", True):
+    if not user:
         return
-    greeting = f"<p>Hi {user.get('full_name', 'there').split(' ')[0]},</p><p>{body}</p>"
-    html = wrap(title, greeting, cta or ("Open Buddilio" if link else ""), f"{FRONTEND_URL}{link}" if link else "")
-    await send_email(user["email"], f"{title} · Buddilio", html)
+    prefs = user.get("notification_prefs") or {}
+    if want_push and prefs.get("push", True):
+        await push_to(db, user_id, {"title": title, "body": body,
+                                    "url": link or "/dashboard", "tag": ntype})
+    if want_email and prefs.get("email", True):
+        greeting = f"<p>Hi {user.get('full_name', 'there').split(' ')[0]},</p><p>{body}</p>"
+        html = wrap(title, greeting, cta or ("Open Buddilio" if link else ""),
+                    f"{FRONTEND_URL}{link}" if link else "")
+        await send_email(user["email"], f"{title} · Buddilio", html)
 
 
 async def membership_active(user_id: str) -> Optional[dict]:
@@ -185,6 +267,66 @@ async def membership_active(user_id: str) -> Optional[dict]:
         {"user_id": user_id, "status": "active", "ends_at": {"$gt": iso(now_utc())}},
         sort=[("ends_at", -1)])
     return clean(m) if m else None
+
+
+# ---------------- referrals & credit ----------------
+def gen_ref_code(name: str) -> str:
+    base = "".join(ch for ch in (name or "").upper() if ch.isalpha())[:6] or "BUDDY"
+    return f"{base}{secrets.token_hex(2).upper()}"
+
+
+async def ensure_ref_code(user_doc: dict) -> str:
+    if user_doc.get("referral_code"):
+        return user_doc["referral_code"]
+    code = ""
+    for _ in range(5):
+        candidate = gen_ref_code(user_doc.get("full_name", ""))
+        if not await db.users.find_one({"referral_code": candidate}):
+            code = candidate
+            break
+    code = code or "BUD" + secrets.token_hex(4).upper()
+    await db.users.update_one({"_id": user_doc["_id"]}, {"$set": {"referral_code": code}})
+    return code
+
+
+async def credit_balance(user_id: str) -> float:
+    docs = await db.credits.find({"user_id": user_id}, {"amount": 1}).to_list(500)
+    return round(sum(d["amount"] for d in docs), 2)
+
+
+async def register_referral(code: str, invitee_id: str, invitee_name: str):
+    code = (code or "").strip().upper()
+    if not code:
+        return
+    ref = await db.users.find_one({"referral_code": code}, {"full_name": 1})
+    if not ref or str(ref["_id"]) == invitee_id:
+        return
+    if await db.referrals.find_one({"invitee_id": invitee_id}):
+        return
+    await db.referrals.insert_one({
+        "referrer_id": str(ref["_id"]), "invitee_id": invitee_id, "invitee_name": invitee_name,
+        "code": code, "status": "joined", "created_at": iso(now_utc())})
+    await notify(str(ref["_id"]), "Your invite was accepted",
+                 f"{invitee_name.split(' ')[0]} joined Buddilio with your link. "
+                 f"You earn ₹{REFERRAL_REWARD:.0f} credit on their first paid booking.",
+                 "system", "/referrals", email=False)
+
+
+async def award_referral(invitee_id: str, order: dict):
+    ref = await db.referrals.find_one({"invitee_id": invitee_id, "status": "joined"})
+    if not ref:
+        return
+    await db.referrals.update_one({"_id": ref["_id"]},
+                                 {"$set": {"status": "rewarded", "rewarded_at": iso(now_utc()),
+                                           "order_id": str(order["_id"])}})
+    await db.credits.insert_one({
+        "user_id": ref["referrer_id"], "amount": REFERRAL_REWARD, "type": "earned",
+        "reason": f"Referral bonus — {ref.get('invitee_name', 'a friend')} made their first booking",
+        "referral_id": str(ref["_id"]), "created_at": iso(now_utc())})
+    await notify(ref["referrer_id"], f"You earned {fmt_money(REFERRAL_REWARD)} Buddilio credit",
+                 f"{ref.get('invitee_name', 'Your friend')} completed their first booking. "
+                 "Your credit is applied automatically at your next checkout.",
+                 "order", "/referrals")
 
 
 # ---------------- models ----------------
@@ -205,6 +347,8 @@ class RegisterIn(BaseModel):
     accept_terms: bool = False
     role: str = "user"
     org_name: str = ""
+    country: str = ""
+    referral_code: str = ""
 
 
 class LoginIn(BaseModel):
@@ -225,6 +369,7 @@ class ProfileIn(BaseModel):
     interests: Optional[List[str]] = None
     event_categories: Optional[List[str]] = None
     lifestyle: Optional[List[str]] = None
+    country: Optional[str] = None
     privacy: Optional[dict] = None
     notification_prefs: Optional[dict] = None
 
@@ -235,6 +380,7 @@ class EventIn(BaseModel):
     description: str = ""
     category: str
     city: str
+    country: str = ""
     venue: str = ""
     starts_at: str
     ends_at: str = ""
@@ -269,7 +415,7 @@ class ProductIn(BaseModel):
     tax_percent: float = 18
     image: str = ""
     validity_days: int = 30
-    city: str = "All India"
+    city: str = "Global"
     inventory: int = 100
     member_discount_percent: float = 10
     price_overrides: dict = {}
@@ -294,6 +440,13 @@ class CheckoutIn(BaseModel):
     quantity: int = 1
     coupon_code: str = ""
     currency: str = "INR"
+    use_credit: bool = True
+
+
+class PushSubIn(BaseModel):
+    endpoint: str
+    keys: dict
+    expirationTime: Optional[int] = None
 
 
 class ReviewIn(BaseModel):
@@ -357,13 +510,16 @@ async def register(payload: RegisterIn, response: Response):
         "bio": payload.bio, "photo": payload.photo, "interests": payload.interests,
         "event_categories": payload.event_categories, "lifestyle": payload.lifestyle,
         "verified": False, "email_verified": False, "org_name": payload.org_name,
+        "country": payload.country or (country_for_city(payload.city) or {}).get("name", ""),
+        "country_code": (country_for_city(payload.city) or {}).get("code", ""),
         "privacy": {"profile_visibility": "public", "who_can_message": "everyone"},
-        "notification_prefs": {"email": True, "in_app": True, "sms": False},
+        "notification_prefs": {"email": True, "in_app": True, "sms": False, "push": True},
         "blocked": [], "connections": [], "saved_events": [],
         "created_at": iso(now_utc()),
     }
     res = await db.users.insert_one(doc)
     uid = str(res.inserted_id)
+    await register_referral(payload.referral_code, uid, payload.full_name)
     await notify(uid, "Welcome to Buddilio", "Complete your profile to get better companion matches.", "registration", "/profile")
     await send_email(email, "Welcome to Buddilio", wrap(
         f"Welcome to Buddilio, {payload.full_name.split(' ')[0]}",
@@ -482,6 +638,10 @@ async def google_session(payload: GoogleSessionIn, response: Response):
 @api.put("/users/me")
 async def update_me(payload: ProfileIn, user: dict = Depends(get_current_user)):
     upd = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if upd.get("city"):
+        c = country_for_city(upd["city"])
+        if c:
+            upd["country"], upd["country_code"] = c["name"], c["code"]
     if upd:
         await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": upd})
     return clean(await db.users.find_one({"_id": ObjectId(user["id"])}))
@@ -492,7 +652,7 @@ PUBLIC_FIELDS = {"full_name": 1, "age": 1, "city": 1, "bio": 1, "photo": 1, "int
 
 
 @api.get("/discover")
-async def discover(city: str = "", interest: str = "", category: str = "",
+async def discover(city: str = "", country: str = "", interest: str = "", category: str = "",
                    min_age: int = 21, max_age: int = 99, q: str = "",
                    page: int = 1, limit: int = 12, user: dict = Depends(get_current_user)):
     me_doc = await db.users.find_one({"_id": ObjectId(user["id"])})
@@ -502,6 +662,8 @@ async def discover(city: str = "", interest: str = "", category: str = "",
                            "privacy.profile_visibility": {"$ne": "private"}}
     if city:
         flt["city"] = city
+    if country:
+        flt["country"] = country
     if interest:
         flt["interests"] = interest
     if category:
@@ -562,7 +724,7 @@ async def create_report(payload: ReportIn, user: dict = Depends(get_current_user
 
 # ---------------- events ----------------
 @api.get("/events")
-async def list_events(q: str = "", city: str = "", category: str = "", max_price: float = -1,
+async def list_events(q: str = "", city: str = "", country: str = "", category: str = "", max_price: float = -1,
                       featured: Optional[bool] = None, when: str = "", sort: str = "date",
                       page: int = 1, limit: int = 12):
     flt: dict[str, Any] = {"status": "published"}
@@ -570,6 +732,8 @@ async def list_events(q: str = "", city: str = "", category: str = "", max_price
         flt["title"] = {"$regex": q, "$options": "i"}
     if city:
         flt["city"] = city
+    if country:
+        flt["country"] = country
     if category:
         flt["category"] = category
     if max_price >= 0:
@@ -585,7 +749,19 @@ async def list_events(q: str = "", city: str = "", category: str = "", max_price
     total = await db.events.count_documents(flt)
     sort_key = [("rating", -1)] if sort == "rating" else [("participant_count", -1)] if sort == "popular" else [("starts_at", 1)]
     docs = await db.events.find(flt).sort(sort_key).skip((page - 1) * limit).limit(limit).to_list(limit)
-    return {"items": [clean(d) for d in docs], "total": total, "page": page}
+    items = []
+    for d in docs:
+        e = clean(d)
+        if e.get("rating_count"):
+            top = await db.reviews.find_one(
+                {"event_id": e["id"], "status": {"$ne": "hidden"}, "comment": {"$nin": ["", None]}},
+                sort=[("rating", -1), ("created_at", -1)])
+            if top:
+                u = await db.users.find_one({"_id": ObjectId(top["user_id"])}, {"full_name": 1})
+                e["top_review"] = {"rating": top["rating"], "comment": top["comment"][:160],
+                                   "user_name": (u["full_name"] if u else "Member").split(" ")[0]}
+        items.append(e)
+    return {"items": items, "total": total, "page": page}
 
 
 @api.get("/events/{event_id}")
@@ -687,7 +863,7 @@ async def saved_events(user: dict = Depends(get_current_user)):
 # ---------------- partner ----------------
 @api.post("/partner/events")
 async def create_event(payload: EventIn, submit: bool = False, user: dict = Depends(partner_only)):
-    doc = payload.model_dump()
+    doc = with_country(payload.model_dump())
     doc.update({"partner_id": user["id"], "partner_name": user.get("org_name") or user["full_name"],
                 "status": "submitted" if submit else "draft", "participant_count": 0,
                 "created_at": iso(now_utc())})
@@ -701,7 +877,7 @@ async def update_event(event_id: str, payload: EventIn, user: dict = Depends(par
     ev = await db.events.find_one({"_id": ObjectId(event_id)})
     if not ev or (user["role"] != "admin" and ev.get("partner_id") != user["id"]):
         raise HTTPException(status_code=404, detail="Event not found")
-    await db.events.update_one({"_id": ev["_id"]}, {"$set": payload.model_dump()})
+    await db.events.update_one({"_id": ev["_id"]}, {"$set": with_country(payload.model_dump())})
     return clean(await db.events.find_one({"_id": ev["_id"]}))
 
 
@@ -767,10 +943,13 @@ async def plans():
 
 
 @api.get("/products")
-async def products(city: str = "", q: str = ""):
+async def products(city: str = "", country: str = "", q: str = ""):
     flt: dict[str, Any] = {"active": True}
     if city:
-        flt["city"] = {"$in": [city, "All India"]}
+        flt["city"] = {"$in": [city, "Global", "All India"]}
+    elif country:
+        cities = (next((c for c in COUNTRIES if c["name"] == country), {}) or {}).get("cities", [])
+        flt["city"] = {"$in": cities + [country, "Global", "All India"]}
     if q:
         flt["name"] = {"$regex": q, "$options": "i"}
     docs = await db.products.find(flt).to_list(100)
@@ -816,7 +995,8 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
         if coupon.get("expires_at") and coupon["expires_at"] < iso(now_utc()):
             raise HTTPException(status_code=400, detail="This coupon has expired.")
         if subtotal < coupon.get("min_order", 0):
-            raise HTTPException(status_code=400, detail=f"Coupon needs a minimum order of ₹{coupon['min_order']:.0f}.")
+            raise HTTPException(status_code=400,
+                                detail=f"Coupon needs a minimum order of {fmt_money(coupon['min_order'])}.")
         if coupon.get("members_only") and not member:
             raise HTTPException(status_code=400, detail="This coupon is for premium members only.")
         used = await db.coupon_usage.count_documents({"code": coupon["code"]})
@@ -824,17 +1004,19 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
             raise HTTPException(status_code=400, detail="This coupon has reached its usage limit.")
         discount += round(subtotal * coupon["value"] / 100, 2) if coupon["discount_type"] == "percent" else coupon["value"]
     discount = min(discount, subtotal)
+
+    currency = (payload.currency or BASE_CURRENCY).upper()
+    rates = await fx_rates()
+    if currency not in rates:
+        raise HTTPException(status_code=400, detail="We don't support that currency yet.")
+    tax_pct, tax_label = tax_for(currency, tax_pct, user.get("country_code", ""))
     taxable = subtotal - discount
     tax = round(taxable * tax_pct / 100, 2)
     total = round(taxable + tax, 2)
 
-    currency = (payload.currency or "INR").upper()
-    rates = await fx_rates()
-    if currency not in rates:
-        raise HTTPException(status_code=400, detail="We don't support that currency yet.")
     rate = rates[currency]
     override = (item.get("price_overrides") or {}).get(currency)
-    if override and currency != "INR":
+    if override and currency != BASE_CURRENCY:
         # Admin-set price for this currency wins over the auto-converted amount.
         c_sub = round(float(override) * max(payload.quantity, 1), 2)
         ratio = (c_sub / subtotal) if subtotal else rate
@@ -846,19 +1028,30 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
         c_sub, c_disc = round(subtotal * rate, 2), round(discount * rate, 2)
         c_tax, c_total = round(tax * rate, 2), round(total * rate, 2)
 
+    credit, c_credit = 0.0, 0.0
+    if payload.use_credit and total > 1:
+        bal = await credit_balance(user["id"])
+        if bal > 0:
+            credit = round(min(bal, total - 1), 2)
+            c_credit = round(credit * (c_total / total), 2) if total else 0.0
+            total, c_total = round(total - credit, 2), round(c_total - c_credit, 2)
+
     order = {
         "order_no": "BUD" + uuid.uuid4().hex[:8].upper(), "user_id": user["id"], "user_email": user["email"],
         "kind": payload.kind, "ref_id": payload.item_id, "item_name": name, "quantity": payload.quantity,
         "subtotal": subtotal, "discount": discount, "tax": tax, "total": total,
+        "tax_percent": tax_pct, "tax_label": tax_label,
+        "credit_applied": credit, "charge_credit": c_credit,
         "coupon": coupon["code"] if coupon else "", "currency": currency, "fx_rate": rate,
-        "base_currency": "INR", "charge_subtotal": c_sub, "charge_discount": c_disc,
+        "base_currency": BASE_CURRENCY, "charge_subtotal": c_sub, "charge_discount": c_disc,
         "charge_tax": c_tax, "charge_total": c_total,
         "payment_status": "pending", "order_status": "created", "refund_status": "none",
         "gateway": "razorpay_sim" if currency == "INR" else "stripe",
         "transaction_id": "", "created_at": iso(now_utc()),
     }
     res = await db.orders.insert_one(order)
-    return {"order": clean(await db.orders.find_one({"_id": res.inserted_id}))}
+    return {"order": clean(await db.orders.find_one({"_id": res.inserted_id})),
+            "credit_balance": await credit_balance(user["id"])}
 
 
 async def mark_failed(order: dict, reason: str = ""):
@@ -885,9 +1078,19 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
     if order.get("coupon"):
         await db.coupon_usage.insert_one({"code": order["coupon"], "user_id": uid,
                                           "order_id": str(order["_id"]), "created_at": iso(now_utc())})
+    if order.get("credit_applied", 0) > 0:
+        await db.credits.update_one(
+            {"order_id": str(order["_id"]), "type": "spent"},
+            {"$setOnInsert": {"user_id": uid, "amount": -float(order["credit_applied"]), "type": "spent",
+                              "reason": f"Credit applied to order #{order['order_no']}",
+                              "order_id": str(order["_id"]), "created_at": iso(now_utc())}},
+            upsert=True)
+    await award_referral(uid, order)
     receipt = (f"<p><b>{order['item_name']}</b></p>"
-               f"<p>Order <b>#{order['order_no']}</b><br/>Amount paid: <b>₹{order['total']:,.0f}</b>"
-               f" (incl. ₹{order['tax']:,.0f} GST)<br/>Payment ID: {txn}</p>")
+               f"<p>Order <b>#{order['order_no']}</b><br/>Amount paid: "
+               f"<b>{fmt_money(order.get('charge_total', order['total']), order.get('currency'))}</b>"
+               f" (incl. {fmt_money(order.get('charge_tax', order['tax']), order.get('currency'))}"
+               f" {order.get('tax_label', 'tax')})<br/>Payment ID: {txn}</p>")
 
     if order["kind"] == "membership":
         plan = await db.membership_plans.find_one({"_id": ObjectId(order["ref_id"])})
@@ -1167,6 +1370,66 @@ async def my_orders(user: dict = Depends(get_current_user)):
     return {"items": [clean(d) for d in docs]}
 
 
+# ---------------- referrals / credit / push ----------------
+@api.get("/me/referrals")
+async def my_referrals(user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])})
+    code = await ensure_ref_code(doc)
+    invites = [{"name": r.get("invitee_name", ""), "status": r["status"],
+                "created_at": r["created_at"], "rewarded_at": r.get("rewarded_at", "")}
+               for r in await db.referrals.find({"referrer_id": user["id"]}).sort([("created_at", -1)]).to_list(200)]
+    credits = [clean(c) for c in await db.credits.find({"user_id": user["id"]}).sort([("created_at", -1)]).to_list(100)]
+    return {"code": code, "link": f"{FRONTEND_URL}/register?ref={code}", "reward": REFERRAL_REWARD,
+            "balance": await credit_balance(user["id"]), "invites": invites, "credits": credits,
+            "joined": len(invites), "rewarded": sum(1 for i in invites if i["status"] == "rewarded")}
+
+
+@api.get("/referrals/{code}")
+async def referral_lookup(code: str):
+    u = await db.users.find_one({"referral_code": code.strip().upper()}, {"full_name": 1})
+    if not u:
+        raise HTTPException(status_code=404, detail="That invite link is not valid any more.")
+    return {"referrer_name": u["full_name"].split(" ")[0], "reward": REFERRAL_REWARD}
+
+
+@api.get("/push/config")
+async def push_config():
+    return {"enabled": push_enabled(), "public_key": vapid_public_key()}
+
+
+@api.post("/push/subscribe")
+async def push_subscribe(payload: PushSubIn, user: dict = Depends(get_current_user)):
+    if not payload.keys.get("p256dh") or not payload.keys.get("auth"):
+        raise HTTPException(status_code=400, detail="This device sent an invalid push subscription.")
+    await db.push_subscriptions.update_one(
+        {"endpoint": payload.endpoint},
+        {"$set": {"user_id": user["id"], "endpoint": payload.endpoint, "keys": payload.keys,
+                  "updated_at": iso(now_utc())},
+         "$setOnInsert": {"created_at": iso(now_utc())}}, upsert=True)
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"notification_prefs.push": True}})
+    return {"ok": True}
+
+
+@api.post("/push/unsubscribe")
+async def push_unsubscribe(body: dict, user: dict = Depends(get_current_user)):
+    await db.push_subscriptions.delete_many({"user_id": user["id"],
+                                             "endpoint": body.get("endpoint", "")})
+    if not await db.push_subscriptions.find_one({"user_id": user["id"]}):
+        await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"notification_prefs.push": False}})
+    return {"ok": True}
+
+
+@api.post("/push/test")
+async def push_test(user: dict = Depends(get_current_user)):
+    sent = await push_to(db, user["id"], {
+        "title": "Buddilio alerts are on",
+        "body": "This is how a new message or an event reminder will reach you.",
+        "url": "/dashboard", "tag": "test"})
+    if not sent:
+        raise HTTPException(status_code=400, detail="No active device found. Turn alerts on for this device first.")
+    return {"sent": sent}
+
+
 # ---------------- messaging ----------------
 @api.post("/conversations")
 async def start_conversation(body: dict, user: dict = Depends(get_current_user)):
@@ -1353,11 +1616,21 @@ async def global_search(q: str):
 
 @api.get("/meta")
 async def meta():
-    cities = await db.cities.find({}).to_list(100)
+    extra = await db.cities.find({}).to_list(300)
     cats = await db.event_categories.find({}).to_list(100)
     ints = await db.interests.find({}).to_list(200)
     conf = await currency_config()
-    return {"cities": [c["name"] for c in cities], "categories": [c["name"] for c in cats],
+    countries = []
+    for c in COUNTRIES:
+        cities = list(c["cities"])
+        for e in extra:
+            if e.get("country_code") == c["code"] and e["name"] not in cities:
+                cities.append(e["name"])
+        countries.append({**c, "cities": sorted(cities)})
+    return {"countries": countries,
+            "cities": [city for c in countries for city in c["cities"]],
+            "base_currency": BASE_CURRENCY,
+            "categories": [c["name"] for c in cats],
             "interests": [i["name"] for i in ints],
             "currencies": [{"code": k, **v} for k, v in conf.items()],
             "settings": clean(await db.settings.find_one({}) or {"_id": ObjectId(), "platform_name": "Buddilio"})}
@@ -1500,7 +1773,7 @@ async def refund_order(oid: str, user: dict = Depends(admin_only)):
             await db.events.update_one({"_id": ObjectId(order["ref_id"])}, {"$set": {"participant_count": count}})
     await audit(user, "order.refund", "order", oid, {"amount": order["total"], "refund_id": gateway_ref})
     await notify(order["user_id"], "Refund processed",
-                 f"₹{order['total']:.0f} for {order['item_name']} has been refunded. "
+                 f"{fmt_money(order.get('charge_total', order['total']), order.get('currency'))} for {order['item_name']} has been refunded. "
                  "It reaches your original payment method in 5-7 working days.", "refund", "/orders")
     return {"refund_status": "refunded", "refund_id": gateway_ref}
 
@@ -1906,7 +2179,7 @@ async def pay_payout(pid: str, body: dict, user: dict = Depends(admin_only)):
                                 {"$set": {"status": "paid", "reference": ref, "paid_at": iso(now_utc())}})
     await audit(user, "payout.pay", "payout", pid, {"net": payout["net"], "reference": ref})
     await notify(payout["partner_id"], "Payout settled",
-                 f"₹{payout['net']:,.0f} for {payout['event_title']} has been transferred. Reference {ref}.",
+                 f"{fmt_money(payout['net'])} for {payout['event_title']} has been transferred. Reference {ref}.",
                  "order", "/partner")
     return {"status": "paid", "reference": ref}
 
@@ -2025,6 +2298,12 @@ async def startup():
     await db.orders.create_index([("user_id", 1), ("created_at", -1)])
     await db.payouts.create_index("event_id", unique=True)
     await db.reviews.create_index([("event_id", 1), ("user_id", 1)], unique=True)
+    await db.push_subscriptions.create_index("endpoint", unique=True)
+    await db.push_subscriptions.create_index("user_id")
+    await db.referrals.create_index("invitee_id", unique=True)
+    await db.referrals.create_index("referrer_id")
+    await db.credits.create_index([("user_id", 1), ("created_at", -1)])
+    await db.users.create_index("referral_code", sparse=True)
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]

@@ -18,8 +18,18 @@ export function errMsg(e) {
   return "Something went wrong. Please try again.";
 }
 
-export const money = (n) =>
-  "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+let baseCurrency = "INR";
+export const setBaseCurrency = (c) => { baseCurrency = (c || "INR").toUpperCase(); };
+
+export const money = (n, currency) => {
+  const cur = (currency || baseCurrency).toUpperCase();
+  const digits = cur === "INR" || cur === "JPY" ? 0 : 2;
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur, maximumFractionDigits: digits }).format(Number(n || 0));
+  } catch {
+    return `${cur} ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: digits })}`;
+  }
+};
 
 export const fileUrl = (u) => {
   if (!u) return "";
@@ -30,13 +40,13 @@ export const fileUrl = (u) => {
 export const fmtDate = (s) => {
   if (!s) return "";
   try {
-    return new Date(s).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    return new Date(s).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   } catch { return ""; }
 };
 
 export const fmtTime = (s) => {
   if (!s) return "";
   try {
-    return new Date(s).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+    return new Date(s).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   } catch { return ""; }
 };

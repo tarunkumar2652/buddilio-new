@@ -184,7 +184,7 @@ export default function Messages() {
                         {!mine && current.type === "event" && <p className="text-[11px] font-bold text-slate-500 mb-0.5">{m.sender_name}</p>}
                         <p className="text-sm whitespace-pre-wrap break-words">{m.body}</p>
                         <p className={`text-[10px] mt-1 ${mine ? "text-slate-400" : "text-slate-500"}`}>
-                          {new Date(m.created_at).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}
+                          {new Date(m.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
                           {mine && (m.read ? " · Read" : " · Sent")}
                         </p>
                       </div>

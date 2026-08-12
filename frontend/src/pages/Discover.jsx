@@ -6,11 +6,12 @@ import { useAuth } from "@/context/AuthContext";
 import { PersonCard } from "@/components/Cards";
 import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
+import { PushToggle } from "@/components/PushToggle";
 import { MessageCircle, UserPlus, Ban, Flag, CalendarDays, Ticket } from "lucide-react";
 
 export function Discover() {
-  const [meta, setMeta] = useState({ cities: [], categories: [], interests: [] });
-  const [f, setF] = useState({ city: "", interest: "", category: "", min_age: 21, max_age: 60, q: "" });
+  const [meta, setMeta] = useState({ cities: [], countries: [], categories: [], interests: [] });
+  const [f, setF] = useState({ country: "", city: "", interest: "", category: "", min_age: 21, max_age: 60, q: "" });
   const [data, setData] = useState(null);
   const [page, setPage] = useState(1);
 
@@ -22,20 +23,29 @@ export function Discover() {
   }, [f, page]);
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
 
+  const cityOptions = f.country
+    ? (meta.countries || []).find((c) => c.name === f.country)?.cities || []
+    : meta.cities || [];
+
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-10 pb-28" data-testid="discover-page">
       <SEO title="Discover companions" />
       <p className="overline">Social discovery</p>
       <h1 className="mt-2 text-3xl sm:text-4xl font-bold">Find your people</h1>
-      <p className="mt-3 text-slate-600 max-w-2xl">Members near you who like the same things. Connect, chat, then pick an experience together.</p>
+      <p className="mt-3 text-slate-600 max-w-2xl">Members in your city — or the one you're flying into next week. Connect, chat, then pick an experience together.</p>
 
-      <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 grid gap-3 md:grid-cols-5">
+      <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 grid gap-3 md:grid-cols-6">
         <input data-testid="discover-search" placeholder="Search by name…" value={f.q}
           onChange={(e) => { setPage(1); setF({ ...f, q: e.target.value }); }}
           className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-slate-900" />
+        <select data-testid="discover-country" value={f.country} onChange={(e) => { setPage(1); setF({ ...f, country: e.target.value, city: "" }); }}
+          className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">All countries</option>{(meta.countries || []).map((c) => <option key={c.code} value={c.name}>{c.name}</option>)}
+        </select>
         <select data-testid="discover-city" value={f.city} onChange={(e) => { setPage(1); setF({ ...f, city: e.target.value }); }}
           className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
-          <option value="">All cities</option>{meta.cities.map((c) => <option key={c}>{c}</option>)}
+          <option value="">{f.country ? `All cities in ${f.country}` : "All cities"}</option>
+          {cityOptions.map((c) => <option key={c}>{c}</option>)}
         </select>
         <select data-testid="discover-interest" value={f.interest} onChange={(e) => { setPage(1); setF({ ...f, interest: e.target.value }); }}
           className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
@@ -116,7 +126,7 @@ export function PublicProfile() {
   const invite = async (ev) => {
     try {
       const { data } = await api.post("/conversations", { user_id: id });
-      await api.post(`/conversations/${data.id}/messages`, { body: `Hey! Want to join me at "${ev.title}" on ${new Date(ev.starts_at).toLocaleDateString("en-IN")}? ${window.location.origin}/events/${ev.id}` });
+      await api.post(`/conversations/${data.id}/messages`, { body: `Hey! Want to join me at "${ev.title}" on ${new Date(ev.starts_at).toLocaleDateString(undefined)}? ${window.location.origin}/events/${ev.id}` });
       toast.success("Invitation sent in chat");
       nav(`/messages?c=${data.id}`);
     } catch (e) { toast.error(errMsg(e)); }
@@ -136,7 +146,7 @@ export function PublicProfile() {
                 {p.full_name}{p.membership && <Badge tone="dark">Premium</Badge>}
               </h1>
               <p className="text-sm text-slate-500 mt-1">
-                {p.age ? `${p.age} · ` : ""}{p.city} · Joined {new Date(p.created_at).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}
+                {p.age ? `${p.age} · ` : ""}{p.city} · Joined {new Date(p.created_at).toLocaleDateString(undefined, { month: "short", year: "numeric" })}
               </p>
             </div>
           </div>
@@ -206,7 +216,7 @@ export function PublicProfile() {
 
 export function MyProfile() {
   const { user, refresh } = useAuth();
-  const [meta, setMeta] = useState({ cities: [], categories: [], interests: [] });
+  const [meta, setMeta] = useState({ cities: [], countries: [], categories: [], interests: [] });
   const [f, setF] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -214,7 +224,7 @@ export function MyProfile() {
   useEffect(() => {
     if (user) setF({
       full_name: user.full_name || "", bio: user.bio || "", city: user.city || "", photo: user.photo || "",
-      interests: user.interests || [], event_categories: user.event_categories || [], lifestyle: user.lifestyle || [],
+      country: user.country || "", interests: user.interests || [], event_categories: user.event_categories || [], lifestyle: user.lifestyle || [],
       privacy: user.privacy || { profile_visibility: "public", who_can_message: "everyone" },
       notification_prefs: user.notification_prefs || { email: true, in_app: true, sms: false },
     });
@@ -245,11 +255,23 @@ export function MyProfile() {
           <label className="block"><span className="text-xs font-bold text-slate-600">Bio</span>
             <textarea data-testid="profile-bio" rows={3} value={f.bio} onChange={(e) => setF({ ...f, bio: e.target.value })}
               className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
-          <label className="block"><span className="text-xs font-bold text-slate-600">City</span>
-            <select data-testid="profile-city" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })}
-              className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
-              {meta.cities.map((c) => <option key={c}>{c}</option>)}
-            </select></label>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <label className="block"><span className="text-xs font-bold text-slate-600">Country</span>
+              <select data-testid="profile-country" value={f.country}
+                onChange={(e) => {
+                  const c = (meta.countries || []).find((x) => x.name === e.target.value);
+                  setF({ ...f, country: e.target.value, city: c?.cities?.[0] || f.city });
+                }}
+                className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
+                <option value="">Select country</option>
+                {(meta.countries || []).map((c) => <option key={c.code} value={c.name}>{c.name}</option>)}
+              </select></label>
+            <label className="block"><span className="text-xs font-bold text-slate-600">City</span>
+              <select data-testid="profile-city" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })}
+                className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
+                {((meta.countries || []).find((c) => c.name === f.country)?.cities || meta.cities).map((c) => <option key={c}>{c}</option>)}
+              </select></label>
+          </div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6">
@@ -298,6 +320,7 @@ export function MyProfile() {
               </label>
             ))}
           </div>
+          <div className="mt-5"><PushToggle /></div>
         </div>
 
         <div className="flex flex-wrap gap-3">

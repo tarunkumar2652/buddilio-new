@@ -33,6 +33,15 @@ export const EventCard = ({ ev, className = "" }) => {
           <p className="flex items-center gap-2"><MapPin className="h-4 w-4" />{ev.venue || ev.city}</p>
           <p className="flex items-center gap-2"><Users className="h-4 w-4" />{ev.participant_count || 0} going · {ev.capacity} spots</p>
         </div>
+        {ev.top_review?.comment && (
+          <div className="mt-4 border-t border-slate-100 pt-3" data-testid={`event-quote-${ev.id}`}>
+            <div className="flex items-center gap-1.5">
+              <Stars value={ev.top_review.rating} size="h-3 w-3" />
+              <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">{ev.top_review.user_name}</span>
+            </div>
+            <p className="mt-1.5 text-xs text-slate-500 italic leading-relaxed line-clamp-2">“{ev.top_review.comment}”</p>
+          </div>
+        )}
       </div>
     </Link>
   );

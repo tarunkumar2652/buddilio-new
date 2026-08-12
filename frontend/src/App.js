@@ -14,6 +14,7 @@ import Messages from "@/pages/Messages";
 import { Membership, Passes, Checkout } from "@/pages/Commerce";
 import { PaymentSuccess, PaymentCancel } from "@/pages/Payment";
 import { CmsPage, Safety } from "@/pages/Content";
+import Referrals from "@/pages/Referrals";
 import PartnerDashboard from "@/pages/Partner";
 import Admin from "@/pages/Admin";
 import "@/index.css";
@@ -55,6 +56,7 @@ function Shell() {
           <Route path="/saved" element={<Protected><SavedEvents /></Protected>} />
           <Route path="/notifications" element={<Protected><Notifications /></Protected>} />
           <Route path="/profile" element={<Protected><MyProfile /></Protected>} />
+          <Route path="/referrals" element={<Protected><Referrals /></Protected>} />
           <Route path="/checkout" element={<Protected><Checkout /></Protected>} />
           <Route path="/partner" element={<Protected roles={["partner", "admin"]}><PartnerDashboard /></Protected>} />
           <Route path="/admin" element={<Protected roles={["admin"]}><Admin /></Protected>} />

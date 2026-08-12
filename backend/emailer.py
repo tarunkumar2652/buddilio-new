@@ -34,7 +34,7 @@ def wrap(title: str, body_html: str, cta_label: str = "", cta_url: str = "") -> 
 {cta}
 <tr><td style="padding:20px 32px;border-top:1px solid #F1F5F9;color:#94A3B8;font-size:12px;line-height:1.6;">
   Buddilio is a social discovery platform, not a dating service. Always meet in public places and never transfer money to another member.<br/>
-  © Buddilio Experiences Pvt. Ltd., Gurugram, India
+  © Buddilio Experiences · a global social club
 </td></tr>
 </table></td></tr></table></body></html>"""
 

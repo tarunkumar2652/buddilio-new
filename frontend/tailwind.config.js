@@ -13,6 +13,29 @@ module.exports = {
         sm: 'calc(var(--radius) - 4px)'
       },
       colors: {
+        // Buddilio brand — sampled from the logo lockup
+        brand: {
+          coral: '#FF9A62',
+          pink: '#F0459B',
+          magenta: '#E81E7C',
+          violet: '#6B34CD',
+          plum: '#52146F',
+          ink: '#2A0836'
+        },
+        // Neutral scale is plum-tinted so every existing slate-* class rebrands at once
+        slate: {
+          50: '#FBF6FA',
+          100: '#F6EDF5',
+          200: '#ECDEEC',
+          300: '#D8C0DA',
+          400: '#A98BB0',
+          500: '#7C5C86',
+          600: '#5E4069',
+          700: '#45294F',
+          800: '#341C3D',
+          900: '#2A0836',
+          950: '#1B0424'
+        },
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',
         card: {
@@ -54,6 +77,14 @@ module.exports = {
           '5': 'hsl(var(--chart-5))'
         }
       },
+      backgroundImage: {
+        'brand-gradient': 'linear-gradient(120deg, #FF9A62 0%, #F0459B 42%, #6B34CD 100%)',
+        'brand-soft': 'linear-gradient(140deg, rgba(255,154,98,.18) 0%, rgba(240,69,155,.16) 45%, rgba(107,52,205,.18) 100%)'
+      },
+      boxShadow: {
+        glow: '0 12px 34px rgba(232,30,124,.30)',
+        'glow-lg': '0 20px 50px rgba(232,30,124,.34)'
+      },
       keyframes: {
         'accordion-down': {
           from: {
@@ -70,11 +101,16 @@ module.exports = {
           to: {
             height: '0'
           }
+        },
+        marquee: {
+          from: { transform: 'translateX(0)' },
+          to: { transform: 'translateX(-50%)' }
         }
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
-        'accordion-up': 'accordion-up 0.2s ease-out'
+        'accordion-up': 'accordion-up 0.2s ease-out',
+        marquee: 'marquee 32s linear infinite'
       }
     }
   },

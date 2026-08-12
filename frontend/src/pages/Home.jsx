@@ -16,13 +16,13 @@ const FAQS = [
   ["Do I need a paid membership?", "No. Browsing, free events and basic messaging are open to every verified member. Premium unlocks discounts and priority access."],
   ["How do you keep members safe?", "Email and mobile verification, active moderation, one-tap block and report, and a safety team that reviews every report."],
   ["Can I attend an event alone?", "Most members do. Hosts make introductions at the door so nobody stands around awkwardly."],
-  ["Which cities are live?", "We're strongest in Delhi NCR, Gurugram and Noida, with growing communities in Mumbai, Bengaluru, Pune, Hyderabad and Goa."],
+  ["Which cities are live?", "Buddilio runs in 27 cities across 12 countries — Delhi NCR, Mumbai, Bengaluru, Hyderabad, Pune and Goa in India, plus Dubai, Abu Dhabi, Singapore, London, Manchester, New York, Los Angeles, Miami, Austin, Toronto, Vancouver, Sydney, Melbourne, Berlin, Barcelona, Madrid, Paris, Bangkok and Tokyo. Not live where you are? Join anyway — we open cities where members ask for them."],
 ];
 
 const TESTIMONIALS = [
-  ["Moved to Gurugram for work and knew nobody. Three Buddilio dinners later I have a proper weekend crew.", "Ritika S.", "Gurugram"],
-  ["I had concert tickets and no one to go with. Found two members going to the same gig in ten minutes.", "Aman T.", "Delhi NCR"],
-  ["The vetting makes the difference. It never feels like a random internet meetup.", "Neha P.", "Mumbai"],
+  ["Moved to Dubai for work and knew nobody. Three Buddilio dinners later I have a proper weekend crew.", "Ritika S.", "Dubai"],
+  ["I had concert tickets and no one to go with. Found two members going to the same gig in ten minutes.", "Aman T.", "London"],
+  ["The vetting makes the difference. It never feels like a random internet meetup.", "Sofia M.", "Barcelona"],
 ];
 
 export default function Home() {
@@ -44,21 +44,25 @@ export default function Home() {
 
       {/* HERO */}
       <section className="relative overflow-hidden bg-slate-900 text-white grain">
-        <img src={HERO} alt="" className="absolute inset-0 h-full w-full object-cover opacity-35" />
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/85 to-slate-900/40" />
+        <img src={HERO} alt="" className="absolute inset-0 h-full w-full object-cover opacity-45" />
+        <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/85 to-slate-900/25" />
+        <div className="aurora" />
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 py-24 sm:py-32 lg:py-40">
           <div className="max-w-2xl fade-up">
-            <p className="overline text-slate-300">Delhi NCR · Mumbai · Bengaluru · Goa</p>
-            <h1 className="mt-5 text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.05]">
-              Great nights out shouldn't depend on who's free.
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white/85" data-testid="hero-tagline">
+              <img src="/brand/mark.png" alt="" className="h-4 w-4 object-contain" />Your Vibe, Your Buddy
+            </span>
+            <h1 className="mt-6 text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.05]">
+              Great nights out shouldn't <span className="text-gradient">depend on who's free.</span>
             </h1>
-            <p className="mt-6 text-base md:text-lg text-slate-300 leading-relaxed max-w-xl">
-              Buddilio is a curated social club for adults. Discover parties, dinners, concerts and getaways —
-              then find verified companions who actually want to go.
+            <p className="mt-6 text-base md:text-lg text-white/75 leading-relaxed max-w-xl">
+              Buddilio is a curated social club for adults, live in 27 cities worldwide. Discover parties, dinners,
+              concerts and getaways — then find verified companions who actually want to go.
             </p>
+            <p className="mt-5 text-xs font-bold uppercase tracking-[0.2em] text-white/45">Delhi NCR · Dubai · London · New York · Singapore</p>
             <div className="mt-9 flex flex-wrap gap-3">
               <Link to="/events" data-testid="hero-explore-cta"
-                className="rounded-full bg-white text-slate-900 px-6 py-3.5 text-sm font-bold hover:bg-slate-100 transition-transform hover:scale-[1.02] active:scale-[.98]">
+                className="brand-gradient rounded-full px-7 py-3.5 text-sm font-bold text-white shadow-glow-lg transition-transform hover:scale-[1.03] active:scale-[.98]">
                 Explore Events
               </Link>
               <Link to="/discover" data-testid="hero-companions-cta"
@@ -71,8 +75,8 @@ export default function Home() {
               </Link>
             </div>
             <div className="mt-12 flex flex-wrap gap-8 text-sm">
-              {[["12,400+", "verified members"], ["380+", "curated experiences"], ["8", "cities live"]].map(([n, l]) => (
-                <div key={l}><p className="text-2xl font-display font-bold">{n}</p><p className="text-slate-400 text-xs">{l}</p></div>
+              {[["12,400+", "verified members"], ["380+", "curated experiences"], ["27", "cities · 12 countries"]].map(([n, l]) => (
+                <div key={l}><p className="text-2xl font-display font-bold">{n}</p><p className="text-white/50 text-xs">{l}</p></div>
               ))}
             </div>
           </div>
@@ -176,7 +180,7 @@ export default function Home() {
                   {p.benefits.map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}
                 </ul>
                 <Link to="/membership" data-testid={`home-plan-cta-${p.id}`}
-                  className={`mt-8 block text-center rounded-full py-3 text-sm font-bold ${i === 2 ? "bg-slate-900 text-white" : "bg-white text-slate-900"}`}>
+                  className={`mt-8 block text-center rounded-full py-3 text-sm font-bold transition-transform hover:scale-[1.02] ${i === 2 ? "brand-gradient text-white shadow-glow" : "bg-white text-slate-900"}`}>
                   {p.price === 0 ? "Start free" : "Get " + p.name}
                 </Link>
               </div>

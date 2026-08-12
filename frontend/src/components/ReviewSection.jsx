@@ -83,7 +83,7 @@ export const ReviewSection = ({ eventId, canReview }) => {
                 : <span className="h-9 w-9 rounded-full bg-slate-200 grid place-items-center text-xs font-bold">{r.user_name?.[0]}</span>}
               <div>
                 <p className="text-sm font-semibold">{r.user_name}</p>
-                <p className="text-[11px] text-slate-400">{new Date(r.created_at).toLocaleDateString("en-IN")}</p>
+                <p className="text-[11px] text-slate-400">{new Date(r.created_at).toLocaleDateString(undefined)}</p>
               </div>
               <div className="ml-auto flex items-center gap-2">
                 {r.status === "hidden" && <Badge tone="red"><EyeOff className="h-3 w-3 mr-1" />hidden</Badge>}

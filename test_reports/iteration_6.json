@@ -1,0 +1,33 @@
+{
+  "summary": "Frontend-only regression + rebrand polish pass (iteration 6). Verified new brand system end-to-end: sticky header (site-header, nav-logo mark.png 200 + italic 'Buddilio' + 'Your Vibe, Your Buddy' tagline, nav-join gradient CTA, currency-picker) renders on every page; footer (footer, footer-cities marquee, footer-social-instagram/linkedin/youtube) renders on plum #2A0836 with all 9 footer link routes returning 200 (/referrals, /p/about, /p/contact, /p/faq, /p/guidelines, /p/terms, /p/privacy, /p/refund, /safety). Theme sweep across 19 routes (/, /events, /passes, /membership, /safety, /dashboard, /discover, /profile, /messages, /orders, /referrals, /notifications, /p/about, /p/faq, /p/terms, /p/privacy, /p/guidelines, /p/refund, /p/contact) — every page body is on blush white bg rgb(253,248,251) with plum ink color rgb(42,8,54); no leftover navy surfaces (slate-900 in tailwind is now #2A0836), no runtime crashes, no white-on-white. Currency switching verified on /passes: USD $, GBP £, JPY ¥ (no decimals — e.g. ¥2,428), AED with 2 decimals, INR ₹; selection persists across reload via localStorage. Country filter on /events: UAE=1 card, Japan=1 card. Referrals: /referrals renders referral-code (TARAJO03DC), referral-link, copy-referral-btn, share-referral-btn, 4 Stat cards (referral-balance/joined/rewarded/reward), 3-step explainer, no-invites empty state; dash-referral-card links out from /dashboard. Referral banner on /register?ref=TARAJO03DC (guest, cleared bud_token) shows 'Tara invited you to Buddilio · Join with their link and they earn ₹250 credit once you make your first booking.' Push toggle: push-toggle-btn present on /profile, push-ios-hint correctly absent on desktop UA (Playwright can't grant real push permission — backend contract already covered in iter-5). Mobile 390x844: bottom-nav visible on /dashboard, nav-mobile-toggle opens nav-mobile-menu, no horizontal overflow on /dashboard or / (scrollWidth = innerWidth = 390). PWA: /manifest.json theme_color=#2A0836, /icons/icon-192.png 200, /icons/apple-touch-icon.png 200, service worker active at scope /. Console: zero runtime errors — only the pre-existing dev-instrumentation hydration warning about <span> inside <option> from the visual-editor tooling, unchanged from iteration 5.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/events (and /passes) <select> options", "issues": ["Pre-existing dev-only hydration warning ('In HTML, <span> cannot be a child of <option>') fires on every page load from the emergent visual-editor instrumentation injecting <span data-ve-dynamic> inside each <option>. Not user-visible in production build but pollutes the dev console."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5.py"
+  ],
+  "action_items": [
+    "None blocking — rebrand pass is clean. Optional: silence the visual-editor dev-tooling <span>-in-<option> hydration warning (or move the price cap dropdown to a non-injected component) since it fires on every navigate.",
+    "Optional consistency: Referrals page uses testid prefix copy-referral-btn/share-referral-btn (not referral-copy/referral-share as spec worded) — spec's own header naming is inconsistent, current names are fine but worth documenting."
+  ],
+  "critical_code_review_comments": [
+    "Layout.jsx Navbar right-hand cluster relies on `items-center` inside a flex row for vertical centering of bell/avatar/logout — visual centering is correct, but the logout <button> has no explicit height (only px-2). If a future edit adds a taller neighbour, the text-only Log-out label will drift. Recommend giving it py-2 (or h-10) so its box height matches Bell/avatar even without items-center.",
+    "Footer.jsx still uses bg-slate-900 relying on the tailwind override to remap slate-900→#2A0836. This works but it hides the brand intent — a dedicated `bg-brand-plum` class (or `bg-brand-ink`) would make greps/theme audits far easier and immune to any future revert of the slate scale.",
+    "Referrals.jsx also uses bg-slate-900 for the invite card (same reason). Same recommendation: swap to a brand-named token.",
+    "Layout.jsx CurrencyPicker is a native <select> nested in a rounded-full container — on iOS Safari the native picker will not respect the outer radius; either drop the rounded shell or replace with a custom disclosure so brand shape holds.",
+    "The referral banner in Auth.jsx uses `bg-slate-900/[0.04]` — after the slate remap this is a plum tint that looks correct on blush white, but the border color `border-slate-900/10` will render as translucent plum, which on some pages that also use plum accents (e.g. /register hero split) could get lost. Test on a real device."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only)", "frontend": "100% of iteration-6 scope"},
+  "test_credentials": "Used tara.joshi@example.com / User@123 as inviter; no new accounts created this run.",
+  "seed_data_creation": "None — this run only read state (no POSTs beyond auth login).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Rebrand is stable. If re-testing header responsiveness, do NOT rely on getBoundingClientRect().top being equal across bell/profile/logout — they have different heights and are centered via items-center; assert visual centers or that all three are inside the same flex row instead. Events page uses per-preset buttons (events-when-past / events-when-upcoming / events-when-all), not a single 'events-when' select — feed the correct testid. Referral copy/share buttons are copy-referral-btn / share-referral-btn; referral stats are referral-balance/joined/rewarded/reward (not referral-stat-*). Currency picker persists via localStorage 'bud_currency' — clear it if you need a clean start.",
+  "rca of the issue": "No new bugs to RCA this iteration. Iter-5 fixes (Gift import in Dashboard.jsx, useCurrency import in Auth.jsx) are still in place and verified — /dashboard and /register?ref render without runtime errors and every logged-in and guest header/footer element loads cleanly."
+}

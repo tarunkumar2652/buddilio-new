@@ -15,11 +15,24 @@ iso = lambda d: d.isoformat()
 PW = bcrypt.hashpw(b"User@123", bcrypt.gensalt()).decode()
 
 CITIES = [
-    ("Delhi NCR", "Delhi", "110001"), ("Mumbai", "Maharashtra", "400001"),
-    ("Bengaluru", "Karnataka", "560001"), ("Gurugram", "Haryana", "122001"),
-    ("Noida", "Uttar Pradesh", "201301"), ("Hyderabad", "Telangana", "500001"),
-    ("Pune", "Maharashtra", "411001"), ("Goa", "Goa", "403001"),
+    ("Delhi NCR", "Delhi", "IN", "India"), ("Gurugram", "Haryana", "IN", "India"),
+    ("Noida", "Uttar Pradesh", "IN", "India"), ("Mumbai", "Maharashtra", "IN", "India"),
+    ("Bengaluru", "Karnataka", "IN", "India"), ("Hyderabad", "Telangana", "IN", "India"),
+    ("Pune", "Maharashtra", "IN", "India"), ("Goa", "Goa", "IN", "India"),
+    ("Dubai", "Dubai", "AE", "United Arab Emirates"), ("Abu Dhabi", "Abu Dhabi", "AE", "United Arab Emirates"),
+    ("Singapore", "Singapore", "SG", "Singapore"),
+    ("London", "England", "GB", "United Kingdom"), ("Manchester", "England", "GB", "United Kingdom"),
+    ("New York", "New York", "US", "United States"), ("Los Angeles", "California", "US", "United States"),
+    ("Miami", "Florida", "US", "United States"), ("Austin", "Texas", "US", "United States"),
+    ("Toronto", "Ontario", "CA", "Canada"), ("Vancouver", "British Columbia", "CA", "Canada"),
+    ("Sydney", "New South Wales", "AU", "Australia"), ("Melbourne", "Victoria", "AU", "Australia"),
+    ("Berlin", "Berlin", "DE", "Germany"),
+    ("Barcelona", "Catalonia", "ES", "Spain"), ("Madrid", "Madrid", "ES", "Spain"),
+    ("Paris", "Île-de-France", "FR", "France"),
+    ("Bangkok", "Bangkok", "TH", "Thailand"),
+    ("Tokyo", "Tokyo", "JP", "Japan"),
 ]
+CITY_MAP = {c[0]: {"code": c[2], "name": c[3]} for c in CITIES}
 CATS = ["Parties", "Dining", "Nightlife", "Concerts", "Festivals", "Sports",
         "Travel", "Networking", "Social Gatherings", "Lifestyle Experiences", "Other"]
 INTERESTS = ["Live Music", "Fine Dining", "Stand-up Comedy", "Trekking", "Cafe Hopping",
@@ -58,7 +71,20 @@ NAMES = [
     ("Riya", "Deshpande", "female"), ("Aditya", "Menon", "male"), ("Kavya", "Reddy", "female"),
     ("Neel", "Saxena", "male"), ("Pooja", "Trivedi", "female"), ("Siddharth", "Ghosh", "male"),
     ("Aisha", "Khan", "female"),
+    ("Sofia", "Marin", "female"), ("Liam", "O'Connor", "male"), ("Amara", "Okafor", "female"),
+    ("Yuki", "Tanaka", "female"), ("Omar", "AlRashid", "male"), ("Chloe", "Nguyen", "female"),
 ]
+
+CITY_IMG = {
+    "Dubai": "https://images.unsplash.com/flagged/photo-1559717201-fbb671ff56b7?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "London": "https://images.unsplash.com/photo-1581954548122-4dff8989c0f7?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "Singapore": "https://images.unsplash.com/photo-1624003974266-7cdbf877ec00?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "Bangkok": "https://images.unsplash.com/photo-1543676774-064b3f7c5ad7?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "New York": "https://images.unsplash.com/photo-1569783721854-33a99b4c0bae?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "Sydney": "https://images.unsplash.com/photo-1695142887255-2ce7c1b33dda?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "Tokyo": "https://images.unsplash.com/photo-1572291244855-44aa55da2137?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+    "Barcelona": "https://images.unsplash.com/photo-1581954548218-415cd6ee5f4d?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200",
+}
 
 EVENTS = [
     ("Skyline Rooftop Social", "Nightlife", "Delhi NCR", "Aer Terrace, Aerocity", 1499, 60),
@@ -78,6 +104,14 @@ EVENTS = [
     ("Art Walk & Gallery Hop", "Lifestyle Experiences", "Delhi NCR", "Lodhi Art District", 0, 35),
     ("New Year Countdown Gala", "Parties", "Mumbai", "Taj Lands End Ballroom", 4999, 200),
     ("Cycling Club: 40km Dawn Ride", "Sports", "Delhi NCR", "India Gate C-Hexagon", 0, 50),
+    ("Marina Rooftop Sundowner", "Nightlife", "Dubai", "SLS Dubai, Business Bay", 6500, 80),
+    ("Soho Supper Club: Chef's Six", "Dining", "London", "Berwick Street Kitchen, Soho", 9500, 24),
+    ("Skyline Cocktail Social", "Nightlife", "Singapore", "1-Altitude, Raffles Place", 5200, 60),
+    ("Night Market Food Crawl", "Dining", "Bangkok", "Ratchada Rot Fai Market", 1800, 20),
+    ("Chelsea Gallery Hop", "Lifestyle Experiences", "New York", "West 24th Street, Chelsea", 3200, 30),
+    ("Harbour Sunset Picnic", "Social Gatherings", "Sydney", "Observatory Hill, The Rocks", 2400, 40),
+    ("Omoide Yokocho Izakaya Trail", "Dining", "Tokyo", "Shinjuku Omoide Yokocho", 4200, 16),
+    ("Gothic Quarter Tapas Walk", "Dining", "Barcelona", "Plaça Reial", 3800, 22),
 ]
 
 
@@ -91,13 +125,14 @@ async def wipe():
 
 async def main():
     await wipe()
-    await db.cities.insert_many([{"name": n, "state": s, "pincode": p, "country": "India"} for n, s, p in CITIES])
+    await db.cities.insert_many([{"name": n, "state": s, "country_code": cc, "country": cn}
+                                 for n, s, cc, cn in CITIES])
     await db.event_categories.insert_many([{"name": c, "slug": c.lower().replace(" ", "-")} for c in CATS])
     await db.interests.insert_many([{"name": i} for i in INTERESTS])
 
     await db.settings.insert_one({
         "platform_name": "Buddilio", "contact_email": "hello@buddilio.com",
-        "contact_number": "+91 98100 00000", "currency": "INR", "tax_percent": 18,
+        "contact_number": "+1 628 555 0100", "currency": "INR", "base_currency": "INR", "tax_percent": 18,
         "gateway": "razorpay", "gateway_mode": "test", "min_age": 21,
         "currencies": {
             "INR": {"rate": 1.0, "symbol": "₹", "label": "Indian Rupee"},
@@ -106,6 +141,10 @@ async def main():
             "GBP": {"rate": 0.0094, "symbol": "£", "label": "British Pound"},
             "AED": {"rate": 0.044, "symbol": "AED ", "label": "UAE Dirham"},
             "SGD": {"rate": 0.016, "symbol": "S$", "label": "Singapore Dollar"},
+            "CAD": {"rate": 0.016, "symbol": "C$", "label": "Canadian Dollar"},
+            "AUD": {"rate": 0.018, "symbol": "A$", "label": "Australian Dollar"},
+            "THB": {"rate": 0.39, "symbol": "฿", "label": "Thai Baht"},
+            "JPY": {"rate": 1.8, "symbol": "¥", "label": "Japanese Yen"},
         },
         "platform_fee_percent": 15, "payout_hold_hours": 48,
         "require_email_verification": False, "auto_approve_events": False,
@@ -113,7 +152,7 @@ async def main():
         "social": {"instagram": "https://instagram.com/buddilio", "linkedin": "https://linkedin.com/company/buddilio",
                    "x": "https://x.com/buddilio"},
         "seo_title": "Buddilio — Find your people for every experience",
-        "seo_description": "Discover events, parties, dining and lifestyle experiences in India and find verified companions to go with.",
+        "seo_description": "Discover events, parties, dining and lifestyle experiences in 27 cities across 12 countries, and find verified companions to go with.",
     })
 
     plans = [
@@ -134,11 +173,11 @@ async def main():
     plan_ids = (await db.membership_plans.insert_many(plans)).inserted_ids
 
     products = [
-        ("Buddilio Party Pass", "Entry to any one partner party in your city, all month long.", 1499, 10, 30, "All India"),
-        ("Night Pass (Weekend)", "Two weekend nightlife entries with priority queue access.", 2499, 15, 15, "Delhi NCR"),
-        ("Dining Experience Pass", "Curated chef-led dinner with 8 fellow members.", 3299, 5, 45, "Mumbai"),
-        ("Festival Season Pass", "Access to all Buddilio festival meetups this season.", 4999, 20, 90, "All India"),
-        ("Buddilio Gift Card ₹2000", "Give the gift of great company and better nights out.", 2000, 0, 365, "All India"),
+        ("Buddilio Party Pass", "Entry to any one partner party in your city, all month long.", 1499, 10, 30, "Global"),
+        ("Night Pass (Weekend)", "Two weekend nightlife entries with priority queue access.", 2499, 15, 15, "Dubai"),
+        ("Dining Experience Pass", "Curated chef-led dinner with 8 fellow members.", 3299, 5, 45, "London"),
+        ("Festival Season Pass", "Access to all Buddilio festival meetups this season.", 4999, 20, 90, "Global"),
+        ("Buddilio Gift Card", "Give the gift of great company and better nights out, redeemable in any Buddilio city.", 2000, 0, 365, "Global"),
     ]
     await db.products.insert_many([{
         "name": n, "description": d, "price": p, "discount_percent": disc, "tax_percent": 18,
@@ -175,11 +214,13 @@ async def main():
     user_ids = []
     for i, (fn, ln, g) in enumerate(NAMES):
         city = CITIES[i % len(CITIES)][0]
+        home = CITY_MAP[city]
         r = await db.users.insert_one({
             "full_name": f"{fn} {ln}", "email": f"{fn.lower()}.{ln.lower()}@example.com",
             "mobile": f"+9198{random.randint(10000000, 99999999)}", "password_hash": PW,
             "role": "user", "status": "active", "dob": f"{random.randint(1978, 2003)}-0{random.randint(1,9)}-1{random.randint(0,8)}",
             "age": random.randint(22, 46), "gender": g, "city": city,
+            "country": home["name"], "country_code": home["code"],
             "bio": random.choice([
                 "Weekend explorer. Always up for live music and long dinners.",
                 "New in the city and looking for a solid group to explore with.",
@@ -201,18 +242,19 @@ async def main():
     event_ids = []
     for i, (title, cat, city, venue, price, cap) in enumerate(EVENTS):
         start = now() + timedelta(days=random.randint(2, 60), hours=random.randint(0, 10))
-        status = "published" if i < 15 else "submitted"
+        status = "published" if i < 15 or i >= 17 else "submitted"
+        home = CITY_MAP[city]
         r = await db.events.insert_one({
             "title": title, "description": (
                 f"{title} is a curated Buddilio experience in {city}. Expect a warm, vetted crowd of members, "
                 "a great venue and zero awkward icebreakers — our hosts make introductions so you never feel out of place. "
                 "Come solo or bring a companion you met on Buddilio."),
-            "category": cat, "city": city, "venue": venue,
+            "category": cat, "city": city, "country": home["name"], "country_code": home["code"], "venue": venue,
             "starts_at": iso(start), "ends_at": iso(start + timedelta(hours=4)),
-            "cover_image": EVENT_IMGS[i % len(EVENT_IMGS)],
+            "cover_image": CITY_IMG.get(city, EVENT_IMGS[i % len(EVENT_IMGS)]),
             "gallery": [EVENT_IMGS[(i + 1) % len(EVENT_IMGS)], EVENT_IMGS[(i + 2) % len(EVENT_IMGS)]],
             "price": price, "capacity": cap,
-            "rules": "Government ID required at entry. 21+ only. Be respectful — our community guidelines apply.",
+            "rules": "Photo ID required at entry. 21+ only. Be respectful — our community guidelines apply.",
             "cancellation_policy": "Full refund up to 48 hours before start. 50% within 48 hours. No refund on no-show.",
             "approval_mode": ["instant", "instant", "organizer"][i % 3],
             "featured": i < 4, "status": status,
@@ -301,12 +343,12 @@ async def main():
 
     pages = {
         "about": ("About Buddilio", "Buddilio exists for one reason: great experiences are better shared. We are a curated social discovery platform where verified adults find companions for parties, dinners, concerts, treks and travel. We are not a dating app — we are the answer to 'I want to go, but not alone.'"),
-        "safety": ("Safety Center", "Meet in public places for first meetups.\nProtect your personal information — never share financial details.\nNever send money directly to another member.\nReport suspicious behaviour immediately; our safety team reviews every report.\nIn an emergency, contact local authorities on 112 first.\nUse Buddilio chat until you are comfortable moving elsewhere."),
+        "safety": ("Safety Center", "Meet in public places for first meetups.\nProtect your personal information — never share financial details.\nNever send money directly to another member.\nReport suspicious behaviour immediately; our safety team reviews every report.\nIn an emergency, call your local emergency number first — 112 in India and the EU, 911 in the US and Canada, 999 in the UK, UAE and Singapore, 000 in Australia.\nUse Buddilio chat until you are comfortable moving elsewhere."),
         "terms": ("Terms & Conditions", "By using Buddilio you confirm you are at least 21 years old and agree to our community standards, payment terms and cancellation policies. Memberships renew only when you choose to renew. Event passes are governed by the individual event's cancellation policy."),
-        "privacy": ("Privacy Policy", "We collect only what we need to run Buddilio: your identity, city, interests and payment records. Your mobile number, date of birth and email are never shown publicly. You control your profile visibility and who can message you."),
-        "refund": ("Refund Policy", "Event passes: full refund up to 48 hours before the event, 50% within 48 hours, no refund for no-shows. Memberships: refundable within 7 days if unused. Refunds reach your original payment method within 5-7 working days."),
+        "privacy": ("Privacy Policy", "We collect only what we need to run Buddilio: your identity, city, country, interests and payment records. Your mobile number, date of birth and email are never shown publicly. You control your profile visibility and who can message you. Data is processed on servers in the region closest to you where local law requires it."),
+        "refund": ("Refund Policy", "Event passes: full refund up to 48 hours before the event, 50% within 48 hours, no refund for no-shows. Memberships: refundable within 7 days if unused. Refunds are returned to your original payment method in the currency you paid, usually within 5-7 working days."),
         "guidelines": ("Community Guidelines", "Be a good guest. Show up when you say you will.\nNo harassment, hate speech or unsolicited advances.\nRespect consent and personal boundaries at all times.\nNo soliciting, selling or fundraising inside the community.\nOne real identity per member — impersonation results in a permanent ban."),
-        "contact": ("Contact Us", "Email hello@buddilio.com or call +91 98100 00000, Monday to Saturday, 10am to 7pm IST. Registered office: Buddilio Experiences Pvt. Ltd., Cyber Hub, Gurugram, Haryana."),
+        "contact": ("Contact Us", "Email hello@buddilio.com — our member care team replies within one business day, in every timezone we operate in. City teams: Delhi NCR, Mumbai, Bengaluru, Dubai, Singapore, London, New York, Toronto, Sydney, Berlin, Barcelona, Paris, Bangkok and Tokyo. Press and partnerships: partners@buddilio.com."),
         "faq": ("FAQ", "Is Buddilio a dating app? — No. Buddilio is for finding companions for experiences.\nDo I need a membership? — No, browsing and free events are open to all registered members.\nHow are members verified? — Email, mobile and optional ID verification, plus active moderation.\nCan I attend alone? — Absolutely, most members do. Hosts make introductions."),
     }
     await db.cms_pages.insert_many([

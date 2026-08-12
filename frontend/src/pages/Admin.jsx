@@ -597,7 +597,7 @@ function Audit() {
       {items.length ? items.map((l) => (
         <div key={l.id} className="p-4 flex flex-wrap justify-between gap-2 text-sm">
           <div><p className="font-semibold">{l.action}</p><p className="text-xs text-slate-500">{l.entity} {l.entity_id}</p></div>
-          <div className="text-right text-xs text-slate-500"><p>{l.actor_email}</p><p>{new Date(l.created_at).toLocaleString("en-IN")}</p></div>
+          <div className="text-right text-xs text-slate-500"><p>{l.actor_email}</p><p>{new Date(l.created_at).toLocaleString(undefined)}</p></div>
         </div>
       )) : <p className="p-6 text-sm text-slate-500">No admin actions logged yet.</p>}
     </div>

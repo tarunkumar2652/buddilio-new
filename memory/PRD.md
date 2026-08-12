@@ -59,13 +59,59 @@ Adults only (21+ enforced server-side); auth required for private features; part
 - **Organiser replies**: partners get a **Reviews** tab (`GET /api/partner/reviews`) with average / count / awaiting-reply stats and a public reply editor (`POST /api/reviews/{id}/reply`, own events only — 403 otherwise). Replies render under the review on the event page and notify the reviewer.
 - Admin sub-tab strip now shows a scroll affordance on mobile; `seed_past_events.py` seeds one organiser reply and one flagged review so both queues are demoable after a reseed.
 
+## Implemented — iteration 5 (June 2026): push, referrals, review highlights
+- **Web push notifications** (standards-based VAPID, no third-party SaaS): `backend/push.py` (pywebpush, prunes
+  404/410 subscriptions), endpoints `GET /api/push/config`, `POST /api/push/subscribe|unsubscribe|test`,
+  `sw.js` push + notificationclick handlers that deep-link into the app, `src/lib/push.js` and a `PushToggle`
+  on /profile (iOS gets an "add to Home Screen first" hint). `notify()` fans out to push for `message` and
+  `reminder` types, respecting `notification_prefs.push` — i.e. new direct messages and the 24h event reminder.
+- **Referral invites + wallet credit**: every member gets a referral code (`/api/me/referrals`,
+  `/api/referrals/{code}`), signup accepts `referral_code` (inviter banner on /register?ref=CODE), the inviter
+  earns ₹250 base-currency credit the moment the invitee's first booking is paid (`award_referral` inside
+  `fulfil_order`), and credit is auto-applied at the next checkout (`use_credit`, `credit_applied`,
+  ledger in `db.credits`, consumed only on successful payment). New `/referrals` page + dashboard card.
+- **Review highlights**: `GET /api/events` returns `top_review {rating, comment, user_name}` (hidden/moderated
+  reviews excluded) and event cards render the quote with stars.
+
+## Implemented — iteration 5b (June 2026): global launch
+- **12 countries / 27 cities** registry in `server.py` (`COUNTRIES`, `country_for_city`, `with_country`):
+  India, UAE, Singapore, UK, USA, Canada, Australia, Germany, Spain, France, Thailand, Japan.
+- **10 currencies** (INR, USD, EUR, GBP, AED, SGD, CAD, AUD, THB, JPY) with `BASE_CURRENCY` env; the frontend
+  auto-detects the visitor's currency from locale/timezone and remembers the choice.
+- **Per-country tax**: `tax_for(currency, fallback, country_code)` → GST 18% India, VAT 5% UAE, GST 9% Singapore,
+  VAT 20% UK, Sales tax 8.875% US, HST 13% Canada, GST 10% Australia, VAT 19/21/20% DE/ES/FR, VAT 7% Thailand,
+  Consumption tax 10% Japan. Orders store `tax_label` + `tax_percent`; the checkout UI shows them.
+- **Country filters** on events, discover, passes; country selects on signup, profile and the partner event form
+  (city list follows the country, profile city change re-derives the country).
+- **Global content**: 8 international events with city imagery, 6 international members, globalised products,
+  CMS pages, safety/emergency guidance, footer/hero/FAQ copy, locale-aware dates and `Intl` money formatting.
+  Migration script `backend/globalize.py`; `seed_data.py` produces the same shape on a fresh seed.
+
+## Implemented — iteration 6 (June 2026): brand identity
+- Adopted the user's chosen logo (gradient heart with two facing profiles + italic "Buddilio" wordmark +
+  tagline **"Your Vibe, Your Buddy"**). Assets extracted from the supplied collage into
+  `public/brand/mark.png` (transparent heart), `public/brand/lockup.png` and regenerated PWA icons.
+- **New palette**: plum ink `#2A0836`, blush white `#FDF8FB`, brand coral `#FF9A62` → magenta `#E81E7C` →
+  violet `#6B34CD`, plum `#52146F`. Applied app-wide by overriding Tailwind's `slate` scale with plum-tinted
+  neutrals plus named `brand-*` tokens; gradient is reserved for primary CTAs, the mark and thin accents.
+- **Redesigned header**: gradient top rule, glass sticky bar, logo lockup with tagline, animated gradient
+  nav underlines, currency picker, gradient "Join Buddilio" CTA, mobile menu and brand-magenta bottom nav.
+- **Redesigned footer**: plum panel with aurora + grain, reversed logo, "Live in 27 cities · 12 countries" chip,
+  three link columns, social buttons and an animated city marquee.
+- Hero refresh (tagline chip, gradient headline, gradient CTA), branded offline page and install prompt.
+- Verified by testing agent iteration 6: 19 routes swept, zero UI bugs, zero console errors, 100% of scope.
+
 ## Backlog
-**P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only `delivered@resend.dev` works in this sandbox). Confirm the Google sign-in flow end-to-end (code exists, never user-verified).
-**P1** — Live FX rate feed instead of static rates; Razorpay Route / Stripe Connect for automatic partner transfers; web push notifications on top of the new service worker; referrals & invite links.
-**P2** — Saved searches with alerts, retention cohorts, multi-country locations, native app clients, splitting `server.py` into routers.
+**P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
+live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only
+`delivered@resend.dev` works in this sandbox). Confirm the Google sign-in flow end-to-end (never user-verified).
+**P1** — Live FX rate feed instead of static rates; Razorpay Route / Stripe Connect for automatic partner
+transfers; per-country pricing overrides for organisers (they currently price in the base currency);
+saved searches with alerts; referral leaderboard.
+**P2** — Retention cohorts, native app clients, splitting `server.py` into routers, silencing the
+visual-editor dev hydration warning.
 
 ## Next tasks
-1. User acceptance pass on mobile: install the PWA from the preview URL, then check reviews/moderation, chat and checkout inside the installed app.
-2. Supply Razorpay keys + webhook secret to go live (code complete and tested in simulation).
-3. Web push notifications (service worker is now in place) for new messages and event reminders.
-
+1. User acceptance pass on mobile: install the PWA, turn on phone alerts, run a referral + checkout end to end.
+2. Supply Razorpay keys + webhook secret to go live (code complete, tested in simulation).
+3. Localised city landing pages (`/city/dubai`) for SEO now that the footprint is global.

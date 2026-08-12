@@ -28,7 +28,7 @@ const TIPS = [
   [Ban, "Never send money", "No Buddilio member, host or partner will ever ask you to transfer money directly. Report anyone who does."],
   [Flag, "Report anything off", "One tap on any profile, event or chat sends it to our safety team. Every report is reviewed."],
   [ShieldCheck, "Tell a friend your plan", "Share the event link and your expected return time with someone you trust."],
-  [PhoneCall, "Emergencies come first", "In an emergency in India, call 112. Women's helpline: 1091. Then let us know."],
+  [PhoneCall, "Emergencies come first", "Call your local emergency number first — 112 in India and the EU, 911 in the US and Canada, 999 in the UK, UAE and Singapore, 000 in Australia. Then let us know."],
 ];
 
 export function Safety() {

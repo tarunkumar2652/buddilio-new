@@ -3,41 +3,48 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0F172A" />
+    <meta name="theme-color" content="#2A0836" />
     <title>You're offline — Buddilio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700&family=Manrope:wght@400;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;800&family=Manrope:wght@400;600&display=swap" rel="stylesheet" />
     <style>
       * { box-sizing: border-box; }
       body {
-        margin: 0; min-height: 100vh; background: #0f172a; color: #fafafa;
-        font-family: Manrope, sans-serif; display: flex; align-items: center;
-        padding: 32px;
+        margin: 0; min-height: 100vh; background: #2A0836; color: #FDF8FB;
+        font-family: Manrope, sans-serif; display: flex; align-items: center; padding: 32px;
+        background-image:
+          radial-gradient(40rem 22rem at 10% -10%, rgba(255,154,98,.22), transparent 60%),
+          radial-gradient(38rem 20rem at 90% 6%, rgba(232,30,124,.28), transparent 62%),
+          radial-gradient(42rem 26rem at 60% 110%, rgba(107,52,205,.34), transparent 60%);
       }
       .wrap { max-width: 460px; }
-      .mark {
-        height: 48px; width: 48px; border-radius: 14px; display: grid; place-items: center;
-        background: #fafafa; color: #0f172a; font-family: Outfit, sans-serif; font-weight: 700; font-size: 22px;
-      }
-      .over { margin-top: 40px; font-size: 11px; letter-spacing: .22em; text-transform: uppercase; color: #94a3b8; font-weight: 600; }
+      .brand { display: flex; align-items: center; gap: 10px; }
+      .brand img { height: 44px; width: 44px; }
+      .name { font-family: Outfit, sans-serif; font-weight: 800; font-style: italic; font-size: 20px; }
+      .tag { font-size: 10px; color: rgba(253,248,251,.55); font-weight: 600; margin-top: 3px; }
+      .over { margin-top: 40px; font-size: 11px; letter-spacing: .22em; text-transform: uppercase; color: #C79BD0; font-weight: 700; }
       h1 { font-family: Outfit, sans-serif; font-size: 34px; line-height: 1.1; margin: 12px 0 0; letter-spacing: -.02em; }
-      p { color: #cbd5e1; line-height: 1.65; margin-top: 16px; font-size: 15px; }
+      p.copy { color: rgba(253,248,251,.72); line-height: 1.65; margin-top: 16px; font-size: 15px; }
       button {
-        margin-top: 28px; border: 0; border-radius: 999px; background: #fafafa; color: #0f172a;
+        margin-top: 28px; border: 0; border-radius: 999px; color: #fff;
+        background-image: linear-gradient(120deg, #FF9A62 0%, #F0459B 42%, #6B34CD 100%);
         padding: 14px 28px; font-weight: 700; font-size: 14px; font-family: Manrope, sans-serif;
-        cursor: pointer; transition: transform .2s ease, background-color .2s ease;
+        cursor: pointer; transition: transform .2s ease; box-shadow: 0 12px 34px rgba(232,30,124,.3);
       }
-      button:hover { transform: scale(1.02); background: #ffffff; }
-      .hint { margin-top: 32px; font-size: 12px; color: #64748b; }
+      button:hover { transform: scale(1.03); }
+      .hint { margin-top: 32px; font-size: 12px; color: rgba(253,248,251,.4); }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <div class="mark">B</div>
+      <div class="brand">
+        <img src="/brand/mark.png" alt="" />
+        <span><span class="name">Buddilio</span><span class="tag">Your Vibe, Your Buddy</span></span>
+      </div>
       <p class="over">No connection</p>
       <h1>Your night out is still on.</h1>
-      <p>
+      <p class="copy">
         Buddilio can't reach the internet right now. Anything you already opened stays available —
         reconnect to book experiences, message members and see live chats.
       </p>

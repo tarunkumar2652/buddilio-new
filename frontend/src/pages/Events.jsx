@@ -9,8 +9,9 @@ import { ReviewSection } from "@/components/ReviewSection";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert } from "lucide-react";
 export function Events() {
-  const [meta, setMeta] = useState({ cities: [], categories: [] });
-  const [f, setF] = useState({ q: "", city: "", category: "", max_price: -1, when: "", sort: "date" });
+  const { fmt } = useCurrency();
+  const [meta, setMeta] = useState({ cities: [], countries: [], categories: [] });
+  const [f, setF] = useState({ q: "", country: "", city: "", category: "", max_price: -1, when: "", sort: "date" });
   const [data, setData] = useState(null);
   const [page, setPage] = useState(1);
 
@@ -23,19 +24,28 @@ export function Events() {
 
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
 
+  const cityOptions = f.country
+    ? (meta.countries || []).find((c) => c.name === f.country)?.cities || []
+    : meta.cities || [];
+
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-10 pb-28" data-testid="events-page">
-      <SEO title="Events & experiences" description="Discover parties, dining, nightlife, concerts and lifestyle experiences across India." />
+      <SEO title="Events & experiences" description="Discover parties, dining, nightlife, concerts and lifestyle experiences in 27 cities across 12 countries." />
       <p className="overline">Experiences</p>
       <h1 className="mt-2 text-3xl sm:text-4xl font-bold">What's happening</h1>
 
-      <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 grid gap-3 md:grid-cols-5">
+      <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 grid gap-3 md:grid-cols-6">
         <input data-testid="events-search" placeholder="Search events…" value={f.q}
           onChange={(e) => { setPage(1); setF({ ...f, q: e.target.value }); }}
           className="md:col-span-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-slate-900" />
+        <select data-testid="events-country" value={f.country} onChange={(e) => { setPage(1); setF({ ...f, country: e.target.value, city: "" }); }}
+          className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">All countries</option>{(meta.countries || []).map((c) => <option key={c.code} value={c.name}>{c.name}</option>)}
+        </select>
         <select data-testid="events-city" value={f.city} onChange={(e) => { setPage(1); setF({ ...f, city: e.target.value }); }}
           className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
-          <option value="">All cities</option>{meta.cities.map((c) => <option key={c}>{c}</option>)}
+          <option value="">{f.country ? `All cities in ${f.country}` : "All cities"}</option>
+          {cityOptions.map((c) => <option key={c}>{c}</option>)}
         </select>
         <select data-testid="events-category" value={f.category} onChange={(e) => { setPage(1); setF({ ...f, category: e.target.value }); }}
           className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
@@ -44,7 +54,7 @@ export function Events() {
         <select data-testid="events-price" value={f.max_price} onChange={(e) => { setPage(1); setF({ ...f, max_price: Number(e.target.value) }); }}
           className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
           <option value={-1}>Any price</option><option value={0}>Free only</option>
-          <option value={1000}>Under ₹1,000</option><option value={2500}>Under ₹2,500</option><option value={5000}>Under ₹5,000</option>
+          <option value={1000}>Under {fmt(1000)}</option><option value={2500}>Under {fmt(2500)}</option><option value={5000}>Under {fmt(5000)}</option>
         </select>
       </div>
 

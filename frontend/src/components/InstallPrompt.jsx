@@ -43,7 +43,7 @@ export const InstallPrompt = () => {
         <X className="h-4 w-4" />
       </button>
       <div className="flex items-start gap-3.5">
-        <span className="h-11 w-11 shrink-0 rounded-2xl bg-slate-900 text-white grid place-items-center font-display font-bold text-lg">B</span>
+        <span className="h-11 w-11 shrink-0"><img src="/brand/mark.png" alt="" className="h-11 w-11 object-contain" /></span>
         <div className="pr-6">
           <p className="font-display font-semibold text-[15px] tracking-tight">Keep Buddilio on your home screen</p>
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">

@@ -9,7 +9,7 @@ import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Share
 import { Plus, Send } from "lucide-react";
 
 const blank = {
-  title: "", description: "", category: "Parties", city: "Delhi NCR", venue: "",
+  title: "", description: "", category: "Parties", city: "Delhi NCR", country: "India", venue: "",
   starts_at: "", ends_at: "", cover_image: "", gallery: [], price: 0, capacity: 50,
   rules: "Government ID required at entry. 21+ only.",
   cancellation_policy: "Full refund up to 48 hours before start.",
@@ -147,16 +147,27 @@ export default function PartnerDashboard() {
             <label className="block"><span className="text-xs font-bold text-slate-600">Category</span>
               <select data-testid="event-category" value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">{meta.categories.map((c) => <option key={c}>{c}</option>)}</select></label>
+            <label className="block"><span className="text-xs font-bold text-slate-600">Country</span>
+              <select data-testid="event-country" value={f.country}
+                onChange={(e) => {
+                  const c = (meta.countries || []).find((x) => x.name === e.target.value);
+                  setF({ ...f, country: e.target.value, city: c?.cities?.[0] || f.city });
+                }}
+                className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
+                {(meta.countries || []).map((c) => <option key={c.code} value={c.name}>{c.name}</option>)}
+              </select></label>
             <label className="block"><span className="text-xs font-bold text-slate-600">City</span>
               <select data-testid="event-city" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })}
-                className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">{meta.cities.map((c) => <option key={c}>{c}</option>)}</select></label>
+                className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
+                {(((meta.countries || []).find((c) => c.name === f.country)?.cities) || meta.cities || []).map((c) => <option key={c}>{c}</option>)}
+              </select></label>
             <label className="block"><span className="text-xs font-bold text-slate-600">Starts at</span>
               <input type="datetime-local" data-testid="event-starts" value={f.starts_at} onChange={(e) => setF({ ...f, starts_at: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
             <label className="block"><span className="text-xs font-bold text-slate-600">Ends at</span>
               <input type="datetime-local" data-testid="event-ends" value={f.ends_at} onChange={(e) => setF({ ...f, ends_at: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
-            <label className="block"><span className="text-xs font-bold text-slate-600">Ticket price (₹, 0 = free)</span>
+            <label className="block"><span className="text-xs font-bold text-slate-600">Ticket price ({meta.base_currency || "INR"}, 0 = free)</span>
               <input type="number" data-testid="event-price" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
             <label className="block"><span className="text-xs font-bold text-slate-600">Capacity</span>

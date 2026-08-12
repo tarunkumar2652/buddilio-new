@@ -45,7 +45,7 @@ export function Membership() {
             <p className="overline text-slate-400">Your active plan</p>
             <p className="text-xl font-display font-bold mt-1">{mine.plan_name}</p>
           </div>
-          <p className="text-sm text-slate-400">Renews / expires {new Date(mine.ends_at).toLocaleDateString("en-IN")}</p>
+          <p className="text-sm text-slate-400">Renews / expires {new Date(mine.ends_at).toLocaleDateString(undefined)}</p>
         </div>
       )}
 
@@ -84,10 +84,13 @@ export function Passes() {
   const nav = useNavigate();
   const [items, setItems] = useState(null);
   const [city, setCity] = useState("");
-  const [cities, setCities] = useState([]);
+  const [country, setCountry] = useState("");
+  const [meta, setMeta] = useState({ cities: [], countries: [] });
 
-  useEffect(() => { api.get("/meta").then(({ data }) => setCities(data.cities)).catch(() => {}); }, []);
-  useEffect(() => { api.get("/products", { params: { city } }).then(({ data }) => setItems(data.items)).catch(() => setItems([])); }, [city]);
+  useEffect(() => { api.get("/meta").then(({ data }) => setMeta(data)).catch(() => {}); }, []);
+  useEffect(() => { api.get("/products", { params: { city, country } }).then(({ data }) => setItems(data.items)).catch(() => setItems([])); }, [city, country]);
+
+  const cityOptions = country ? (meta.countries || []).find((c) => c.name === country)?.cities || [] : meta.cities || [];
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-10 pb-28" data-testid="passes-page">
@@ -96,10 +99,16 @@ export function Passes() {
       <h1 className="mt-2 text-3xl sm:text-4xl font-bold">Buddilio passes</h1>
       <p className="mt-3 text-slate-600 max-w-2xl">One purchase, multiple nights out. Members get an extra discount at checkout.</p>
 
-      <select data-testid="passes-city" value={city} onChange={(e) => setCity(e.target.value)}
-        className="mt-6 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm">
-        <option value="">All cities</option>{cities.map((c) => <option key={c}>{c}</option>)}
-      </select>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <select data-testid="passes-country" value={country} onChange={(e) => { setCountry(e.target.value); setCity(""); }}
+          className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm">
+          <option value="">All countries</option>{(meta.countries || []).map((c) => <option key={c.code} value={c.name}>{c.name}</option>)}
+        </select>
+        <select data-testid="passes-city" value={city} onChange={(e) => setCity(e.target.value)}
+          className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm">
+          <option value="">{country ? `All cities in ${country}` : "All cities"}</option>{cityOptions.map((c) => <option key={c}>{c}</option>)}
+        </select>
+      </div>
 
       {!items ? <Spinner /> : items.length ? (
         <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -118,7 +127,7 @@ export function Passes() {
                     <p className="text-2xl font-display font-bold">{fmt(final)}</p>
                     {p.discount_percent > 0 && <p className="text-sm text-slate-400 line-through">{fmt(p.price)}</p>}
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">Valid {p.validity_days} days · {p.city} · +{p.tax_percent}% GST</p>
+                  <p className="text-xs text-slate-500 mt-1">Valid {p.validity_days} days · {p.city} · +{p.tax_percent}% tax</p>
                   <button onClick={() => user ? nav(`/checkout?kind=product&id=${p.id}`) : nav("/login")}
                     data-testid={`buy-product-${p.id}`} className="mt-5 w-full rounded-full bg-slate-900 text-white py-3 text-sm font-bold">
                     Buy pass
@@ -128,7 +137,7 @@ export function Passes() {
             );
           })}
         </div>
-      ) : <div className="mt-8"><Empty title="No passes for this city yet" sub="Try All cities — many passes work nationwide." /></div>}
+      ) : <div className="mt-8"><Empty title="No passes here yet" sub="Try All countries — many passes work worldwide." /></div>}
     </div>
   );
 }
@@ -137,7 +146,7 @@ export function Checkout() {
   const [params] = useSearchParams();
   const nav = useNavigate();
   const { user } = useAuth();
-  const { code, list } = useCurrency();
+  const { code, list, fmt } = useCurrency();
   const kind = params.get("kind");
   const itemId = params.get("id");
   const [order, setOrder] = useState(null);
@@ -146,18 +155,21 @@ export function Checkout() {
   const [method, setMethod] = useState("upi");
   const [cfg, setCfg] = useState({ razorpay_live: false, stripe_enabled: false });
   const [currency, setCurrency] = useState(code);
+  const [useCredit, setUseCredit] = useState(true);
+  const [balance, setBalance] = useState(0);
 
   useEffect(() => { api.get("/payments/config").then(({ data }) => setCfg(data)).catch(() => {}); }, []);
 
   const symbol = list.find((c) => c.code === currency)?.symbol || "";
-  const amt = (n) => `${symbol}${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: currency === "INR" ? 0 : 2, maximumFractionDigits: currency === "INR" ? 0 : 2 })}`;
+  const amt = (n) => `${symbol}${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: currency === "INR" ? 0 : 2, maximumFractionDigits: currency === "INR" ? 0 : 2 })}`;
 
-  const create = async (cur = currency, code2 = coupon) => {
+  const create = async (cur = currency, code2 = coupon, credit = useCredit) => {
     setBusy(true);
     try {
-      const { data } = await api.post("/checkout", { kind, item_id: itemId, quantity: 1, coupon_code: code2, currency: cur });
+      const { data } = await api.post("/checkout", { kind, item_id: itemId, quantity: 1, coupon_code: code2, currency: cur, use_credit: credit });
       setOrder(data.order);
       setCurrency(data.order.currency);
+      setBalance(data.credit_balance || 0);
       if (code2) toast.success("Coupon applied");
     } catch (e) { toast.error(errMsg(e)); if (!order) nav(-1); } finally { setBusy(false); }
   };
@@ -246,10 +258,32 @@ export function Checkout() {
         <div className="mt-5 space-y-2 text-sm">
           <div className="flex justify-between"><span className="text-slate-500">Subtotal</span><span>{amt(order.charge_subtotal)}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">Discount</span><span className="text-emerald-600">− {amt(order.charge_discount)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-500">Tax</span><span>{amt(order.charge_tax)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">{order.tax_label || "Tax"}{order.tax_percent ? ` (${order.tax_percent}%)` : ""}</span><span>{amt(order.charge_tax)}</span></div>
+          {order.credit_applied > 0 && (
+            <div className="flex justify-between" data-testid="credit-line">
+              <span className="text-slate-500">Buddilio credit</span>
+              <span className="text-emerald-600">− {amt(order.charge_credit || order.credit_applied)}</span>
+            </div>
+          )}
           <div className="flex justify-between border-t border-slate-200 pt-3 font-bold text-base"><span>Total payable</span><span data-testid="order-total">{amt(order.charge_total)}</span></div>
-          {!isINR && <p className="text-xs text-slate-400">Billed in {currency} · ₹{order.total.toLocaleString("en-IN")} equivalent</p>}
+          {!isINR && <p className="text-xs text-slate-400">Billed in {currency} · {fmt(order.total)} equivalent</p>}
         </div>
+
+        {(order.credit_applied > 0 || balance > 0) && (
+          <label className="mt-5 flex items-start gap-3 rounded-xl bg-slate-50 p-4 text-sm" data-testid="use-credit-toggle">
+            <input type="checkbox" checked={useCredit} data-testid="use-credit-checkbox"
+              onChange={(e) => { setUseCredit(e.target.checked); create(currency, coupon, e.target.checked); }}
+              className="mt-0.5 h-4 w-4" />
+            <span>
+              <span className="font-semibold">Use my Buddilio credit</span>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                {order.credit_applied > 0
+                  ? `${fmt(order.credit_applied)} applied · ${fmt(balance)} left in your wallet`
+                  : `${fmt(balance)} available from referrals`}
+              </span>
+            </span>
+          </label>
+        )}
 
         <div className="mt-6 flex gap-2">
           <input data-testid="coupon-input" value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} placeholder="Coupon code"
@@ -282,7 +316,7 @@ export function Checkout() {
           <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" />
           {canStripe ? "Secured by Stripe. You'll be taken to a hosted payment page; we confirm the payment on our server before releasing your order."
             : canRazorpay ? "Secured by Razorpay. UPI, cards, net banking and wallets, all verified server-side."
-            : "Razorpay for India is wired up and awaiting live keys — INR checkout runs in simulation mode. Payments are always verified server-side."}
+            : "Local INR checkout via Razorpay (UPI, cards, net banking) is wired up and awaiting live keys, so INR runs in simulation mode. Cards in every other currency go through Stripe. Payments are always verified server-side."}
         </p>
         {canStripe ? (
           <button onClick={payStripe} disabled={busy} data-testid="pay-stripe-btn"

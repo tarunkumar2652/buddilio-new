@@ -4,7 +4,7 @@ import { api, money } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { EventCard, PersonCard } from "@/components/Cards";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
-import { Compass, Ticket, MessageCircle, Bell, Heart, CalendarDays, Star } from "lucide-react";
+import { Compass, Ticket, MessageCircle, Bell, Heart, CalendarDays, Star, Gift } from "lucide-react";
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -66,6 +66,24 @@ export default function Dashboard() {
         <Link to="/passes" data-testid="quick-passes" className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold"><Ticket className="h-4 w-4" />Buy a pass</Link>
       </div>
 
+      <Link to="/referrals" data-testid="dash-referral-card"
+        className="mt-8 block rounded-2xl bg-slate-900 text-white p-6 sm:p-7 hover-lift">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="overline text-slate-400">Invite &amp; earn</p>
+            <p className="mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight">
+              Bring a friend, earn credit
+            </p>
+            <p className="text-sm text-slate-400 mt-1.5 max-w-md leading-relaxed">
+              Your credit lands the moment they pay for their first booking, and it's applied automatically at your next checkout.
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-2 rounded-full bg-white text-slate-900 px-5 py-2.5 text-sm font-bold shrink-0">
+            <Gift className="h-4 w-4" />Get my link
+          </span>
+        </div>
+      </Link>
+
       <section className="mt-14">
         <h2 className="text-2xl font-bold">Your upcoming events</h2>        <div className="mt-5">
           {d.upcoming_events?.length ? (
@@ -115,7 +133,7 @@ export default function Dashboard() {
         <div className="mt-14 rounded-2xl bg-slate-900 text-white p-8" data-testid="membership-status">
           <p className="overline text-slate-400">Membership</p>
           <p className="mt-2 text-2xl font-display font-bold">{d.membership.plan_name}</p>
-          <p className="text-sm text-slate-400 mt-1">Active until {new Date(d.membership.ends_at).toLocaleDateString("en-IN")}</p>
+          <p className="text-sm text-slate-400 mt-1">Active until {new Date(d.membership.ends_at).toLocaleDateString(undefined)}</p>
         </div>
       )}
     </div>
@@ -151,13 +169,13 @@ export function Orders() {
           <div key={o.id} className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-wrap items-center justify-between gap-4" data-testid={`order-row-${o.id}`}>
             <div>
               <p className="font-semibold">{o.item_name}</p>
-              <p className="text-xs text-slate-500 mt-1">#{o.order_no} · {new Date(o.created_at).toLocaleDateString("en-IN")} · {o.kind}</p>
+              <p className="text-xs text-slate-500 mt-1">#{o.order_no} · {new Date(o.created_at).toLocaleDateString(undefined)} · {o.kind}</p>
               {o.coupon && <p className="text-xs text-emerald-600 mt-1">Coupon {o.coupon} applied</p>}
             </div>
             <div className="text-right">
               <p className="font-display font-bold">
                 {o.currency && o.currency !== "INR"
-                  ? `${o.currency} ${Number(o.charge_total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`
+                  ? `${o.currency} ${Number(o.charge_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
                   : money(o.total)}
               </p>
               <div className="mt-1 flex gap-1.5 justify-end">
@@ -195,7 +213,7 @@ export function Notifications() {
               {!n.read && <span className="h-2 w-2 rounded-full bg-slate-900 mt-1.5 shrink-0" />}
             </div>
             <p className="text-sm text-slate-500 mt-1">{n.body}</p>
-            <p className="text-[11px] text-slate-400 mt-2">{new Date(n.created_at).toLocaleString("en-IN")}</p>
+            <p className="text-[11px] text-slate-400 mt-2">{new Date(n.created_at).toLocaleString(undefined)}</p>
           </Link>
         )) : <Empty title="All caught up" sub="We'll ping you about bookings, messages and new events." />}
       </div>
