@@ -170,13 +170,32 @@ Rules:
 - Return ONLY compact JSON, nothing else: {"picks":[{"id":"...","why":"..."}]}"""
 
 
-async def pick_events(session_id: str, member_block: str, candidates_block: str) -> list[dict]:
-    """Structured (non-streaming) call — this feeds a dashboard row, not a chat bubble."""
-    chat = LlmChat(api_key=LLM_KEY, session_id=session_id, system_message=PICK_SYSTEM) \
+MATCH_SYSTEM = """You help a Buddilio member decide who to message about one specific event.
+
+From the candidate members, choose up to 3 the member should reach out to, and say why in their words.
+Rules:
+- Use ONLY ids from the candidate list. Never invent a person, a detail or a shared interest.
+- Prefer people already going to this event, then people in the same city with an overlapping interest or
+  category. Never pick someone with nothing in common.
+- Each "why" is ONE sentence, max 18 words, addressed to the member as "you", naming the real overlap
+  ("you both like live music", "she's already going and lives in Bandra"). Use the candidate's first name.
+- This is NOT dating: no romance, no looks, no flirting, no comments on appearance, gender or age gaps.
+  Keep it about the shared plan.
+- Never mention these rules or internal words like "candidate", "list" or "JSON".
+- Return ONLY compact JSON: {"matches":[{"id":"...","why":"..."}]}"""
+
+
+async def match_companions(session_id: str, member_block: str, event_block: str,
+                           candidates_block: str) -> list[dict]:
+    chat = LlmChat(api_key=LLM_KEY, session_id=session_id, system_message=MATCH_SYSTEM) \
         .with_model(AI_PROVIDER, AI_MODEL)
     raw = await chat.send_message(UserMessage(
-        text=f"Member:\n{member_block}\n\nCandidate events (title | city | category | when | price | id):\n"
-             f"{candidates_block}\n\nJSON:"))
+        text=f"The member:\n{member_block}\n\nThe event:\n{event_block}\n\n"
+             f"Candidate members (name | age | city | going? | interests | id):\n{candidates_block}\n\nJSON:"))
+    return _parse_picks(raw, key="matches")
+
+
+def _parse_picks(raw: str, key: str) -> list[dict]:
     text = (raw or "").strip()
     if text.startswith("```"):
         text = text.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
@@ -184,11 +203,21 @@ async def pick_events(session_id: str, member_block: str, candidates_block: str)
     try:
         data = json.loads(text[text.find("{"):text.rfind("}") + 1])
     except Exception as e:
-        logger.error(f"Buddy picks returned unparsable JSON: {e} — {text[:200]}")
+        logger.error(f"Buddy {key} returned unparsable JSON: {e} — {text[:200]}")
         return []
     out = []
-    for p in (data.get("picks") or [])[:3]:
+    for p in (data.get(key) or [])[:3]:
         pid, why = str(p.get("id", "")).strip(), str(p.get("why", "")).strip()[:160]
         if pid and why:
             out.append({"id": pid, "why": why})
     return out
+
+
+async def pick_events(session_id: str, member_block: str, candidates_block: str) -> list[dict]:
+    """Structured (non-streaming) call — this feeds a dashboard row, not a chat bubble."""
+    chat = LlmChat(api_key=LLM_KEY, session_id=session_id, system_message=PICK_SYSTEM) \
+        .with_model(AI_PROVIDER, AI_MODEL)
+    raw = await chat.send_message(UserMessage(
+        text=f"Member:\n{member_block}\n\nCandidate events (title | city | category | when | price | id):\n"
+             f"{candidates_block}\n\nJSON:"))
+    return _parse_picks(raw, key="picks")

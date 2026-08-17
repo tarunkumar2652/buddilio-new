@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useCurrency } from "@/context/CurrencyContext";
 import { EventCard, Stars } from "@/components/Cards";
 import { ReviewSection } from "@/components/ReviewSection";
+import { CompanionMatches } from "@/components/CompanionMatches";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert } from "lucide-react";
 export function Events() {
@@ -229,6 +230,8 @@ export function EventDetail() {
               </div>
             </div>
           )}
+
+          {user && !finished && <CompanionMatches ev={ev} />}
 
           <ReviewSection eventId={ev.id} canReview={!!user && ev.my_status === "confirmed" && finished} />
 

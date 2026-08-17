@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 15 — Companion Matches (GET /api/events/{event_id}/ai-companions). 11/11 backend pytest cases pass; frontend flows verified on Chromium at 1920 and 390. Guest hides section, member sees 2 sensible suggestions (Rohan+Omar, Dubai, shared music/comedy interests), Message button creates a conversation, posts the pre-filled invite mentioning the event, navigates to /messages?c=<id> with the invite visible in the thread, and duplicate calls reuse the same conversation. Privacy (private profile), blocked-user and organiser/self exclusions all honoured — even when the ai_matches row is warm — because hydrate() re-checks status/privacy/blocked at serve time. Cache is stable (same items across sequential GETs) and refresh throttled (second immediate ?refresh=1 within 60s reuses the cached row, verified via items equality). Unique index (user_id, event_id) present, per-member isolation confirmed. 401 without token, 400 on invalid id, and enabled=true+items=[] on unknown/valid id all correct. Finished event (Rooftop Jazz & Tapas Night) hides the section; reviews section still renders (regression clean). No horizontal overflow at 1920 or 390.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/events/{event_id}/ai-companions", "issue": "On cache-miss the response returns generated_at=iso(now_utc()) (server.py L3021) computed AFTER the DB write at L3020, so the value returned to the client differs from the value stored in db.ai_matches by a few microseconds. Every subsequent cache-hit call then returns the stored (slightly earlier) timestamp. Semantic throttle still works, but generated_at is not stable across a cache-miss→cache-hit pair. Fix: capture ts once and use it in both the $set and the response."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration15_ai_companions.py",
+    "/app/test_reports/pytest/iteration15.xml"
+  ],
+  "action_items": [
+    "(Minor) Make GET /api/events/{event_id}/ai-companions return the exact created_at written to db.ai_matches on cache miss instead of a fresh iso(now_utc()) so generated_at is stable."
+  ],
+  "critical_code_review_comments": [
+    "server.py L2986-2987: attendees query uses $in over `going` (already excluding self) AND $nin exclude (containing self+organiser+blocked). The double filter works, but the $in list construction includes going IDs blindly — fine because base already filters status/privacy, but consider dropping the redundant $nin here since base already has _id: {$nin: exclude}. The subsequent update_one to _id here overrides base's _id filter entirely (Mongo merges by key)! Result: privacy/exclude filter is NOT enforced on the attendees branch. In practice hydrate() catches privacy+blocked and organiser is unlikely to be a confirmed attendee, but this is a latent bug — recommend using $and to combine both _id constraints or dropping the local override.",
+    "server.py L3021: generated_at drift bug (see backend_issues.minor).",
+    "CompanionMatches.jsx L27-29: pre-filled invite embeds window.location.origin as the event link — good — but does not sanitize the greeting `person.full_name.split(' ')[0]` if the name is null. Add a safe fallback (`|| 'there'`)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration15_ai_companions.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "diya.sharma@example.com / User@123 (used); tara.joshi@example.com / User@123 (used)",
+  "seed_data_creation": "None. Temporarily flipped one user's privacy.profile_visibility to 'private' and one blocked entry on diya — both restored inside test teardown. UI-created conversation 6a82928edb37e87e769d990d cleaned up.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iteration15_ai_companions.py covers auth/error paths, payload shape+safety filter, self/organiser exclusion, cache stability, refresh throttle (items-based), unique index+per-member isolation, block+private hydrate re-check, and the full Message flow with dedup. Cached matches for diya on the Dubai event (6a7cc7045fed9266ef61325e) were reused; only one live LLM call was made during the run (for tara on the same event). Rooftop Jazz & Tapas Night id 6a7b73e34a13de566dbd110f is the reliable 'completed' event for finished-hide checks."
+}

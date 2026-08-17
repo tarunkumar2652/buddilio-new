@@ -279,6 +279,22 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   (`/app/test_reports/iteration_14.json`) — zero backend/UI issues, covering auth, geography, joined-event
   exclusion, per-member isolation, cache/refresh semantics, the unpublish guard and dashboard regression.
 
+## Implemented — iteration 15 (June 2026): companion matches on the event page
+- `GET /api/events/{id}/ai-companions` (`?refresh=1`, throttled 1/min) suggests **up to 3 members to message
+  about that specific event**, each with a one-line reason. Candidate pool: confirmed attendees first, then
+  same-city members sharing an interest or the event's category (max 12). Self, the organiser, blocked members
+  and private profiles are excluded when building the pool **and re-checked at serve time** by `hydrate()`, so a
+  later block or privacy change takes effect immediately even on a warm cache. Cached 6h in `db.ai_matches`
+  (unique on `user_id` + `event_id`).
+- `MATCH_SYSTEM` in `ai.py` forbids anything romantic or appearance-based — reasons must name the real overlap
+  ("you both like live music, and he's in Dubai") — and shares the JSON parser with the dashboard picks.
+- `components/CompanionMatches.jsx` renders under the event's details for signed-in members on upcoming events
+  only (hidden for guests and finished events): avatar, first name, city, an "Already going" badge, the reason
+  and a **Message** button that opens the conversation with a pre-filled invite linking the event.
+- Verified: `backend/tests/test_iteration15_ai_companions.py` **11/11** and testing-agent iteration 15
+  (`/app/test_reports/iteration_15.json`) — zero UI issues; the one minor finding (unstable `generated_at` on a
+  cache miss) is fixed for both matches and picks.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

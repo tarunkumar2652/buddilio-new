@@ -2918,9 +2918,109 @@ async def ai_picks(refresh: int = 0, user: dict = Depends(get_current_user)):
     picks = [p for p in picks if p["id"] in valid_ids][:3]
     if not picks:
         return {"enabled": True, "items": []}
+    ts = iso(now_utc())
     await db.ai_picks.update_one({"user_id": user["id"]},
-                                 {"$set": {"picks": picks, "created_at": iso(now_utc())}}, upsert=True)
-    return {"enabled": True, "items": await ai_hydrate_picks(picks), "generated_at": iso(now_utc())}
+                                 {"$set": {"picks": picks, "created_at": ts}}, upsert=True)
+    return {"enabled": True, "items": await ai_hydrate_picks(picks), "generated_at": ts}
+
+
+AI_MATCH_TTL_HOURS = 6
+
+
+@api.get("/events/{event_id}/ai-companions")
+async def ai_companions(event_id: str, refresh: int = 0, user: dict = Depends(get_current_user)):
+    """Up to 3 members worth messaging about this event, each with a reason. Cached 6h per member+event."""
+    if not ai.ai_enabled():
+        return {"enabled": False, "items": []}
+    try:
+        ev = await db.events.find_one({"_id": ObjectId(event_id), "status": "published"})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid event id")
+    if not ev:
+        return {"enabled": True, "items": []}
+
+    me = await db.users.find_one({"_id": ObjectId(user["id"])})
+    blocked = me.get("blocked", [])
+
+    async def hydrate(matches: List[dict], going: set) -> List[dict]:
+        ids = []
+        for m in matches:
+            try:
+                ids.append(ObjectId(m["id"]))
+            except Exception:
+                continue
+        if not ids:
+            return []
+        docs = await db.users.find({"_id": {"$in": ids}, "status": "active",
+                                   "privacy.profile_visibility": {"$ne": "private"}},
+                                  PUBLIC_FIELDS).limit(len(ids)).to_list(len(ids))
+        by_id = {str(d["_id"]): clean(d) for d in docs}
+        out = []
+        for m in matches:
+            person = by_id.get(m["id"])
+            if person and m["id"] not in blocked:
+                person["why"] = m["why"]
+                person["going"] = m["id"] in going
+                out.append(person)
+        return out
+
+    parts = await db.event_participants.find({"event_id": event_id, "status": "confirmed"},
+                                            {"user_id": 1}).limit(200).to_list(200)
+    going = {p["user_id"] for p in parts if p["user_id"] != user["id"]}
+
+    cached = await db.ai_matches.find_one({"user_id": user["id"], "event_id": event_id})
+    if cached:
+        age = (now_utc() - datetime.fromisoformat(cached["created_at"])).total_seconds()
+        if age < (60 if refresh else AI_MATCH_TTL_HOURS * 3600):
+            items = await hydrate(cached.get("matches", []), going)
+            if items:
+                return {"enabled": True, "items": items, "generated_at": cached["created_at"]}
+
+    exclude = [ObjectId(b) for b in blocked if len(b) == 24] + [ObjectId(user["id"])]
+    if ev.get("partner_id"):
+        try:
+            exclude.append(ObjectId(ev["partner_id"]))
+        except Exception:
+            pass
+    base = {"role": "user", "status": "active", "_id": {"$nin": exclude},
+            "privacy.profile_visibility": {"$ne": "private"}}
+    attendees = await db.users.find({**base, "_id": {"$in": [ObjectId(g) for g in going if len(g) == 24],
+                                                    "$nin": exclude}}, PUBLIC_FIELDS).limit(10).to_list(10)
+    pool = list(attendees)
+    if len(pool) < 10:
+        overlap = {"$or": [{"interests": {"$in": me.get("interests") or ["__none__"]}},
+                           {"event_categories": ev.get("category")}]}
+        nearby = await db.users.find({**base, "city": ev.get("city"), **overlap}, PUBLIC_FIELDS) \
+            .limit(12).to_list(12)
+        have = {str(p["_id"]) for p in pool}
+        pool += [n for n in nearby if str(n["_id"]) not in have][:12 - len(pool)]
+    if not pool:
+        return {"enabled": True, "items": []}
+
+    lines = []
+    for p in pool[:12]:
+        pid = str(p["_id"])
+        name = (p.get("full_name") or "Member").split(" ")[0]
+        lines.append(f"- {name} | {p.get('age') or '?'} | {p.get('city', '')} | "
+                     f"{'already going' if pid in going else 'not going yet'} | "
+                     f"{', '.join((p.get('interests') or [])[:6]) or 'no interests listed'} | id={pid}")
+    member_block = "\n".join([
+        f"- City: {me.get('city') or 'not set'}",
+        f"- Interests: {', '.join(me.get('interests') or []) or 'none given'}",
+        f"- Preferred categories: {', '.join(me.get('event_categories') or []) or 'none given'}",
+    ])
+    event_block = (f"{ev.get('title')} | {ev.get('category')} | {ev.get('city')} | "
+                   f"{(ev.get('starts_at') or '')[:16]} | {ev.get('venue', '')}")
+    matches = await ai.match_companions(f"match-{user['id']}-{event_id}", member_block, event_block,
+                                        "\n".join(lines))
+    valid = {str(p["_id"]) for p in pool}
+    matches = [m for m in matches if m["id"] in valid][:3]
+    if not matches:
+        return {"enabled": True, "items": []}
+    ts = iso(now_utc())
+    await db.ai_matches.update_one({"user_id": user["id"], "event_id": event_id},
+                                   {"$set": {"matches": matches, "created_at": ts}}, upsert=True)
+    return {"enabled": True, "items": await hydrate(matches, going), "generated_at": ts}
 
 
 class AiGuestIn(BaseModel):
@@ -3012,6 +3112,7 @@ async def startup():
     await db.ai_messages.create_index([("user_id", 1), ("session_id", 1), ("created_at", 1)])
     await db.ai_guest_asks.create_index([("ip", 1), ("created_at", -1)])
     await db.ai_picks.create_index("user_id", unique=True)
+    await db.ai_matches.create_index([("user_id", 1), ("event_id", 1)], unique=True)
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]
