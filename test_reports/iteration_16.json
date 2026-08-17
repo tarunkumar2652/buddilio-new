@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 16 — File & media storage integration. 12/12 backend pytest cases pass. Focus areas E1 handed off (WebSocket delivery of attachments, cross-user attachment/upload-session abuse, admin delete, size caps, partner gallery E2E, legacy image regression) all pass end-to-end. Frontend UI on Messages page (attachment-btn, attachment-preview, attachment-remove) works at 1920px and 390px with no horizontal overflow and WS state 'Live'. Partner event form gallery works when adding photos ONE AT A TIME (upload -> item-0 appears -> upload again -> item-1 appears -> remove-0 works). One reproducible frontend bug found: selecting multiple photos in a SINGLE file picker leaves only the last photo (stale closure over `value` inside the sequential upload loop in GalleryUpload.jsx). Also cleaned up 24 leftover 'TEST hello ...' messages from a prior run in conversation 6a7b6792aaea7f778441926c (per E1's cleanup ask) and reset that conversation's last_message to a real value.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/uploads/chunk/part", "issue": "Sess.received is incremented BEFORE the update_one write of the chunk (line 2417 uses $inc after upsert). If a client retries the same index the size is double-counted and can trip the 'exceeded declared file size' guard on a legitimate retry. Consider $set:{received: sum(parts.data.size)} or dedupe by index."},
+      {"endpoint": "DELETE /api/uploads?path=", "issue": "The path query param is not URL-decoded/validated as belonging to the app namespace. In practice storage_path is only assigned via our code so injection risk is low, but a defensive `startswith(APP_NAME + '/uploads/')` check would be cheap."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "GalleryUpload.jsx", "issue": "Selecting multiple photos in a single file-picker keeps ONLY the last uploaded photo. The for-loop closes over the initial `value` prop, so each iteration re-computes `[...value, data.url]` from the same stale array. Adding photos one at a time works because the component re-renders between picks. Fix: track a running local array (`let next = [...value]; ... next = [...next, data.url].slice(0, max); onChange(next);`) inside `pick`.", "selector": "[data-testid='event-gallery-upload']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration16_media.py",
+    "/app/test_reports/pytest/iteration16.xml"
+  ],
+  "action_items": [
+    "Fix GalleryUpload.jsx multi-select bug (see ui_bugs) so picking 2+ photos in one dialog adds all of them.",
+    "(Optional) Recompute `sess.received` from parts rather than $inc, so retried chunks don't inflate the counter.",
+    "(Optional) Defensive path prefix check in DELETE /api/uploads."
+  ],
+  "critical_code_review_comments": [
+    "server.py L2415-2417: upload_chunk_part uses upsert on (upload_id, index) — good for idempotency of storage — but then blindly $inc's sess.received by len(data). A retry of the same index therefore double-counts and can hit the (size + CHUNK_LIMIT_BYTES) guard on L2413. Compute received from db.upload_parts sum after each write, or only $inc when insert (upserted_id is not None).",
+    "server.py L2426: complete() reads up to 200 parts. MAX_FILE_BYTES=25MB / CHUNK_LIMIT_BYTES=3MB → max 9 parts, so 200 is safe, but this is a magic upper bound worth documenting.",
+    "server.py L2466 GET /api/files/{path}: no Cache-Control set. Static-served images benefit from short-term caching (Cache-Control: private, max-age=60) so the browser doesn't re-hit /api/files on every message re-render.",
+    "GalleryUpload.jsx L20-22: multi-file loop closure bug (see ui_bugs).",
+    "GalleryUpload.jsx L55: helper text claims 'up to 25MB each' but /uploads/file caps images at 5MB and only the chunked path allows 25MB — the label is misleading for image gallery photos (which are always PNG/JPG/WEBP). Prefer 'up to 5MB each' to match the enforcement in upload_any."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration16_media.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "83%"},
+  "test_credentials": "diya.sharma@example.com/User@123, tara.joshi@example.com/User@123, aarav.mehta@example.com/User@123, admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123. Test also registers ephemeral partner (partnergallery_<uuid>@example.com) and cleans it up.",
+  "seed_data_creation": "None persisted. Test creates one throwaway partner + one draft event + a handful of upload rows and deletes them at the end of the test. Also purged 24 leftover 'TEST hello ...' messages from conversation 6a7b6792aaea7f778441926c and 0 partnergallery users left behind.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iteration16_media.py covers size caps (5MB image, 10MB non-image, 25MB chunked, unsupported extension), cross-user upload-session hijack (part+complete), empty-message + bogus attachment_path + cross-owner attachment rejections, WebSocket delivery of an attachment-only message with 'Sent a photo' preview + notification, admin-vs-non-owner delete precedence (403/200 + is_deleted persistence + serve-404), legacy /api/uploads image path (regression), and the partner gallery end-to-end (register partner → upload 2 photos → create event → PUT to remove one → admin moderate approve → GET /api/events/{id} returns gallery=[surviving_url]). The GalleryUpload multi-select bug is UI-only; the backend flow works because API is called per-file already. Preview URL: https://lifestyle-connect-17.preview.emergentagent.com. Conversation 6a7b6792aaea7f778441926c (diya↔aarav) is safe to reuse — its last_message has been reset.",
+  "rca of the issue": "GalleryUpload multi-select bug — in components/GalleryUpload.jsx the pick() handler iterates awaited uploadFile() calls, but each `onChange([...value, data.url])` reads `value` from the closure captured at render time. Because React state updates are asynchronous and the same closure is used for every iteration, iteration N still sees the initial `value`, so only the last iteration's onChange sticks. Repro: pick 2 photos in a single file dialog → gallery shows only the 2nd. Mitigation: track the running array locally: `let next = value.slice(); for (...) { next = [...next, data.url].slice(0, max); onChange(next); }`."
+}

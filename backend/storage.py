@@ -11,6 +11,10 @@ APP_NAME = "buddilio"
 
 MIME_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
               "gif": "image/gif", "webp": "image/webp"}
+DOC_MIME_TYPES = {"pdf": "application/pdf", "csv": "text/csv", "txt": "text/plain",
+                  "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
+                  "mp3": "audio/mpeg", "m4a": "audio/mp4"}
+ALL_MIME_TYPES = {**MIME_TYPES, **DOC_MIME_TYPES}
 EXT_FOR_MIME = {v: k for k, v in MIME_TYPES.items()}
 
 storage_key = None

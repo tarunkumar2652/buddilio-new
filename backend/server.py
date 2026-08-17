@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, BeforeValidator, EmailStr, ConfigDict
 from emailer import send_email, wrap
 from realtime import hub
 from push import push_to, push_enabled, vapid_public_key
-from storage import init_storage, put_object, get_object, MIME_TYPES, APP_NAME
+from storage import init_storage, put_object, get_object, MIME_TYPES, ALL_MIME_TYPES, DOC_MIME_TYPES, APP_NAME
 from city_guides import guide_for
 import ai
 
@@ -526,7 +526,8 @@ class VerifyPaymentIn(BaseModel):
 
 
 class MessageIn(BaseModel):
-    body: str
+    body: str = ""
+    attachment_path: str = ""
 
 
 class ReportIn(BaseModel):
@@ -1728,16 +1729,27 @@ async def send_message(cid: str, payload: MessageIn, user: dict = Depends(get_cu
     conv = await db.conversations.find_one({"_id": ObjectId(cid)})
     if not conv or user["id"] not in conv["members"]:
         raise HTTPException(status_code=403, detail="You are not part of this conversation.")
-    if not payload.body.strip():
+    if not payload.body.strip() and not payload.attachment_path:
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    attachment = None
+    if payload.attachment_path:
+        rec = await db.files.find_one({"storage_path": payload.attachment_path,
+                                       "owner_id": user["id"], "is_deleted": False})
+        if not rec:
+            raise HTTPException(status_code=400, detail="That attachment is no longer available.")
+        attachment = {"url": f"/api/files/{rec['storage_path']}", "path": rec["storage_path"],
+                      "name": rec.get("original_filename", "file"),
+                      "content_type": rec.get("content_type", ""), "size": rec.get("size", 0)}
     doc = {"conversation_id": cid, "sender_id": user["id"], "body": payload.body.strip()[:2000],
-           "read": False, "created_at": iso(now_utc())}
+           "attachment": attachment, "read": False, "created_at": iso(now_utc())}
     res = await db.messages.insert_one(doc)
+    preview = doc["body"][:80] or ("Sent a photo" if (attachment or {}).get("content_type", "").startswith("image/")
+                                   else "Sent a file")
     await db.conversations.update_one({"_id": conv["_id"]},
-                                      {"$set": {"last_message": doc["body"][:80], "updated_at": iso(now_utc())}})
+                                      {"$set": {"last_message": preview, "updated_at": iso(now_utc())}})
     for m in conv["members"]:
         if m != user["id"]:
-            await notify(m, "New message", f"{user['full_name']}: {doc['body'][:60]}", "message", "/messages", email=False)
+            await notify(m, "New message", f"{user['full_name']}: {preview[:60]}", "message", "/messages", email=False)
     out = clean(await db.messages.find_one({"_id": res.inserted_id}))
     out["sender_name"] = user["full_name"]
     out["sender_photo"] = user.get("photo", "")
@@ -2326,6 +2338,134 @@ async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_cu
                                "size": result.get("size", len(data)), "is_deleted": False,
                                "created_at": iso(now_utc())})
     return {"url": f"/api/files/{result['path']}", "path": result["path"], "size": result.get("size", len(data))}
+
+
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_FILE_BYTES = 25 * 1024 * 1024
+CHUNK_LIMIT_BYTES = 3 * 1024 * 1024
+
+
+async def register_file(user_id: str, result: dict, filename: str, content_type: str, size: int) -> dict:
+    await db.files.insert_one({"storage_path": result["path"], "owner_id": user_id,
+                               "original_filename": filename, "content_type": content_type,
+                               "size": result.get("size", size), "is_deleted": False,
+                               "created_at": iso(now_utc())})
+    return {"url": f"/api/files/{result['path']}", "path": result["path"],
+            "name": filename, "content_type": content_type, "size": result.get("size", size)}
+
+
+def upload_ext(filename: str, allowed: dict) -> str:
+    ext = (filename or "file.bin").rsplit(".", 1)[-1].lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400,
+                            detail=f"That file type isn't supported. Allowed: {', '.join(sorted(allowed))}.")
+    return ext
+
+
+@api.post("/uploads/file")
+async def upload_any(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Images, PDFs, docs, short audio/video — one shot. Bigger files use the chunked endpoints."""
+    ext = upload_ext(file.filename, ALL_MIME_TYPES)
+    data = await file.read()
+    cap = MAX_IMAGE_BYTES if ext in MIME_TYPES else 10 * 1024 * 1024
+    if len(data) > cap:
+        raise HTTPException(status_code=400, detail=f"That file is too large. Limit is {cap // (1024 * 1024)}MB.")
+    content_type = file.content_type or ALL_MIME_TYPES[ext]
+    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+    try:
+        result = await asyncio.to_thread(put_object, path, data, content_type)
+    except Exception as e:
+        logger.error(f"upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Upload failed. Please try again.")
+    return await register_file(user["id"], result, file.filename or f"file.{ext}", content_type, len(data))
+
+
+class ChunkInitIn(BaseModel):
+    filename: str
+    size: int
+    content_type: str = ""
+
+
+@api.post("/uploads/chunk/init")
+async def upload_chunk_init(payload: ChunkInitIn, user: dict = Depends(get_current_user)):
+    """Chunked upload so large media isn't cut off by proxy body limits."""
+    ext = upload_ext(payload.filename, ALL_MIME_TYPES)
+    if payload.size <= 0 or payload.size > MAX_FILE_BYTES:
+        raise HTTPException(status_code=400,
+                            detail=f"Files must be under {MAX_FILE_BYTES // (1024 * 1024)}MB.")
+    upload_id = uuid.uuid4().hex
+    await db.upload_sessions.insert_one({
+        "upload_id": upload_id, "owner_id": user["id"], "filename": payload.filename,
+        "content_type": payload.content_type or ALL_MIME_TYPES[ext], "ext": ext,
+        "size": payload.size, "received": 0, "created_at": iso(now_utc())})
+    return {"upload_id": upload_id, "chunk_size": CHUNK_LIMIT_BYTES}
+
+
+@api.post("/uploads/chunk/part")
+async def upload_chunk_part(upload_id: str = Form(...), index: int = Form(...),
+                            chunk: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    sess = await db.upload_sessions.find_one({"upload_id": upload_id, "owner_id": user["id"]})
+    if not sess:
+        raise HTTPException(status_code=404, detail="That upload session has expired. Please try again.")
+    data = await chunk.read()
+    if len(data) > CHUNK_LIMIT_BYTES:
+        raise HTTPException(status_code=400, detail="Chunk too large.")
+    if sess["received"] + len(data) > sess["size"] + CHUNK_LIMIT_BYTES:
+        raise HTTPException(status_code=400, detail="Upload exceeded the declared file size.")
+    await db.upload_parts.update_one({"upload_id": upload_id, "index": index},
+                                    {"$set": {"data": data, "created_at": iso(now_utc())}}, upsert=True)
+    # recount rather than $inc so a retried chunk doesn't inflate the total
+    parts = await db.upload_parts.find({"upload_id": upload_id}, {"data": 1}).limit(200).to_list(200)
+    received = sum(len(p["data"]) for p in parts)
+    await db.upload_sessions.update_one({"_id": sess["_id"]}, {"$set": {"received": received}})
+    return {"ok": True, "index": index, "received": received}
+
+
+@api.post("/uploads/chunk/complete")
+async def upload_chunk_complete(upload_id: str = Form(...), user: dict = Depends(get_current_user)):
+    sess = await db.upload_sessions.find_one({"upload_id": upload_id, "owner_id": user["id"]})
+    if not sess:
+        raise HTTPException(status_code=404, detail="That upload session has expired. Please try again.")
+    parts = await db.upload_parts.find({"upload_id": upload_id}).sort("index", 1).limit(200).to_list(200)
+    body = b"".join(p["data"] for p in parts)
+    await db.upload_parts.delete_many({"upload_id": upload_id})
+    await db.upload_sessions.delete_one({"_id": sess["_id"]})
+    if not body:
+        raise HTTPException(status_code=400, detail="No file data was received. Please try again.")
+    if len(body) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=400, detail="That file is too large.")
+    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{sess['ext']}"
+    try:
+        result = await asyncio.to_thread(put_object, path, body, sess["content_type"])
+    except Exception as e:
+        logger.error(f"chunked upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Upload failed. Please try again.")
+    return await register_file(user["id"], result, sess["filename"], sess["content_type"], len(body))
+
+
+@api.get("/me/files")
+async def my_files(user: dict = Depends(get_current_user)):
+    docs = await db.files.find({"owner_id": user["id"], "is_deleted": False},
+                               {"storage_path": 1, "original_filename": 1, "content_type": 1,
+                                "size": 1, "created_at": 1}).sort("created_at", -1).limit(100).to_list(100)
+    return {"items": [{"path": d["storage_path"], "url": f"/api/files/{d['storage_path']}",
+                       "name": d.get("original_filename", ""), "content_type": d.get("content_type", ""),
+                       "size": d.get("size", 0), "created_at": d.get("created_at", "")} for d in docs]}
+
+
+@api.delete("/uploads")
+async def delete_upload(path: str, user: dict = Depends(get_current_user)):
+    """Storage has no delete API, so this is a soft delete — the file stops being served."""
+    if not path.startswith(f"{APP_NAME}/uploads/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    rec = await db.files.find_one({"storage_path": path})
+    if not rec:
+        raise HTTPException(status_code=404, detail="File not found")
+    if rec.get("owner_id") != user["id"] and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="You can only remove your own files.")
+    await db.files.update_one({"_id": rec["_id"]},
+                              {"$set": {"is_deleted": True, "deleted_at": iso(now_utc())}})
+    return {"ok": True}
 
 
 @api.get("/files/{path:path}")
@@ -3113,6 +3253,11 @@ async def startup():
     await db.ai_guest_asks.create_index([("ip", 1), ("created_at", -1)])
     await db.ai_picks.create_index("user_id", unique=True)
     await db.ai_matches.create_index([("user_id", 1), ("event_id", 1)], unique=True)
+    await db.files.create_index("storage_path")
+    await db.files.create_index([("owner_id", 1), ("created_at", -1)])
+    await db.upload_parts.create_index([("upload_id", 1), ("index", 1)], unique=True)
+    await db.upload_sessions.create_index("upload_id", unique=True)
+    await db.upload_sessions.create_index("created_at", expireAfterSeconds=3600)
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]

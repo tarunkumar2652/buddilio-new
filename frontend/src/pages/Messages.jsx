@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { toast } from "sonner";
-import { api, errMsg } from "@/lib/api";
+import { api, errMsg, fileUrl } from "@/lib/api";
+import { uploadFile, prettySize } from "@/lib/uploads";
 import { useAuth } from "@/context/AuthContext";
 import { Spinner, Empty, SEO } from "@/components/Shared";
-import { Send, Flag, Trash2, ArrowLeft, Users } from "lucide-react";
+import { Send, Flag, Trash2, ArrowLeft, Users, Paperclip, X, Loader2, FileText, Download } from "lucide-react";
 
 const WS_URL = () => {
   const base = process.env.REACT_APP_BACKEND_URL.replace(/^http/, "ws");
@@ -20,6 +21,9 @@ export default function Messages() {
   const [text, setText] = useState("");
   const [online, setOnline] = useState([]);
   const [typing, setTyping] = useState(null);
+  const [att, setAtt] = useState(null);
+  const [pct, setPct] = useState(null);
+  const fileInput = useRef(null);
   const [connected, setConnected] = useState(false);
   const endRef = useRef(null);
   const threadRef = useRef(null);
@@ -94,13 +98,25 @@ export default function Messages() {
     typingTimer.current = setTimeout(() => emit("stop_typing"), 1800);
   };
 
+  const attach = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setPct(0);
+    try {
+      setAtt(await uploadFile(file, setPct));
+    } catch (er) { toast.error(er.message || errMsg(er)); } finally { setPct(null); }
+  };
+
   const send = async (e) => {
     e.preventDefault();
-    if (!text.trim()) return;
+    if (!text.trim() && !att) return;
     const body = text;
+    const attachment_path = att?.path || "";
     setText("");
+    setAtt(null);
     emit("stop_typing");
-    try { await api.post(`/conversations/${active}/messages`, { body }); loadMsgs(); loadConvos(); }
+    try { await api.post(`/conversations/${active}/messages`, { body, attachment_path }); loadMsgs(); loadConvos(); }
     catch (er) { toast.error(errMsg(er)); }
   };
 
@@ -182,7 +198,28 @@ export default function Messages() {
                     <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
                       <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${mine ? "bg-slate-900 text-white" : "bg-slate-100"}`}>
                         {!mine && current.type === "event" && <p className="text-[11px] font-bold text-slate-500 mb-0.5">{m.sender_name}</p>}
-                        <p className="text-sm whitespace-pre-wrap break-words">{m.body}</p>
+                        {m.attachment && (m.attachment.content_type || "").startsWith("image/") && (
+                          <a href={fileUrl(m.attachment.url)} target="_blank" rel="noreferrer"
+                            data-testid={`message-image-${m.id}`}>
+                            <img src={fileUrl(m.attachment.url)} alt={m.attachment.name}
+                              className="mb-2 max-h-56 w-full rounded-xl object-cover" loading="lazy" />
+                          </a>
+                        )}
+                        {m.attachment && !(m.attachment.content_type || "").startsWith("image/") && (
+                          <a href={fileUrl(m.attachment.url)} target="_blank" rel="noreferrer"
+                            data-testid={`message-file-${m.id}`}
+                            className={`mb-2 flex items-center gap-2.5 rounded-xl px-3 py-2.5 ${mine ? "bg-white/10" : "bg-white"}`}>
+                            <FileText className="h-4 w-4 shrink-0" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-bold">{m.attachment.name}</span>
+                              <span className={`text-[10px] ${mine ? "text-slate-300" : "text-slate-500"}`}>
+                                {prettySize(m.attachment.size || 0)}
+                              </span>
+                            </span>
+                            <Download className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                          </a>
+                        )}
+                        {m.body && <p className="text-sm whitespace-pre-wrap break-words">{m.body}</p>}
                         <p className={`text-[10px] mt-1 ${mine ? "text-slate-400" : "text-slate-500"}`}>
                           {new Date(m.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
                           {mine && (m.read ? " · Read" : " · Sent")}
@@ -202,10 +239,41 @@ export default function Messages() {
                 )}
                 <div ref={endRef} />
               </div>
-              <form onSubmit={send} className="border-t border-slate-200 p-3 flex gap-2">
-                <input data-testid="message-input" value={text} onChange={(e) => onType(e.target.value)} placeholder="Write a message…"
-                  className="flex-1 rounded-full border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-slate-900" />
-                <button data-testid="send-message-btn" className="rounded-full bg-slate-900 text-white h-10 w-10 grid place-items-center"><Send className="h-4 w-4" /></button>
+              <form onSubmit={send} className="border-t border-slate-200 p-3">
+                {(att || pct !== null) && (
+                  <div className="mb-2 flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
+                    data-testid="attachment-preview">
+                    {pct !== null ? (
+                      <span className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                        <Loader2 className="h-4 w-4 animate-spin" />Uploading… {pct}%
+                      </span>
+                    ) : (
+                      <>
+                        {(att.content_type || "").startsWith("image/")
+                          ? <img src={fileUrl(att.url)} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                          : <FileText className="h-5 w-5 text-slate-500" />}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs font-bold">{att.name}</span>
+                          <span className="text-[10px] text-slate-500">{prettySize(att.size || 0)}</span>
+                        </span>
+                        <button type="button" onClick={() => setAtt(null)} data-testid="attachment-remove"
+                          className="p-1.5 rounded-full hover:bg-slate-200"><X className="h-3.5 w-3.5" /></button>
+                      </>
+                    )}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input ref={fileInput} type="file" onChange={attach} className="hidden" data-testid="attachment-input"
+                    accept="image/*,application/pdf,text/csv,text/plain,video/mp4,video/webm,audio/mpeg" />
+                  <button type="button" onClick={() => fileInput.current?.click()} disabled={pct !== null}
+                    data-testid="attachment-btn" title="Attach a photo or file"
+                    className="rounded-full border border-slate-200 h-10 w-10 grid place-items-center text-slate-500 transition-colors hover:border-slate-900 hover:text-slate-900 disabled:opacity-50">
+                    <Paperclip className="h-4 w-4" />
+                  </button>
+                  <input data-testid="message-input" value={text} onChange={(e) => onType(e.target.value)} placeholder="Write a message…"
+                    className="flex-1 rounded-full border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-slate-900" />
+                  <button data-testid="send-message-btn" className="rounded-full bg-slate-900 text-white h-10 w-10 grid place-items-center"><Send className="h-4 w-4" /></button>
+                </div>
               </form>
             </>
           ) : (

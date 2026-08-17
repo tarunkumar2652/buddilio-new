@@ -295,6 +295,27 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   (`/app/test_reports/iteration_15.json`) — zero UI issues; the one minor finding (unstable `generated_at` on a
   cache miss) is fixed for both matches and picks.
 
+## Implemented — iteration 16 (June 2026): file & media storage, completed
+- Emergent object storage was already wired for 5MB images; this round brings it fully in line with the playbook
+  and turns it into real product features.
+- **Backend**: `POST /api/uploads/file` (images 5MB; PDF/CSV/TXT/MP4/WEBM/MOV/MP3/M4A 10MB),
+  **chunked upload** `POST /api/uploads/chunk/init|part|complete` for files up to **25MB** (3MB parts,
+  `db.upload_sessions` with a 1h TTL, `db.upload_parts`, `received` recounted from parts so retried chunks don't
+  inflate it), `GET /api/me/files`, and `DELETE /api/uploads?path=` (soft delete — storage has no delete API, so
+  `GET /api/files/{path}` refuses `is_deleted` rows; path must sit under `buddilio/uploads/`). Every upload is
+  registered in `db.files` with owner, original filename, content type and size.
+- **Chat attachments**: `MessageIn.attachment_path` — the sender must own a live `db.files` row, body may be
+  empty, the conversation preview reads "Sent a photo"/"Sent a file", and the attachment rides the existing
+  WebSocket push. Images render inline in the thread, other files as a download chip with name + size.
+- **Partner event galleries**: `components/GalleryUpload.jsx` on the event form — multi-select, per-file
+  progress, remove — feeding the gallery strip already present on the event detail page.
+- **Frontend**: `lib/uploads.js` `uploadFile()` transparently switches to the chunked path above 4MB and reports
+  progress.
+- Verified: `backend/tests/test_iteration16_media.py` **12/12** and testing-agent iteration 16
+  (`/app/test_reports/iteration_16.json`). Their findings are all fixed: the multi-select gallery closure bug
+  (now confirmed adding 3 photos in one dialog), the chunk retry counter, the delete path guard and the 5MB
+  helper text.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

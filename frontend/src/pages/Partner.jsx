@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api, errMsg, money, fmtDate, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { ImageUpload } from "@/components/ImageUpload";
+import { GalleryUpload } from "@/components/GalleryUpload";
 import { Stars } from "@/components/Cards";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 import { Plus, Send } from "lucide-react";
@@ -142,6 +143,7 @@ export default function PartnerDashboard() {
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
           ))}
           <ImageUpload value={f.cover_image} onChange={(url) => setF({ ...f, cover_image: url })} label="Cover image" testid="event-cover-upload" aspect="wide" />
+          <GalleryUpload value={f.gallery} onChange={(gallery) => setF({ ...f, gallery })} testid="event-gallery-upload" />
           <label className="block"><span className="text-xs font-bold text-slate-600">Description</span>
             <textarea data-testid="event-description" rows={4} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })}
               className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
