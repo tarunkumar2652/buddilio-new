@@ -2755,6 +2755,7 @@ async def ai_system_prompt(user: dict) -> str:
         "membership": (plan or {}).get("plan_name", ""),
         "credit": f"{BASE_CURRENCY} {credit:,.0f}" if credit else "",
         "today": now_utc().strftime("%A %d %B %Y"),
+        "help": await ai_help_block(),
     }
     return ai.system_prompt(user, ai.event_lines(rows), extras)
 
@@ -2765,11 +2766,34 @@ async def ai_used_today(user_id: str) -> int:
         {"user_id": user_id, "role": "user", "created_at": {"$gte": since}})
 
 
+_HELP_CACHE = {"at": None, "text": ""}
+HELP_SLUGS = ["faq", "refund", "guidelines", "safety", "about"]
+
+
+async def ai_help_block() -> str:
+    """CMS policy pages, cached 10 minutes, so Buddy can settle support questions on its own."""
+    if _HELP_CACHE["at"] and (now_utc() - _HELP_CACHE["at"]).total_seconds() < 600:
+        return _HELP_CACHE["text"]
+    docs = await db.cms_pages.find({"slug": {"$in": HELP_SLUGS}}, {"slug": 1, "title": 1, "content": 1}) \
+        .limit(len(HELP_SLUGS)).to_list(len(HELP_SLUGS))
+    order = {s: i for i, s in enumerate(HELP_SLUGS)}
+    docs.sort(key=lambda d: order.get(d.get("slug"), 99))
+    text = "\n\n".join(f"{d.get('title', d['slug'])} (/p/{d['slug']}):\n{(d.get('content') or '').strip()[:900]}"
+                       for d in docs if (d.get("content") or "").strip())
+    _HELP_CACHE.update({"at": now_utc(), "text": text})
+    return text
+
+
 @api.get("/ai/config")
 async def ai_config(user: dict = Depends(get_current_user)):
     return {"enabled": ai.ai_enabled(), "model": ai.AI_MODEL,
             "suggestions": ai.starter_prompts(user.get("city", "")),
             "used_today": await ai_used_today(user["id"]), "daily_cap": ai.DAILY_MESSAGE_CAP}
+
+
+@api.get("/ai/guest/config")
+async def ai_guest_config():
+    return {"enabled": ai.ai_enabled(), "suggestions": ai.GUEST_PROMPTS}
 
 
 @api.get("/ai/history")
@@ -2832,6 +2856,62 @@ async def ai_concierge(payload: AiChatIn, user: dict = Depends(get_current_user)
                                       "Connection": "keep-alive"})
 
 
+class AiGuestIn(BaseModel):
+    message: str
+    session_id: str = ""
+
+
+GUEST_AI_IP_CAP = 25  # rolling 24h abuse guard; the UI itself allows one free question per visitor
+
+
+def client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return (fwd.split(",")[0].strip() or (request.client.host if request.client else "") or "unknown")
+
+
+@api.post("/ai/guest")
+async def ai_guest(payload: AiGuestIn, request: Request):
+    """One-shot Buddy answer for visitors who haven't joined yet. No history, no account needed."""
+    if not ai.ai_enabled():
+        raise HTTPException(status_code=503, detail="Buddy AI isn't switched on yet.")
+    text = payload.message.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Type a question first.")
+    if len(text) > 500:
+        raise HTTPException(status_code=400, detail="Please keep your question under 500 characters.")
+    ip = client_ip(request)
+    since = iso(now_utc() - timedelta(days=1))
+    if await db.ai_guest_asks.count_documents({"ip": ip, "created_at": {"$gte": since}}) >= GUEST_AI_IP_CAP:
+        raise HTTPException(status_code=429,
+                            detail="Buddy has answered a lot of questions from here today. "
+                                   "Join free and keep chatting inside Buddilio.")
+    rows = await ai_event_rows({})
+    system = ai.guest_system_prompt(ai.event_lines(rows), {
+        "today": now_utc().strftime("%A %d %B %Y"),
+        "cities": sum(len(c.get("cities", [])) for c in COUNTRIES), "countries": len(COUNTRIES),
+        "help": await ai_help_block(),
+    })
+
+    async def gen():
+        parts = []
+        try:
+            async for delta in ai.stream_reply(payload.session_id or f"guest-{secrets.token_hex(6)}",
+                                               system, [], text):
+                parts.append(delta)
+                yield f"data: {json.dumps({'delta': delta})}\n\n"
+        except Exception as e:
+            logger.error(f"Buddy AI guest stream failed: {e}")
+            yield f"data: {json.dumps({'error': 'Buddy could not answer that one. Please try again.'})}\n\n"
+        reply = "".join(parts).strip()
+        await db.ai_guest_asks.insert_one({"ip": ip, "question": text, "reply": reply,
+                                           "created_at": iso(now_utc())})
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
@@ -2863,6 +2943,7 @@ async def startup():
     await db.credits.create_index([("user_id", 1), ("created_at", -1)])
     await db.users.create_index("referral_code", sparse=True)
     await db.ai_messages.create_index([("user_id", 1), ("session_id", 1), ("created_at", 1)])
+    await db.ai_guest_asks.create_index([("ip", 1), ("created_at", -1)])
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]

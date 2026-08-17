@@ -244,6 +244,27 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   the three guardrail prompts, real-event link resolution, multi-turn recall, reload replay and new-chat.
 - Cost note: every question spends Universal Key balance (Profile → Manage plan → Universal Key → Add balance).
 
+## Implemented — iteration 13 (June 2026): guest concierge + site-wide AI chat widget
+- **Guest concierge on the homepage** (`components/GuestConcierge.jsx`, above the Featured row): a visitor gets
+  **one free question** answered by Buddy from the live event data, then the panel locks into the answer plus a
+  "Join Buddilio free" invite. The question/answer is kept in `localStorage['bud_guest_ai_qa']`, so it survives
+  a reload and is shared with the floating widget.
+- **Site-wide AI chat widget** (`components/AiChatWidget.jsx`, mounted in `App.js`, hidden on `/ai`): floating
+  "Ask Buddy" bubble on every page. Guests get the one-shot answer + join CTA; members get the full concierge
+  in the **same session as `/ai`** (`localStorage['bud_ai_session']`), so a chat started in the widget continues
+  on the page and vice-versa, with an "Open the full Buddy AI page" link.
+- **Answers support questions without a human**: `ai_help_block()` injects the CMS policy pages (FAQ, refund,
+  community guidelines, safety, about — cached 10 minutes) into both system prompts, and the persona tells Buddy
+  to settle refunds/memberships/safety/booking questions itself and only hand off to
+  [Contact us](/p/contact) when something needs a look inside an account.
+- **Backend**: `GET /api/ai/guest/config` and `POST /api/ai/guest` (no auth, no history, 500-char limit,
+  25 answers per IP per rolling 24h, each answer logged to `db.ai_guest_asks`). SSE shape identical to the
+  member endpoint. Shared frontend SSE reader lives in `lib/aiStream.js`; the markdown renderer moved to
+  `components/Shared.jsx` as `RichText` and is reused by the page, the homepage section and the widget.
+- Verified: `backend/tests/test_iteration13_guest_ai.py` **10/10** and testing-agent iteration 13
+  (`/app/test_reports/iteration_13.json`) — zero backend/UI issues, including the shared guest lock, widget on
+  five routes, member↔page session sharing, CMS-sourced refund answer and 390px/1920px layout regression.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { useCurrency } from "@/context/CurrencyContext";
 import { EventCard } from "@/components/Cards";
 import { SEO } from "@/components/Shared";
+import { GuestConcierge } from "@/components/GuestConcierge";
 import { ShieldCheck, Sparkles, UserCheck, Ticket, ArrowRight, Star, Check, MessageCircle } from "lucide-react";
 
 const HERO = "https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg?auto=compress&w=1600";
@@ -116,8 +117,11 @@ export default function Home() {
         </div>
       </section>
 
+      {/* GUEST AI */}
+      <GuestConcierge />
+
       {/* FEATURED */}
-      <section className="mx-auto max-w-7xl px-4 sm:px-6 pb-20 sm:pb-28">
+      <section className="mx-auto max-w-7xl px-4 sm:px-6 py-20 sm:py-28">
         <div className="flex items-end justify-between gap-6 mb-8">
           <div>
             <p className="overline">Featured this month</p>

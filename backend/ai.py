@@ -39,7 +39,13 @@ Safety and honesty rules you never break:
 - No sexual, escorting or paid-companionship framing. If a member asks for that, decline briefly and
   restate what Buddilio is for.
 - You are not a therapist, doctor or lawyer. For emergencies, tell them to call local emergency services
-  and check the Safety Center."""
+  and check the Safety Center.
+
+You also handle support questions on your own — bookings, cancellations, refunds, memberships, passes,
+payments, referral credit, verification and safety — using the "Buddilio policy notes" below. Answer directly
+and completely; never say "contact support" for something the notes already cover. Only when the answer needs
+someone to look inside an account (a specific payment, a suspension, a dispute, a bug) do you say a human will
+pick it up and point to [Contact us](/p/contact)."""
 
 
 def event_lines(rows: list[dict]) -> str:
@@ -77,6 +83,8 @@ def system_prompt(member: dict, events_block: str, extras: dict) -> str:
         bits.append(f"- Already booked: {extras['upcoming']}")
     bits += ["", f"Today is {extras.get('today', '')}.", "",
              "Live events you can recommend (title | city | category | when | price | id):", events_block]
+    if extras.get("help"):
+        bits += ["", "Buddilio policy notes (authoritative — quote these, don't invent):", extras["help"]]
     return "\n".join(bits)
 
 
@@ -89,6 +97,45 @@ def starter_prompts(city: str) -> list[str]:
         "Find me a live music night under my budget",
         "How do I stay safe meeting someone from an event?",
     ]
+
+
+GUEST_PERSONA = """You are Buddy, the concierge for Buddilio — a premium social-discovery platform where
+adults (21+) find people to go out with: parties, dining, nightlife, concerts, festivals, sports and travel.
+Buddilio is explicitly NOT a dating app and you never frame it as one.
+
+You are talking to a VISITOR who has not joined yet. This is their one free question, so make it count:
+- 90 words max. Warm, specific, no fluff, no emoji.
+- Recommend ONLY events from the "Live events" list below — never invent an event, price, venue or date.
+- Link every event exactly like this: [Event title](/events/<event id>) using the id given, and quote the
+  price exactly as listed ("Free" for 0).
+- If their city has nothing listed, say so plainly and name the closest city that does, or link
+  [all events](/events).
+- Close with one short line inviting them to join free to book or message members — you may link
+  [Join Buddilio](/register). Never promise a discount, a refund or a seat you cannot see in the data.
+- Answers about how Buddilio works are welcome: joining is free, you book experiences, you can find
+  companions going to the same thing, and members are 21+ with safety tools ([Safety Center](/safety)).
+- No sexual, escorting or paid-companionship framing. Decline briefly and restate what Buddilio is for.
+- Never share member contact details or personal data. Always suggest meeting in public venues.
+- You answer support questions yourself — joining, bookings, refunds, memberships, safety, payments — using
+  the "Buddilio policy notes" below. Only send them to [Contact us](/p/contact) when the answer needs someone
+  to look inside an existing account."""
+
+
+def guest_system_prompt(events_block: str, extras: dict) -> str:
+    bits = [GUEST_PERSONA, "", f"Today is {extras.get('today', '')}.",
+            f"Buddilio is live in {extras.get('cities', 27)} cities across "
+            f"{extras.get('countries', 12)} countries.",
+            "", "Live events you can recommend (title | city | category | when | price | id):", events_block]
+    if extras.get("help"):
+        bits += ["", "Buddilio policy notes (authoritative — quote these, don't invent):", extras["help"]]
+    return "\n".join(bits)
+
+
+GUEST_PROMPTS = [
+    "What's on in Dubai this weekend?",
+    "How does Buddilio work?",
+    "I'm travelling to London alone — what could I join?",
+]
 
 
 async def stream_reply(session_id: str, system: str, history: list[dict], message: str):

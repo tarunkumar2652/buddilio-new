@@ -1,5 +1,29 @@
+import { Link } from "react-router-dom";
+
 export const CATEGORIES = ["Parties", "Dining", "Nightlife", "Concerts", "Festivals", "Sports",
   "Travel", "Networking", "Social Gatherings", "Lifestyle Experiences", "Other"];
+
+// Buddy replies in light markdown: [label](/path) links and **bold**.
+export const RichText = ({ text }) => {
+  const nodes = [];
+  const re = /\[([^\]]+)\]\((\/[^)\s]*)\)|\*\*([^*]+)\*\*/g;
+  let last = 0, m, k = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    if (m[1]) {
+      nodes.push(
+        <Link key={k++} to={m[2]} className="font-semibold text-brand-magenta underline decoration-brand-pink/50 underline-offset-2 hover:decoration-brand-magenta">
+          {m[1]}
+        </Link>
+      );
+    } else {
+      nodes.push(<strong key={k++} className="font-bold">{m[3]}</strong>);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return <span className="whitespace-pre-wrap leading-relaxed">{nodes}</span>;
+};
 
 export const Spinner = ({ label = "Loading" }) => (
   <div className="flex flex-col items-center justify-center py-20 gap-3" data-testid="loading-state">

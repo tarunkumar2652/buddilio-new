@@ -3,34 +3,15 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Sparkles, Send, RotateCcw, Loader2 } from "lucide-react";
 import { api, errMsg } from "@/lib/api";
+import { streamAi, newAiSession } from "@/lib/aiStream";
 import { useAuth } from "@/context/AuthContext";
-import { SEO } from "@/components/Shared";
+import { SEO, RichText } from "@/components/Shared";
 
 const SESSION_KEY = "bud_ai_session";
-const newSession = () =>
-  (window.crypto?.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+const newSession = newAiSession;
 
-// Buddy answers in light markdown: [label](/path) links and **bold**.
-const Rich = ({ text }) => {
-  const nodes = [];
-  const re = /\[([^\]]+)\]\((\/[^)\s]*)\)|\*\*([^*]+)\*\*/g;
-  let last = 0, m, k = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
-    if (m[1]) {
-      nodes.push(
-        <Link key={k++} to={m[2]} className="font-semibold text-brand-magenta underline decoration-brand-pink/50 underline-offset-2 hover:decoration-brand-magenta">
-          {m[1]}
-        </Link>
-      );
-    } else {
-      nodes.push(<strong key={k++} className="font-bold">{m[3]}</strong>);
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return <span className="whitespace-pre-wrap leading-relaxed">{nodes}</span>;
-};
+// Buddy answers in light markdown: [label](/path) links and **bold** — see RichText in components/Shared.
+const Rich = RichText;
 
 const Bubble = ({ role, children, testid }) => (
   <div className={`flex ${role === "user" ? "justify-end" : "justify-start"}`} data-testid={testid}>
@@ -73,39 +54,9 @@ export default function Concierge() {
     setMsgs((m) => [...m, { role: "user", content: body }]);
     setBusy(true);
     setStreaming("");
-    let acc = "";
     try {
-      const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/ai/concierge`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("bud_token") || ""}`,
-        },
-        body: JSON.stringify({ session_id: sid, message: body }),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.detail || "Buddy is unavailable right now.");
-      }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const frames = buf.split("\n\n");
-        buf = frames.pop();
-        for (const f of frames) {
-          const line = f.split("\n").find((l) => l.startsWith("data: "));
-          if (!line) continue;
-          const ev = JSON.parse(line.slice(6));
-          if (ev.delta) { acc += ev.delta; setStreaming(acc); }
-          if (ev.error) toast.error(ev.error);
-        }
-      }
-      if (acc.trim()) setMsgs((m) => [...m, { role: "assistant", content: acc.trim() }]);
+      const reply = await streamAi("/ai/concierge", { session_id: sid, message: body }, setStreaming);
+      if (reply) setMsgs((m) => [...m, { role: "assistant", content: reply }]);
       setCfg((c) => (c ? { ...c, used_today: (c.used_today || 0) + 1 } : c));
     } catch (e) {
       toast.error(e.message || errMsg(e));

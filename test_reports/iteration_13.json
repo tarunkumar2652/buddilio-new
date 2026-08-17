@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 13 — Guest AI (homepage section + floating widget) and Buddy support-answer regressions. Backend: 10/10 pytest cases passing (guest config no-auth, empty/>500 char validation, SSE streaming with done event, db.ai_guest_asks persistence with ip+question+reply, refund-policy answer sourced from CMS (no 'contact support' punt), event links resolving to real published events, /ai/concierge and /ai/config still require auth, member concierge stream + history smoke). Frontend: guest concierge section renders with input/send/3 suggestion chips; floating widget visible on /, /events, /cities, /city/dubai, /passes; guest one-shot streams a reply, then locks with Join CTA; lock is shared with the homepage section AND survives reload; clearing localStorage bud_guest_ai_qa resets it. Member flow: widget shown while logged in, hidden on /ai, 'Open the full Buddy AI page' link present, bi-directional session sharing verified — a message sent through the widget appears on /ai and vice-versa. No horizontal overflow at 1920px or 390px on /, /events, /dashboard.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "global (login/select dropdowns)", "issues": ["Pre-existing React hydration warning: '<span> cannot be a child of <option>' logged repeatedly on every page. Not introduced by iteration 13 but worth cleaning."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration13_guest_ai.py",
+    "/app/test_reports/pytest/iteration_13.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 2972 lines — should be split into modules (auth, events, ai, admin, etc.). Not blocking iteration 13.",
+    "ai_help_block cache has no lock — under simultaneous requests you may run the CMS fetch multiple times. Low impact (idempotent), but a small asyncio.Lock would be cleaner.",
+    "AiChatWidget: when the widget config load fails silently we get no ai-widget-suggestion-N chips but the intro is still rendered — user experience acceptable but consider a retry."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration13_guest_ai.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "diya.sharma@example.com / User@123 (member, from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Test file cleans up its ai_messages (session_id TEST_iter13_*) and ai_guest_asks rows it created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Buddy AI feature is production-grade. Backend regression file lives at backend/tests/test_iteration13_guest_ai.py — reuse. LLM calls are billable and the per-IP guest cap is 25/24h shared with the backend; keep prompts short ('one line only') if you re-run. Guest lock is localStorage-only (bud_guest_ai_qa); the session for member widget/page is bud_ai_session. Widget is hidden on /ai by AiChatWidget's useLocation check. Existing hydration warning about <span> inside <option> is pre-existing (present in select filters on /events login etc.).",
+  "rca of the issue": "N/A — no bugs found."
+}

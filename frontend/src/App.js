@@ -5,6 +5,7 @@ import { CurrencyProvider } from "@/context/CurrencyContext";
 import { Navbar, Footer } from "@/components/Layout";
 import { Spinner } from "@/components/Shared";
 import { InstallPrompt } from "@/components/InstallPrompt";
+import { AiChatWidget } from "@/components/AiChatWidget";
 import Home from "@/pages/Home";
 import { Login, Register, ForgotPassword, ResetPassword } from "@/pages/Auth";
 import AuthCallback from "@/pages/AuthCallback";
@@ -79,6 +80,7 @@ function Shell() {
       </main>
       <Footer />
       <InstallPrompt />
+      <AiChatWidget />
       <Toaster position="top-center" richColors />
     </div>
   );
