@@ -1,0 +1,20 @@
+{
+  "summary": "Iteration 14: Tested /api/ai/picks 'Picked for you by Buddy' dashboard row end-to-end. Wrote 10 pytest cases (backend/tests/test_iteration14_ai_picks.py) — all pass. Verified auth (401 without token), shape (1-3 picks with why lines), geography sanity (India members get India cities only), joined-event exclusion, per-member isolation (Diya vs Tara), cache semantics (same generated_at on second call), refresh?=1 regenerates, hydration guard drops draft/past events (verified by flipping a picked event to draft and confirming it disappears from the reused cache while others remain, then restored), unique index on ai_picks.user_id. Frontend playwright: logged in as diya.sharma, ai-picks-section renders with 3 cards + 3 why lines with natural copy (e.g., 'You like sports, and Pune keeps this football pickup in India at a low INR 300.'), no forbidden prompt words, ai-picks-refresh triggers loading skeleton then new cards, first event link /events/<id> returns 200, no horizontal overflow at 1920px or 390px, dash-tile-*, dash-referral-card, quick-ai still render.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_iteration14_ai_picks.py", "/app/test_reports/pytest/iteration14.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ai_hydrate_picks compares starts_at (datetime) with iso(now_utc()) (ISO string). This works because events are stored with ISO string starts_at and lexicographic compare matches chronological for ISO-8601 UTC, but it is fragile — recommend using a real datetime comparison to future-proof against timezone or format drift.",
+    "GET /api/ai/picks with refresh=1 makes an LLM call every time; consider a lightweight per-user rate limit (e.g. 1 refresh per minute) to protect the shared Emergent LLM balance from a user hammering the Refresh button.",
+    "When the LLM returns no valid picks after refresh, endpoint returns empty items without updating the cache — subsequent refresh will call the LLM again. Consider caching an empty result briefly to avoid runaway billing on a broken prompt."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration14_ai_picks.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100%"},
+  "test_credentials": "diya.sharma@example.com/User@123, tara.joshi@example.com/User@123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Draft-flip test restores original status in finally block.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iteration14_ai_picks.py can be reused. It covers auth, geo, exclude-joined, isolation, cache, refresh, hydration guard, unique index. Note: refresh_regenerates test consumes 1 LLM call for tara; keep reruns modest. All cache/hydration/regression semantics work as specified in the review request.",
+  "rca of the issue": "N/A — all requested behaviours verified working."
+}

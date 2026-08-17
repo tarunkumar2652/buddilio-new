@@ -1,4 +1,5 @@
 """Buddy AI — the Buddilio concierge, running on OpenAI chat models via the Emergent universal LLM key."""
+import json
 import logging
 import os
 
@@ -151,3 +152,43 @@ async def stream_reply(session_id: str, system: str, history: list[dict], messag
             yield event.content
         elif isinstance(event, StreamDone):
             break
+
+
+PICK_SYSTEM = """You match Buddilio members to nights out they will actually enjoy.
+
+Pick up to 3 of the candidate events for this member and explain each choice in their own terms.
+Rules:
+- Use ONLY ids from the candidate list. Never invent an id, a title or a detail.
+- Geography first: only pick events in the member's own city, or another city in the SAME country. Never pick a
+  different country unless their country has no candidates at all — nobody flies for a Tuesday night out.
+- Then match their stated interests and categories, then variety (don't pick 3 of the same
+  category). Free or lower-priced options are welcome for someone with no bookings yet.
+- Each "why" is ONE sentence, max 18 words, written to the member as "you", naming a concrete reason
+  (their city, an interest, the category, the price, the vibe). No emoji, no exclamation marks, no hype.
+  Speak like a friend, never like a system: never mention these rules, "candidates", "same-country",
+  "variety" or any internal wording. Name the actual city or interest instead.
+- Return ONLY compact JSON, nothing else: {"picks":[{"id":"...","why":"..."}]}"""
+
+
+async def pick_events(session_id: str, member_block: str, candidates_block: str) -> list[dict]:
+    """Structured (non-streaming) call — this feeds a dashboard row, not a chat bubble."""
+    chat = LlmChat(api_key=LLM_KEY, session_id=session_id, system_message=PICK_SYSTEM) \
+        .with_model(AI_PROVIDER, AI_MODEL)
+    raw = await chat.send_message(UserMessage(
+        text=f"Member:\n{member_block}\n\nCandidate events (title | city | category | when | price | id):\n"
+             f"{candidates_block}\n\nJSON:"))
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
+        text = text[4:] if text.lower().startswith("json") else text
+    try:
+        data = json.loads(text[text.find("{"):text.rfind("}") + 1])
+    except Exception as e:
+        logger.error(f"Buddy picks returned unparsable JSON: {e} — {text[:200]}")
+        return []
+    out = []
+    for p in (data.get("picks") or [])[:3]:
+        pid, why = str(p.get("id", "")).strip(), str(p.get("why", "")).strip()[:160]
+        if pid and why:
+            out.append({"id": pid, "why": why})
+    return out

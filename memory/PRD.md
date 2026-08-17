@@ -265,6 +265,20 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   (`/app/test_reports/iteration_13.json`) — zero backend/UI issues, including the shared guest lock, widget on
   five routes, member↔page session sharing, CMS-sourced refund answer and 390px/1920px layout regression.
 
+## Implemented — iteration 14 (June 2026): "Picked for you by Buddy"
+- `GET /api/ai/picks` (`?refresh=1`) asks gpt-5.4 for up to **3 upcoming events** for the signed-in member and a
+  one-line reason each, returned as strict JSON (non-streaming `send_message`, tolerant parsing, `[]` on
+  failure). Candidates come from `ai_event_rows()` minus anything they've already joined (max 12); the prompt
+  keeps picks inside the member's own country, mixes categories, and forbids internal wording in the copy.
+- Results are cached per member in `db.ai_picks` (unique on `user_id`) for **6 hours**; `?refresh=1` regenerates
+  but is throttled to one call a minute per member. `ai_hydrate_picks()` re-reads the events at serve time, so a
+  pick that gets unpublished or starts before the member returns simply disappears.
+- Dashboard row `components/AiPicks.jsx` (above "Your upcoming events"): skeletons while Buddy thinks, then
+  three event cards each with the personalised "why" chip, a Refresh button and an "Ask Buddy for more" link.
+- Verified: `backend/tests/test_iteration14_ai_picks.py` **10/10** and testing-agent iteration 14
+  (`/app/test_reports/iteration_14.json`) — zero backend/UI issues, covering auth, geography, joined-event
+  exclusion, per-member isolation, cache/refresh semantics, the unpublish guard and dashboard regression.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

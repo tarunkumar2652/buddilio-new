@@ -2856,6 +2856,73 @@ async def ai_concierge(payload: AiChatIn, user: dict = Depends(get_current_user)
                                       "Connection": "keep-alive"})
 
 
+AI_PICKS_TTL_HOURS = 6
+
+
+async def ai_hydrate_picks(picks: List[dict]) -> List[dict]:
+    """Turn cached/fresh {id, why} rows into full event cards, dropping anything no longer bookable."""
+    ids = []
+    for p in picks:
+        try:
+            ids.append(ObjectId(p["id"]))
+        except Exception:
+            continue
+    if not ids:
+        return []
+    docs = await db.events.find({"_id": {"$in": ids}, "status": "published",
+                                 "starts_at": {"$gte": iso(now_utc())}}).limit(len(ids)).to_list(len(ids))
+    by_id = {str(d["_id"]): d for d in docs}
+    out = []
+    for p in picks:
+        doc = by_id.get(p["id"])
+        if doc:
+            item = clean(doc)
+            item["why"] = p["why"]
+            out.append(item)
+    return out
+
+
+@api.get("/ai/picks")
+async def ai_picks(refresh: int = 0, user: dict = Depends(get_current_user)):
+    """Three AI-chosen events for this member, each with a one-line reason. Cached 6h per member."""
+    if not ai.ai_enabled():
+        return {"enabled": False, "items": []}
+    cached = await db.ai_picks.find_one({"user_id": user["id"]})
+    if cached:
+        age = (now_utc() - datetime.fromisoformat(cached["created_at"])).total_seconds()
+        # one refresh a minute per member — the Refresh button shouldn't be able to burn the LLM balance
+        fresh = age < AI_PICKS_TTL_HOURS * 3600 if not refresh else age < 60
+        if fresh:
+            items = await ai_hydrate_picks(cached.get("picks", []))
+            if items:
+                return {"enabled": True, "items": items, "generated_at": cached["created_at"]}
+
+    joined = [p["event_id"] for p in await db.event_participants.find(
+        {"user_id": user["id"]}, {"event_id": 1}).limit(200).to_list(200)]
+    rows = [r for r in await ai_event_rows(user) if r["id"] not in joined][:12]
+    if not rows:
+        return {"enabled": True, "items": []}
+
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    plan = await membership_active(user["id"])
+    member_block = "\n".join([
+        f"- City: {u.get('city') or 'not set'} ({u.get('country') or 'unknown country'})",
+        f"- Interests: {', '.join(u.get('interests') or []) or 'none given'}",
+        f"- Preferred categories: {', '.join(u.get('event_categories') or []) or 'none given'}",
+        f"- Lifestyle: {', '.join(u.get('lifestyle') or []) or 'none given'}",
+        f"- Membership: {(plan or {}).get('plan_name', 'none')}",
+        f"- Events booked so far: {len(joined)}",
+    ])
+    picks = await ai.pick_events(f"picks-{user['id']}", member_block, ai.event_lines(rows))
+    valid_ids = {r["id"] for r in rows}
+    picks = [p for p in picks if p["id"] in valid_ids][:3]
+    if not picks:
+        return {"enabled": True, "items": []}
+    await db.ai_picks.update_one({"user_id": user["id"]},
+                                 {"$set": {"picks": picks, "created_at": iso(now_utc())}}, upsert=True)
+    return {"enabled": True, "items": await ai_hydrate_picks(picks), "generated_at": iso(now_utc())}
+
+
 class AiGuestIn(BaseModel):
     message: str
     session_id: str = ""
@@ -2944,6 +3011,7 @@ async def startup():
     await db.users.create_index("referral_code", sparse=True)
     await db.ai_messages.create_index([("user_id", 1), ("session_id", 1), ("created_at", 1)])
     await db.ai_guest_asks.create_index([("ip", 1), ("created_at", -1)])
+    await db.ai_picks.create_index("user_id", unique=True)
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]

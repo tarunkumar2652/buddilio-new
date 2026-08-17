@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, money } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { EventCard, PersonCard } from "@/components/Cards";
+import { AiPicks } from "@/components/AiPicks";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { Compass, Ticket, MessageCircle, Bell, Heart, CalendarDays, Star, Gift, Sparkles } from "lucide-react";
 
@@ -84,6 +85,8 @@ export default function Dashboard() {
           </span>
         </div>
       </Link>
+
+      <AiPicks />
 
       <section className="mt-14">
         <h2 className="text-2xl font-bold">Your upcoming events</h2>        <div className="mt-5">
