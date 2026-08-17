@@ -1,0 +1,9 @@
+node_modules/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+.git/
+test_reports/
+backend/tests/
+memory/test_credentials.md

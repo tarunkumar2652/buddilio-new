@@ -16,6 +16,21 @@ _db = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 CRON = {"Authorization": f"Bearer {os.environ['WEBHOOK_CRON_SECRET']}"}
 
 
+def _get(path, **kw):
+    """These suites walk all 27 cities, so retry the odd dropped connection under load."""
+    last = None
+    for _ in range(4):
+        try:
+            r = requests.get(f"{API}{path}", timeout=20, **kw)
+            if r.status_code == 200:
+                return r.json()
+            last = f"{r.status_code} {r.text[:120]}"
+        except requests.RequestException as e:
+            last = repr(e)
+        time.sleep(1.5)
+    raise AssertionError(f"GET {path} failed: {last}")
+
+
 def _login(email, password="User@123"):
     r = requests.post(f"{API}/auth/login", json={"email": email, "password": password}, timeout=15)
     assert r.status_code == 200, f"login {email}: {r.status_code} {r.text}"
@@ -25,11 +40,11 @@ def _login(email, password="User@123"):
 # ------------ CITY GUIDES -------------
 
 def test_every_city_has_an_editorial_guide():
-    cities = requests.get(f"{API}/cities", timeout=15).json()["items"]
+    cities = _get("/cities")["items"]
     assert len(cities) >= 27
     missing = []
     for c in cities:
-        d = requests.get(f"{API}/cities/{c['slug']}", timeout=15).json()
+        d = _get(f"/cities/{c['slug']}")
         g = d.get("guide") or {}
         if not (g.get("intro") and g.get("areas") and g.get("when") and g.get("around") and g.get("tip")):
             missing.append(c["slug"])

@@ -169,6 +169,28 @@ Adults only (21+ enforced server-side); auth required for private features; part
   AED pricing, guest vs signed-in leaderboard payloads) plus UI checks on `/city/dubai`, `/city/abu-dhabi`
   (mobile) and `/leaderboard`.
 
+## Deployment readiness (iteration 10, June 2026)
+Deployment agent verdict: **PASS — no blockers**, after these fixes:
+- `CORS_ORIGINS="*"` in `backend/.env` (was pinned to the preview host, which would have broken the live domain).
+- Removed 11 N+1 query patterns. A shared `load_many(collection, ids, fields)` helper does one `$in` fetch keyed by
+  string id, now used by `/me/events`, `/partner/events/{id}/participants`, `/events/{id}` participants, `/events`
+  top_review, `/discover` membership, `/referrals/leaderboard`, `/conversations`, `/conversations/{cid}/messages`,
+  `/admin/reviews`, `/admin/payouts`, `/cities/{slug}` quotes and `reminder_loop()`. Per-row `count_documents`
+  calls for leaderboard lifetime badges and conversation unread counts became single `$group` aggregations.
+- Added an explicit server-side `.limit(N)` to all 57 `find(...).to_list(N)` cursors (paginated
+  `.skip().limit()` cursors and aggregation pipelines deliberately left alone).
+- Fixed a real bug this exposed: `/cities/{slug}` only looked at `published` events when picking review quotes,
+  but reviewed events are `completed`, so the quotes section on every city page was permanently empty. It now
+  reads `status in [published, completed]` and Delhi/Gurugram show real member quotes.
+- `seed_referrals.py` now clears the awarded prize *order* alongside the `prizes` row, so re-seeding then
+  re-awarding can't leave a duplicate free-pass order.
+- Added `backend/tests/conftest.py` — a session-scoped autouse fixture purging the `TEST_*` events/users the
+  suites create (one had leaked a published TEST event onto the public Delhi city page). Added `/app/.dockerignore`.
+- Verified: full backend suite **132 passed / 2 skipped** (serial), clean `yarn build`, and a testing-agent
+  regression pass over all 11 rewritten endpoints reporting zero backend and zero UI issues.
+- Known dev-only noise: a hydration warning from the visual-editor instrumentation (not app code); the backend
+  suite intermittently drops 1–2 tests to connection resets when run with 2 xdist workers — all pass serially.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

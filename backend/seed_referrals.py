@@ -58,6 +58,8 @@ async def main():
     prev = (now.replace(day=1) - __import__("datetime").timedelta(days=1))
     await db.referrals.delete_many({"seed": True})
     await db.credits.delete_many({"seed": True})
+    # Prizes are derived from the referral ladder, so clear the award *and* its free-pass order.
+    await db.orders.delete_many({"gateway": "leaderboard_prize"})
     await db.prizes.delete_many({})
 
     taken = {r["invitee_id"] for r in await db.referrals.find({}, {"invitee_id": 1}).to_list(2000)}

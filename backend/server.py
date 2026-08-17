@@ -288,6 +288,20 @@ async def membership_active(user_id: str) -> Optional[dict]:
     return clean(m) if m else None
 
 
+async def load_many(collection, ids, fields: Optional[dict] = None) -> dict:
+    """Fetch a set of documents by id in one round-trip, keyed by their string id."""
+    oids = []
+    for i in set(ids):
+        try:
+            oids.append(ObjectId(i))
+        except Exception:
+            continue
+    if not oids:
+        return {}
+    cur = collection.find({"_id": {"$in": oids}}, fields) if fields else collection.find({"_id": {"$in": oids}})
+    return {str(d["_id"]): d for d in await cur.limit(len(oids)).to_list(len(oids))}
+
+
 # ---------------- referrals & credit ----------------
 def gen_ref_code(name: str) -> str:
     base = "".join(ch for ch in (name or "").upper() if ch.isalpha())[:6] or "BUDDY"
@@ -309,7 +323,7 @@ async def ensure_ref_code(user_doc: dict) -> str:
 
 
 async def credit_balance(user_id: str) -> float:
-    docs = await db.credits.find({"user_id": user_id}, {"amount": 1}).to_list(500)
+    docs = await db.credits.find({"user_id": user_id}, {"amount": 1}).limit(500).to_list(500)
     return round(sum(d["amount"] for d in docs), 2)
 
 
@@ -705,11 +719,13 @@ async def discover(city: str = "", country: str = "", interest: str = "", catego
     flt["age"] = {"$gte": min_age, "$lte": max_age}
     total = await db.users.count_documents(flt)
     cur = db.users.find(flt, PUBLIC_FIELDS).skip((page - 1) * limit).limit(limit)
-    items = []
-    for d in await cur.to_list(limit):
-        c = clean(d)
-        c["membership"] = bool(await membership_active(c["id"]))
-        items.append(c)
+    items = [clean(d) for d in await cur.to_list(limit)]
+    ids = [c["id"] for c in items]
+    active = {m["user_id"] for m in await db.user_memberships.find(
+        {"user_id": {"$in": ids}, "status": "active", "ends_at": {"$gt": iso(now_utc())}},
+        {"user_id": 1}).limit(len(ids) or 1).to_list(len(ids) or 1)} if ids else set()
+    for c in items:
+        c["membership"] = c["id"] in active
     return {"items": items, "total": total, "page": page}
 
 
@@ -781,18 +797,29 @@ async def list_events(q: str = "", city: str = "", country: str = "", category: 
     total = await db.events.count_documents(flt)
     sort_key = [("rating", -1)] if sort == "rating" else [("participant_count", -1)] if sort == "popular" else [("starts_at", 1)]
     docs = await db.events.find(flt).sort(sort_key).skip((page - 1) * limit).limit(limit).to_list(limit)
-    items = []
-    for d in docs:
-        e = clean(d)
-        if e.get("rating_count"):
-            top = await db.reviews.find_one(
-                {"event_id": e["id"], "status": {"$ne": "hidden"}, "comment": {"$nin": ["", None]}},
-                sort=[("rating", -1), ("created_at", -1)])
+    items = [clean(d) for d in docs]
+    rated = [e["id"] for e in items if e.get("rating_count")]
+    if rated:
+        # One pass for the highlighted review of every rated event, then one for their authors.
+        tops: dict[str, dict] = {}
+        for r in await db.reviews.find(
+                {"event_id": {"$in": rated}, "status": {"$ne": "hidden"},
+                 "comment": {"$nin": ["", None]}},
+                sort=[("rating", -1), ("created_at", -1)]).limit(1000).to_list(1000):
+            tops.setdefault(r["event_id"], r)
+        author_ids = []
+        for r in tops.values():
+            try:
+                author_ids.append(ObjectId(r["user_id"]))
+            except Exception:
+                continue
+        names = {str(u["_id"]): u.get("full_name", "Member") for u in await db.users.find(
+            {"_id": {"$in": author_ids}}, {"full_name": 1}).limit(len(author_ids) or 1).to_list(len(author_ids) or 1)}
+        for e in items:
+            top = tops.get(e["id"])
             if top:
-                u = await db.users.find_one({"_id": ObjectId(top["user_id"])}, {"full_name": 1})
                 e["top_review"] = {"rating": top["rating"], "comment": top["comment"][:160],
-                                   "user_name": (u["full_name"] if u else "Member").split(" ")[0]}
-        items.append(e)
+                                   "user_name": names.get(top["user_id"], "Member").split(" ")[0]}
     return {"items": items, "total": total, "page": page}
 
 
@@ -807,16 +834,20 @@ async def get_event(event_id: str, user: Optional[dict] = Depends(optional_user)
     ev = clean(doc)
     if ev["status"] not in ("published", "completed") and not (user and (user["role"] == "admin" or ev.get("partner_id") == user["id"])):
         raise HTTPException(status_code=403, detail="This event is not published yet.")
-    parts = await db.event_participants.find({"event_id": event_id, "status": "confirmed"}).to_list(200)
-    revs = await db.reviews.find({"event_id": event_id, "status": {"$ne": "hidden"}}, {"rating": 1}).to_list(500)
+    parts = await db.event_participants.find({"event_id": event_id, "status": "confirmed"}).limit(200).to_list(200)
+    revs = await db.reviews.find({"event_id": event_id, "status": {"$ne": "hidden"}}, {"rating": 1}).limit(500).to_list(500)
     ev["rating"] = round(sum(r["rating"] for r in revs) / len(revs), 2) if revs else 0
     ev["rating_count"] = len(revs)
     ev["participants"] = []
+    ids = []
     for p in parts[:20]:
-        u = await db.users.find_one({"_id": ObjectId(p["user_id"])},
-                                    {"full_name": 1, "photo": 1, "city": 1})
-        if u:
-            ev["participants"].append(clean(u))
+        try:
+            ids.append(ObjectId(p["user_id"]))
+        except Exception:
+            continue
+    if ids:
+        ev["participants"] = [clean(u) for u in await db.users.find(
+            {"_id": {"$in": ids}}, {"full_name": 1, "photo": 1, "city": 1}).limit(20).to_list(20)]
     ev["participant_count"] = len(parts)
     ev["seats_left"] = max(ev.get("capacity", 0) - len(parts), 0)
     if user:
@@ -870,13 +901,11 @@ async def save_event(event_id: str, user: dict = Depends(get_current_user)):
 
 @api.get("/me/events")
 async def my_events(user: dict = Depends(get_current_user)):
-    parts = await db.event_participants.find({"user_id": user["id"]}).to_list(200)
+    parts = await db.event_participants.find({"user_id": user["id"]}).limit(200).to_list(200)
+    events = await load_many(db.events, [p["event_id"] for p in parts])
     out = []
     for p in parts:
-        try:
-            ev = await db.events.find_one({"_id": ObjectId(p["event_id"])})
-        except Exception:
-            continue
+        ev = events.get(p["event_id"])
         if ev:
             e = clean(ev)
             e["my_status"] = p["status"]
@@ -888,7 +917,7 @@ async def my_events(user: dict = Depends(get_current_user)):
 async def saved_events(user: dict = Depends(get_current_user)):
     u = await db.users.find_one({"_id": ObjectId(user["id"])})
     ids = [ObjectId(i) for i in u.get("saved_events", [])]
-    docs = await db.events.find({"_id": {"$in": ids}}).to_list(100)
+    docs = await db.events.find({"_id": {"$in": ids}}).limit(100).to_list(100)
     return {"items": [clean(d) for d in docs]}
 
 
@@ -929,19 +958,19 @@ async def submit_event(event_id: str, user: dict = Depends(partner_only)):
 
 @api.get("/partner/events")
 async def partner_events(user: dict = Depends(partner_only)):
-    docs = await db.events.find({"partner_id": user["id"]}).sort([("created_at", -1)]).to_list(200)
+    docs = await db.events.find({"partner_id": user["id"]}).sort([("created_at", -1)]).limit(200).to_list(200)
     return {"items": [clean(d) for d in docs]}
 
 
 @api.get("/partner/stats")
 async def partner_stats(user: dict = Depends(partner_only)):
-    evs = await db.events.find({"partner_id": user["id"]}).to_list(500)
+    evs = await db.events.find({"partner_id": user["id"]}).limit(500).to_list(500)
     ids = [str(e["_id"]) for e in evs]
     parts = await db.event_participants.count_documents({"event_id": {"$in": ids}})
-    orders = await db.orders.find({"ref_id": {"$in": ids}, "payment_status": "paid"}).to_list(1000)
+    orders = await db.orders.find({"ref_id": {"$in": ids}, "payment_status": "paid"}).limit(1000).to_list(1000)
     revenue = sum(o.get("total", 0) for o in orders)
-    payouts = await db.payouts.find({"partner_id": user["id"]}).to_list(500)
-    revs = await db.reviews.find({"partner_id": user["id"], "status": {"$ne": "hidden"}}, {"rating": 1}).to_list(2000)
+    payouts = await db.payouts.find({"partner_id": user["id"]}).limit(500).to_list(500)
+    revs = await db.reviews.find({"partner_id": user["id"], "status": {"$ne": "hidden"}}, {"rating": 1}).limit(2000).to_list(2000)
     return {"events": len(evs), "published": sum(1 for e in evs if e.get("status") == "published"),
             "pending": sum(1 for e in evs if e.get("status") == "submitted"),
             "completed": sum(1 for e in evs if e.get("status") == "completed"),
@@ -957,10 +986,12 @@ async def event_participants(event_id: str, user: dict = Depends(partner_only)):
     ev = await db.events.find_one({"_id": ObjectId(event_id)})
     if not ev or (user["role"] != "admin" and ev.get("partner_id") != user["id"]):
         raise HTTPException(status_code=404, detail="Event not found")
-    parts = await db.event_participants.find({"event_id": event_id}).to_list(500)
+    parts = await db.event_participants.find({"event_id": event_id}).limit(500).to_list(500)
+    people = await load_many(db.users, [p["user_id"] for p in parts],
+                             {"full_name": 1, "email": 1, "city": 1, "photo": 1})
     out = []
     for p in parts:
-        u = await db.users.find_one({"_id": ObjectId(p["user_id"])}, {"full_name": 1, "email": 1, "city": 1, "photo": 1})
+        u = people.get(p["user_id"])
         if u:
             item = clean(u)
             item["participation_status"] = p["status"]
@@ -971,7 +1002,7 @@ async def event_participants(event_id: str, user: dict = Depends(partner_only)):
 # ---------------- membership / products / coupons ----------------
 @api.get("/plans")
 async def plans():
-    docs = await db.membership_plans.find({"active": True}).sort([("price", 1)]).to_list(50)
+    docs = await db.membership_plans.find({"active": True}).sort([("price", 1)]).limit(50).to_list(50)
     return {"items": [clean(d) for d in docs]}
 
 
@@ -985,7 +1016,7 @@ async def products(city: str = "", country: str = "", q: str = ""):
         flt["city"] = {"$in": cities + [country, "Global", "All India"]}
     if q:
         flt["name"] = {"$regex": q, "$options": "i"}
-    docs = await db.products.find(flt).to_list(100)
+    docs = await db.products.find(flt).limit(100).to_list(100)
     return {"items": [clean(d) for d in docs]}
 
 
@@ -1399,7 +1430,7 @@ async def verify_payment(payload: VerifyPaymentIn, user: dict = Depends(get_curr
 
 @api.get("/me/orders")
 async def my_orders(user: dict = Depends(get_current_user)):
-    docs = await db.orders.find({"user_id": user["id"]}).sort([("created_at", -1)]).to_list(200)
+    docs = await db.orders.find({"user_id": user["id"]}).sort([("created_at", -1)]).limit(200).to_list(200)
     return {"items": [clean(d) for d in docs]}
 
 
@@ -1410,8 +1441,8 @@ async def my_referrals(user: dict = Depends(get_current_user)):
     code = await ensure_ref_code(doc)
     invites = [{"name": r.get("invitee_name", ""), "status": r["status"],
                 "created_at": r["created_at"], "rewarded_at": r.get("rewarded_at", "")}
-               for r in await db.referrals.find({"referrer_id": user["id"]}).sort([("created_at", -1)]).to_list(200)]
-    credits = [clean(c) for c in await db.credits.find({"user_id": user["id"]}).sort([("created_at", -1)]).to_list(100)]
+               for r in await db.referrals.find({"referrer_id": user["id"]}).sort([("created_at", -1)]).limit(200).to_list(200)]
+    credits = [clean(c) for c in await db.credits.find({"user_id": user["id"]}).sort([("created_at", -1)]).limit(100).to_list(100)]
     rewarded = sum(1 for i in invites if i["status"] == "rewarded")
     return {"code": code, "link": f"{FRONTEND_URL}/register?ref={code}", "reward": REFERRAL_REWARD,
             "balance": await credit_balance(user["id"]), "invites": invites, "credits": credits,
@@ -1423,26 +1454,31 @@ async def referral_leaderboard(month: str = "", user: Optional[dict] = Depends(o
     month = (month or now_utc().strftime("%Y-%m"))[:7]
     docs = await db.referrals.find({"status": "rewarded",
                                     "rewarded_at": {"$regex": f"^{month}"}},
-                                   {"referrer_id": 1}).to_list(5000)
+                                   {"referrer_id": 1}).limit(5000).to_list(5000)
     tally: dict[str, int] = {}
     for d in docs:
         tally[d["referrer_id"]] = tally.get(d["referrer_id"], 0) + 1
     ranked = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+    top = ranked[:10]
+    people = await load_many(db.users, [uid for uid, _ in top],
+                             {"full_name": 1, "photo": 1, "city": 1})
+    lifetimes: dict[str, int] = {}
+    for d in await db.referrals.aggregate([
+            {"$match": {"status": "rewarded"}},
+            {"$group": {"_id": "$referrer_id", "n": {"$sum": 1}}}]).to_list(5000):
+        lifetimes[d["_id"]] = d["n"]
     rows = []
-    for i, (uid, count) in enumerate(ranked[:10]):
-        try:
-            u = await db.users.find_one({"_id": ObjectId(uid)}, {"full_name": 1, "photo": 1, "city": 1})
-        except Exception:
-            u = None
-        lifetime = await db.referrals.count_documents({"referrer_id": uid, "status": "rewarded"})
+    for i, (uid, count) in enumerate(top):
+        u = people.get(uid)
         rows.append({"rank": i + 1, "name": short_name((u or {}).get("full_name", "")),
                      "photo": (u or {}).get("photo", ""), "city": (u or {}).get("city", ""),
                      "invites": count, "credit": round(count * REFERRAL_REWARD, 2),
-                     "badge": badge_for(lifetime)["name"], "me": bool(user) and uid == user["id"]})
+                     "badge": badge_for(lifetimes.get(uid, 0))["name"],
+                     "me": bool(user) and uid == user["id"]})
     me = None
     if user:
         mine = tally.get(user["id"], 0)
-        lifetime = await db.referrals.count_documents({"referrer_id": user["id"], "status": "rewarded"})
+        lifetime = lifetimes.get(user["id"], 0)
         me = {"rank": next((i + 1 for i, (uid, _) in enumerate(ranked) if uid == user["id"]), 0),
               "invites": mine, "lifetime": lifetime,
               "credit": round(mine * REFERRAL_REWARD, 2), "badge": badge_for(lifetime)}
@@ -1523,18 +1559,26 @@ async def start_conversation(body: dict, user: dict = Depends(get_current_user))
 
 @api.get("/conversations")
 async def list_conversations(user: dict = Depends(get_current_user)):
-    docs = await db.conversations.find({"members": user["id"]}).sort([("updated_at", -1)]).to_list(100)
+    docs = await db.conversations.find({"members": user["id"]}).sort([("updated_at", -1)]).limit(100).to_list(100)
+    others = [next((m for m in d.get("members", []) if m != user["id"]), None)
+              for d in docs if d.get("type") == "direct"]
+    people = await load_many(db.users, [o for o in others if o], {"full_name": 1, "photo": 1})
+    unread: dict[str, int] = {}
+    for row in await db.messages.aggregate([
+            {"$match": {"conversation_id": {"$in": [str(d["_id"]) for d in docs]},
+                        "sender_id": {"$ne": user["id"]}, "read": False}},
+            {"$group": {"_id": "$conversation_id", "n": {"$sum": 1}}}]).to_list(200):
+        unread[row["_id"]] = row["n"]
     out = []
     for d in docs:
         c = clean(d)
         if c["type"] == "direct":
             oid = next((m for m in c["members"] if m != user["id"]), None)
-            other = await db.users.find_one({"_id": ObjectId(oid)}, {"full_name": 1, "photo": 1}) if oid else None
+            other = people.get(oid) if oid else None
             c["title"] = other["full_name"] if other else "Buddilio member"
             c["avatar"] = other.get("photo", "") if other else ""
             c["other_id"] = oid
-        c["unread"] = await db.messages.count_documents(
-            {"conversation_id": c["id"], "sender_id": {"$ne": user["id"]}, "read": False})
+        c["unread"] = unread.get(c["id"], 0)
         c["online"] = bool(hub.online_among([m for m in c["members"] if m != user["id"]])) if c["type"] == "direct" else False
         out.append(c)
     return {"items": out}
@@ -1547,11 +1591,12 @@ async def get_messages(cid: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="You are not part of this conversation.")
     await db.messages.update_many({"conversation_id": cid, "sender_id": {"$ne": user["id"]}},
                                   {"$set": {"read": True}})
-    docs = await db.messages.find({"conversation_id": cid}).sort([("created_at", 1)]).to_list(500)
+    docs = await db.messages.find({"conversation_id": cid}).sort([("created_at", 1)]).limit(500).to_list(500)
+    senders = await load_many(db.users, [d["sender_id"] for d in docs], {"full_name": 1, "photo": 1})
     out = []
     for d in docs:
         m = clean(d)
-        u = await db.users.find_one({"_id": ObjectId(m["sender_id"])}, {"full_name": 1, "photo": 1})
+        u = senders.get(m["sender_id"])
         m["sender_name"] = u["full_name"] if u else "Member"
         m["sender_photo"] = u.get("photo", "") if u else ""
         out.append(m)
@@ -1628,7 +1673,7 @@ async def delete_conversation(cid: str, user: dict = Depends(get_current_user)):
 # ---------------- notifications ----------------
 @api.get("/notifications")
 async def notifications(user: dict = Depends(get_current_user)):
-    docs = await db.notifications.find({"user_id": user["id"]}).sort([("created_at", -1)]).to_list(100)
+    docs = await db.notifications.find({"user_id": user["id"]}).sort([("created_at", -1)]).limit(100).to_list(100)
     unread = await db.notifications.count_documents({"user_id": user["id"], "read": False})
     return {"items": [clean(d) for d in docs], "unread": unread}
 
@@ -1662,11 +1707,11 @@ async def dashboard(user: dict = Depends(get_current_user)):
         "membership": membership,
         "unread_messages": await db.messages.count_documents(
             {"sender_id": {"$ne": user["id"]}, "read": False,
-             "conversation_id": {"$in": [str(c["_id"]) for c in await db.conversations.find({"members": user["id"]}).to_list(100)]}}),
+             "conversation_id": {"$in": [str(c["_id"]) for c in await db.conversations.find({"members": user["id"]}).limit(100).to_list(100)]}}),
         "unread_notifications": await db.notifications.count_documents({"user_id": user["id"], "read": False}),
         "orders": await db.orders.count_documents({"user_id": user["id"]}),
         "upcoming_events": [clean(e) for e in await db.events.find(
-            {"_id": {"$in": [ObjectId(p["event_id"]) for p in await db.event_participants.find({"user_id": user["id"]}).to_list(50)]}}
+            {"_id": {"$in": [ObjectId(p["event_id"]) for p in await db.event_participants.find({"user_id": user["id"]}).limit(50).to_list(50)]}}
         ).limit(5).to_list(5)],
         "recommended_events": [clean(e) for e in rec_events],
         "recommended_people": [clean(p) for p in rec_people],
@@ -1698,7 +1743,7 @@ def cron_guard(authorization: str = Header("")):
 
 async def month_tally(month: str) -> list:
     docs = await db.referrals.find({"status": "rewarded", "rewarded_at": {"$regex": f"^{month}"}},
-                                   {"referrer_id": 1}).to_list(5000)
+                                   {"referrer_id": 1}).limit(5000).to_list(5000)
     tally: dict[str, int] = {}
     for d in docs:
         tally[d["referrer_id"]] = tally.get(d["referrer_id"], 0) + 1
@@ -1778,7 +1823,7 @@ async def notify_city_waitlist(city: str) -> int:
     if not await db.events.count_documents({"city": city, "status": "published"}):
         return 0
     pending = await db.city_waitlist.find({"city": city,
-                                           "notified_at": {"$in": [None, ""]}}).to_list(1000)
+                                           "notified_at": {"$in": [None, ""]}}).limit(1000).to_list(1000)
     if not pending:
         return 0
     slug = city_slug(city)
@@ -1865,19 +1910,16 @@ async def city_page(slug: str):
     stamp = iso(now_utc())
     upcoming = await db.events.find({"city": city, "status": "published", "starts_at": {"$gte": stamp}}) \
         .sort([("starts_at", 1)]).limit(6).to_list(6)
-    published = await db.events.find({"city": city, "status": "published"},
-                                     {"_id": 1, "cover_image": 1, "category": 1, "starts_at": 1}).to_list(300)
+    published = await db.events.find({"city": city, "status": {"$in": ["published", "completed"]}},
+                                     {"_id": 1, "cover_image": 1, "category": 1, "starts_at": 1}).limit(300).to_list(300)
     ids = [str(e["_id"]) for e in published]
-    quotes = []
-    for r in await db.reviews.find({"event_id": {"$in": ids}, "status": {"$ne": "hidden"},
-                                    "comment": {"$nin": ["", None]}}) \
-            .sort([("rating", -1), ("created_at", -1)]).limit(2).to_list(2):
-        try:
-            u = await db.users.find_one({"_id": ObjectId(r["user_id"])}, {"full_name": 1})
-        except Exception:
-            u = None
-        quotes.append({"rating": r["rating"], "comment": r["comment"],
-                       "user_name": short_name((u or {}).get("full_name", ""))})
+    reviews = await db.reviews.find({"event_id": {"$in": ids}, "status": {"$ne": "hidden"},
+                                     "comment": {"$nin": ["", None]}}) \
+        .sort([("rating", -1), ("created_at", -1)]).limit(2).to_list(2)
+    authors = await load_many(db.users, [r["user_id"] for r in reviews], {"full_name": 1})
+    quotes = [{"rating": r["rating"], "comment": r["comment"],
+               "user_name": short_name((authors.get(r["user_id"]) or {}).get("full_name", ""))}
+              for r in reviews]
     faces = [{"id": str(u["_id"]), "name": short_name(u.get("full_name", "")), "photo": u.get("photo", "")}
              for u in await db.users.find({"city": city, "role": "user", "status": "active",
                                            "photo": {"$nin": ["", None]}},
@@ -1920,9 +1962,9 @@ async def join_city_waitlist(slug: str, body: dict):
 
 @api.get("/meta")
 async def meta():
-    extra = await db.cities.find({}).to_list(300)
-    cats = await db.event_categories.find({}).to_list(100)
-    ints = await db.interests.find({}).to_list(200)
+    extra = await db.cities.find({}).limit(300).to_list(300)
+    cats = await db.event_categories.find({}).limit(100).to_list(100)
+    ints = await db.interests.find({}).limit(200).to_list(200)
     conf = await currency_config()
     countries = []
     for c in COUNTRIES:
@@ -1950,14 +1992,14 @@ async def cms_page(slug: str):
 
 @api.get("/cms")
 async def cms_pages():
-    return {"items": [clean(d) for d in await db.cms_pages.find({}).to_list(50)]}
+    return {"items": [clean(d) for d in await db.cms_pages.find({}).limit(50).to_list(50)]}
 
 
 # ---------------- admin ----------------
 @api.get("/admin/stats")
 async def admin_stats(days: int = 30, user: dict = Depends(admin_only)):
     since = iso(now_utc() - timedelta(days=days))
-    paid = await db.orders.find({"payment_status": "paid", "created_at": {"$gte": since}}).to_list(2000)
+    paid = await db.orders.find({"payment_status": "paid", "created_at": {"$gte": since}}).limit(2000).to_list(2000)
     def rev(kind):
         return round(sum(o["total"] for o in paid if o["kind"] == kind), 2)
     users_total = await db.users.count_documents({"role": "user"})
@@ -1965,7 +2007,7 @@ async def admin_stats(days: int = 30, user: dict = Depends(admin_only)):
     for o in paid:
         series[o["created_at"][:10]] = round(series.get(o["created_at"][:10], 0) + o["total"], 2)
     reg_series = {}
-    for u in await db.users.find({"created_at": {"$gte": since}}, {"created_at": 1}).to_list(2000):
+    for u in await db.users.find({"created_at": {"$gte": since}}, {"created_at": 1}).limit(2000).to_list(2000):
         reg_series[u["created_at"][:10]] = reg_series.get(u["created_at"][:10], 0) + 1
     return {
         "total_users": users_total,
@@ -2021,7 +2063,7 @@ async def admin_update_user(uid: str, body: dict, user: dict = Depends(admin_onl
 @api.get("/admin/events")
 async def admin_events(status: str = "", user: dict = Depends(admin_only)):
     flt = {"status": status} if status else {}
-    docs = await db.events.find(flt).sort([("created_at", -1)]).to_list(300)
+    docs = await db.events.find(flt).sort([("created_at", -1)]).limit(300).to_list(300)
     return {"items": [clean(d) for d in docs]}
 
 
@@ -2048,7 +2090,7 @@ async def moderate_event(eid: str, body: dict, user: dict = Depends(admin_only))
 @api.get("/admin/orders")
 async def admin_orders(status: str = "", user: dict = Depends(admin_only)):
     flt = {"payment_status": status} if status else {}
-    return {"items": [clean(d) for d in await db.orders.find(flt).sort([("created_at", -1)]).to_list(300)]}
+    return {"items": [clean(d) for d in await db.orders.find(flt).sort([("created_at", -1)]).limit(300).to_list(300)]}
 
 
 @api.post("/admin/orders/{oid}/refund")
@@ -2087,7 +2129,7 @@ async def refund_order(oid: str, user: dict = Depends(admin_only)):
 @api.get("/admin/reports")
 async def admin_reports(status: str = "", user: dict = Depends(admin_only)):
     flt = {"status": status} if status else {}
-    docs = await db.reports.find(flt).sort([("created_at", -1)]).to_list(300)
+    docs = await db.reports.find(flt).sort([("created_at", -1)]).limit(300).to_list(300)
     out = []
     for d in docs:
         r = clean(d)
@@ -2119,7 +2161,7 @@ async def resolve_report(rid: str, body: dict, user: dict = Depends(admin_only))
 
 @api.get("/admin/audit-logs")
 async def audit_logs(user: dict = Depends(admin_only)):
-    return {"items": [clean(d) for d in await db.audit_logs.find({}).sort([("created_at", -1)]).to_list(200)]}
+    return {"items": [clean(d) for d in await db.audit_logs.find({}).sort([("created_at", -1)]).limit(200).to_list(200)]}
 
 
 def crud_routes(path: str, coll: str, model):
@@ -2135,7 +2177,7 @@ def crud_routes(path: str, coll: str, model):
 
     @api.get(f"/admin/{path}", name=f"list_{path}")
     async def listing(user: dict = Depends(admin_only)):
-        return {"items": [clean(d) for d in await db[coll].find({}).to_list(200)]}
+        return {"items": [clean(d) for d in await db[coll].find({}).limit(200).to_list(200)]}
 
     @api.put(f"/admin/{path}/{{item_id}}", name=f"update_{path}")
     async def update(item_id: str, payload: model, user: dict = Depends(admin_only)):  # type: ignore
@@ -2220,12 +2262,12 @@ VISIBLE_REVIEW = {"status": {"$ne": "hidden"}}
 
 
 async def recompute_ratings(event_id: str, partner_id: str = "") -> tuple[float, int]:
-    revs = await db.reviews.find({"event_id": event_id, **VISIBLE_REVIEW}, {"rating": 1}).to_list(1000)
+    revs = await db.reviews.find({"event_id": event_id, **VISIBLE_REVIEW}, {"rating": 1}).limit(1000).to_list(1000)
     avg = round(sum(r["rating"] for r in revs) / len(revs), 2) if revs else 0
     await db.events.update_one({"_id": ObjectId(event_id)},
                                {"$set": {"rating": avg, "rating_count": len(revs)}})
     if partner_id:
-        pr = await db.reviews.find({"partner_id": partner_id, **VISIBLE_REVIEW}, {"rating": 1}).to_list(5000)
+        pr = await db.reviews.find({"partner_id": partner_id, **VISIBLE_REVIEW}, {"rating": 1}).limit(5000).to_list(5000)
         await db.users.update_one({"_id": ObjectId(partner_id)},
                                   {"$set": {"rating": round(sum(r["rating"] for r in pr) / len(pr), 2) if pr else 0,
                                             "rating_count": len(pr)}})
@@ -2254,7 +2296,7 @@ async def review_author(r: dict) -> dict:
 async def list_reviews(event_id: str, user: Optional[dict] = Depends(optional_user)):
     is_admin = bool(user and user.get("role") == "admin")
     flt = {"event_id": event_id} if is_admin else {"event_id": event_id, **VISIBLE_REVIEW}
-    docs = await db.reviews.find(flt).sort([("created_at", -1)]).to_list(100)
+    docs = await db.reviews.find(flt).sort([("created_at", -1)]).limit(100).to_list(100)
     out = []
     for d in docs:
         r = await review_author(clean(d))
@@ -2292,7 +2334,7 @@ async def create_review(event_id: str, payload: ReviewIn, user: dict = Depends(g
 
 @api.get("/me/reviewable")
 async def reviewable(user: dict = Depends(get_current_user)):
-    parts = await db.event_participants.find({"user_id": user["id"], "status": "confirmed"}).to_list(200)
+    parts = await db.event_participants.find({"user_id": user["id"], "status": "confirmed"}).limit(200).to_list(200)
     out = []
     for p in parts:
         if await db.reviews.find_one({"event_id": p["event_id"], "user_id": user["id"]}):
@@ -2344,7 +2386,7 @@ async def reply_to_review(rid: str, body: dict, user: dict = Depends(partner_onl
 
 @api.get("/partner/reviews")
 async def partner_reviews(user: dict = Depends(partner_only)):
-    docs = await db.reviews.find({"partner_id": user["id"]}).sort([("created_at", -1)]).to_list(300)
+    docs = await db.reviews.find({"partner_id": user["id"]}).sort([("created_at", -1)]).limit(300).to_list(300)
     out = []
     for d in docs:
         r = await review_author(clean(d))
@@ -2370,18 +2412,21 @@ async def admin_reviews(status: str = "", user: dict = Depends(admin_only)):
         flt = {"status": status}
     else:
         flt = {}
-    docs = await db.reviews.find(flt).sort([("flag_count", -1), ("created_at", -1)]).to_list(300)
+    docs = await db.reviews.find(flt).sort([("flag_count", -1), ("created_at", -1)]).limit(300).to_list(300)
+    events = await load_many(db.events, [d.get("event_id", "") for d in docs],
+                             {"title": 1, "partner_name": 1})
+    reports: dict[str, list] = {}
+    for rp in await db.reports.find({"target_type": "review",
+                                     "target_id": {"$in": [str(d["_id"]) for d in docs]}}).limit(1000).to_list(1000):
+        reports.setdefault(rp["target_id"], []).append(rp)
     out = []
     for d in docs:
         r = await review_author(clean(d))
-        try:
-            ev = await db.events.find_one({"_id": ObjectId(r["event_id"])}, {"title": 1, "partner_name": 1})
-        except Exception:
-            ev = None
+        ev = events.get(r["event_id"])
         r["event_title"] = ev["title"] if ev else "Experience"
         r["partner_name"] = (ev or {}).get("partner_name", "")
         r["reports"] = [{"reason": rp["reason"], "by": rp["reporter_email"], "at": rp["created_at"]}
-                        for rp in await db.reports.find({"target_type": "review", "target_id": r["id"]}).to_list(20)]
+                        for rp in reports.get(r["id"], [])[:20]]
         out.append(r)
     return {"items": out,
             "flagged": await db.reviews.count_documents({"flag_count": {"$gt": 0}, "status": {"$ne": "hidden"}}),
@@ -2427,7 +2472,7 @@ async def generate_payouts():
     cutoff = iso(now_utc() - timedelta(hours=PAYOUT_HOLD_HOURS))
     events = await db.events.find({"status": {"$in": ["published", "completed"]},
                                    "$or": [{"ends_at": {"$lt": cutoff, "$ne": ""}},
-                                           {"starts_at": {"$lt": cutoff}}]}).to_list(500)
+                                           {"starts_at": {"$lt": cutoff}}]}).limit(500).to_list(500)
     created = 0
     for ev in events:
         eid = str(ev["_id"])
@@ -2436,7 +2481,7 @@ async def generate_payouts():
         if not ev.get("partner_id") or await db.payouts.find_one({"event_id": eid}):
             continue
         orders = await db.orders.find({"kind": "event", "ref_id": eid, "payment_status": "paid",
-                                       "refund_status": "none"}).to_list(1000)
+                                       "refund_status": "none"}).limit(1000).to_list(1000)
         gross = round(sum(o["subtotal"] - o["discount"] for o in orders), 2)
         fee = round(gross * PLATFORM_FEE / 100, 2)
         await db.payouts.insert_one({
@@ -2453,7 +2498,7 @@ async def generate_payouts():
 
 @api.get("/partner/payouts")
 async def partner_payouts(user: dict = Depends(partner_only)):
-    docs = await db.payouts.find({"partner_id": user["id"]}).sort([("created_at", -1)]).to_list(300)
+    docs = await db.payouts.find({"partner_id": user["id"]}).sort([("created_at", -1)]).limit(300).to_list(300)
     items = [clean(d) for d in docs]
     return {"items": items,
             "pending_total": round(sum(i["net"] for i in items if i["status"] == "pending"), 2),
@@ -2463,11 +2508,13 @@ async def partner_payouts(user: dict = Depends(partner_only)):
 @api.get("/admin/payouts")
 async def admin_payouts(status: str = "", user: dict = Depends(admin_only)):
     flt = {"status": status} if status else {}
-    docs = await db.payouts.find(flt).sort([("created_at", -1)]).to_list(500)
+    docs = await db.payouts.find(flt).sort([("created_at", -1)]).limit(500).to_list(500)
+    partners = await load_many(db.users, [d.get("partner_id", "") for d in docs],
+                               {"full_name": 1, "org_name": 1, "email": 1})
     out = []
     for d in docs:
         p = clean(d)
-        partner = await db.users.find_one({"_id": ObjectId(p["partner_id"])}, {"full_name": 1, "org_name": 1, "email": 1})
+        partner = partners.get(p["partner_id"])
         p["partner"] = clean(partner) if partner else None
         out.append(p)
     return {"items": out}
@@ -2512,7 +2559,7 @@ async def ws_chat(websocket: WebSocket, token: str = Query("")):
         await websocket.close(code=4401)
         return
     await hub.connect(uid, websocket)
-    convs = await db.conversations.find({"members": uid}, {"members": 1}).to_list(200)
+    convs = await db.conversations.find({"members": uid}, {"members": 1}).limit(200).to_list(200)
     peers = {m for c in convs for m in c["members"] if m != uid}
     await hub.send_to(peers, {"type": "presence", "user_id": uid, "online": True})
     await websocket.send_json({"type": "ready", "online": hub.online_among(peers)})
@@ -2554,20 +2601,20 @@ async def reminder_loop():
     while True:
         try:
             window_end = iso(now_utc() + timedelta(hours=24))
-            events = await db.events.find({"status": "published", "starts_at": {"$gte": iso(now_utc()), "$lte": window_end}}).to_list(200)
+            events = await db.events.find({"status": "published", "starts_at": {"$gte": iso(now_utc()), "$lte": window_end}}).limit(200).to_list(200)
             for ev in events:
                 eid = str(ev["_id"])
-                parts = await db.event_participants.find({"event_id": eid, "status": "confirmed"}).to_list(500)
+                parts = await db.event_participants.find({"event_id": eid, "status": "confirmed"}).limit(500).to_list(500)
                 starts = datetime.fromisoformat(ev["starts_at"])
-                for p in parts:
-                    if p.get("reminded"):
-                        continue
+                due = [p for p in parts if not p.get("reminded")]
+                people = await load_many(db.users, [p["user_id"] for p in due],
+                                         {"email": 1, "full_name": 1, "notification_prefs": 1})
+                for p in due:
                     await db.event_participants.update_one({"_id": p["_id"]}, {"$set": {"reminded": True}})
                     await notify(p["user_id"], "Event reminder",
                                  f"{ev['title']} starts {starts.strftime('%a %d %b at %I:%M %p')} — {ev.get('venue','')}, {ev['city']}.",
                                  "reminder", f"/events/{eid}", email=False)
-                    u = await db.users.find_one({"_id": ObjectId(p["user_id"])},
-                                                {"email": 1, "full_name": 1, "notification_prefs": 1})
+                    u = people.get(p["user_id"])
                     if u and (u.get("notification_prefs") or {}).get("email", True):
                         await send_email(u["email"], f"Tomorrow: {ev['title']}", wrap(
                             "See you tomorrow",
