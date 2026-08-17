@@ -403,6 +403,22 @@ class LoginIn(BaseModel):
 
 class GoogleSessionIn(BaseModel):
     session_id: str
+    referral_code: str = ""
+
+
+class OnboardingIn(BaseModel):
+    dob: str
+    city: str
+    gender: str = "prefer not to say"
+    mobile: str = ""
+    country: str = ""
+    bio: str = ""
+    photo: str = ""
+    interests: List[str] = []
+    event_categories: List[str] = []
+    lifestyle: List[str] = []
+    is_adult: bool = False
+    accept_terms: bool = False
 
 
 class ProfileIn(BaseModel):
@@ -651,33 +667,98 @@ async def reset_password(body: dict):
     return {"message": "Password updated. You can now log in."}
 
 
+GOOGLE_SESSION_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+
+
 @api.post("/auth/google/session")
 async def google_session(payload: GoogleSessionIn, response: Response):
+    """Exchanges the one-time Emergent OAuth session_id for a Buddilio session."""
     import httpx
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-                        headers={"X-Session-ID": payload.session_id})
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(GOOGLE_SESSION_URL, headers={"X-Session-ID": payload.session_id})
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Could not reach Google sign-in. Please try again.")
     if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Google sign-in failed. Please try again.")
+        raise HTTPException(status_code=401, detail="That Google sign-in link has expired. Please try again.")
     data = r.json()
-    email = (data.get("email") or "").lower()
+    email = (data.get("email") or "").lower().strip()
+    if not email:
+        raise HTTPException(status_code=401, detail="Google did not share an email address for this account.")
+    name = data.get("name") or email.split("@")[0]
     user = await db.users.find_one({"email": email})
-    if not user:
+    is_new = user is None
+
+    if user:
+        if user.get("status") == "banned":
+            raise HTTPException(status_code=403, detail="This account has been banned.")
+        if user.get("status") == "suspended":
+            raise HTTPException(status_code=403, detail="This account is suspended. Contact support.")
+        upd = {"google_id": data.get("id", ""), "google_linked": True, "email_verified": True}
+        if not user.get("photo") and data.get("picture"):
+            upd["photo"] = data["picture"]
+        await db.users.update_one({"_id": user["_id"]}, {"$set": upd})
+        user = await db.users.find_one({"_id": user["_id"]})
+    else:
         doc = {
-            "full_name": data.get("name") or email.split("@")[0], "email": email, "mobile": "",
-            "password_hash": hash_password(secrets.token_urlsafe(16)), "role": "user", "status": "active",
-            "dob": "", "age": 0, "gender": "", "city": "Delhi NCR", "bio": "",
+            "full_name": name, "email": email, "mobile": "",
+            "password_hash": hash_password(secrets.token_urlsafe(24)), "role": "user", "status": "active",
+            "dob": "", "age": 0, "gender": "", "city": "", "country": "", "country_code": "", "bio": "",
             "photo": data.get("picture") or "", "interests": [], "event_categories": [], "lifestyle": [],
-            "verified": True, "email_verified": True, "auth_provider": "google",
+            "verified": False, "email_verified": True, "auth_provider": "google",
+            "google_id": data.get("id", ""), "google_linked": True, "profile_complete": False,
             "privacy": {"profile_visibility": "public", "who_can_message": "everyone"},
-            "notification_prefs": {"email": True, "in_app": True, "sms": False},
+            "notification_prefs": {"email": True, "in_app": True, "sms": False, "push": True},
             "blocked": [], "connections": [], "saved_events": [], "created_at": iso(now_utc()),
         }
         res = await db.users.insert_one(doc)
         user = await db.users.find_one({"_id": res.inserted_id})
+        uid = str(res.inserted_id)
+        await ensure_ref_code(user)
+        await register_referral(payload.referral_code, uid, name)
+        await notify(uid, "Welcome to Buddilio",
+                     "Finish the last step so we can match you with the right companions.",
+                     "registration", "/welcome")
+        await send_email(email, "Welcome to Buddilio", wrap(
+            f"Welcome to Buddilio, {name.split(' ')[0]}",
+            "<p>You signed in with Google, so there's no password to remember.</p>"
+            "<p><b>1.</b> Confirm your city and interests.<br/>"
+            "<b>2.</b> Browse curated experiences near you.<br/>"
+            "<b>3.</b> Message a member, then pick a night out together.</p>"
+            "<p>Remember: always meet in public venues and never send money to another member.</p>",
+            "Finish setting up", f"{FRONTEND_URL}/welcome"))
+        user = await db.users.find_one({"_id": res.inserted_id})
+
     token = create_access_token(str(user["_id"]), email, user.get("role", "user"))
     set_cookies(response, token)
-    return {"access_token": token, "user": clean(user)}
+    return {"access_token": token, "user": clean(user), "is_new": is_new}
+
+
+@api.post("/auth/onboarding")
+async def complete_onboarding(payload: OnboardingIn, user: dict = Depends(get_current_user)):
+    """One-time profile completion for members who joined through Google (21+ gate lives here)."""
+    age = age_from_dob(payload.dob)
+    if age < 21:
+        raise HTTPException(status_code=400, detail="You must be at least 21 years old to join Buddilio.")
+    if not payload.is_adult or not payload.accept_terms:
+        raise HTTPException(status_code=400, detail="Please confirm your age and accept the policies.")
+    city = payload.city.strip()
+    if not city:
+        raise HTTPException(status_code=400, detail="Please choose your city.")
+    c = country_for_city(city) or {}
+    upd = {
+        "dob": payload.dob, "age": age, "gender": payload.gender, "city": city,
+        "country": payload.country or c.get("name", ""), "country_code": c.get("code", ""),
+        "bio": payload.bio, "interests": payload.interests,
+        "event_categories": payload.event_categories, "lifestyle": payload.lifestyle,
+        "profile_complete": True,
+    }
+    if payload.mobile.strip():
+        upd["mobile"] = payload.mobile.strip()
+    if payload.photo:
+        upd["photo"] = payload.photo
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": upd})
+    return clean(await db.users.find_one({"_id": ObjectId(user["id"])}))
 
 
 # ---------------- profiles / discover ----------------

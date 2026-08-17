@@ -7,6 +7,8 @@ import { Spinner } from "@/components/Shared";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import Home from "@/pages/Home";
 import { Login, Register, ForgotPassword, ResetPassword } from "@/pages/Auth";
+import AuthCallback from "@/pages/AuthCallback";
+import Welcome from "@/pages/Welcome";
 import Dashboard, { Orders, Notifications, SavedEvents } from "@/pages/Dashboard";
 import { Events, EventDetail } from "@/pages/Events";
 import { Discover, PublicProfile, MyProfile } from "@/pages/Discover";
@@ -26,11 +28,15 @@ function Protected({ children, roles }) {
   const loc = useLocation();
   if (loading) return <Spinner label="Checking your session" />;
   if (!user) return <Navigate to="/login" state={{ from: loc.pathname }} replace />;
+  if (user.profile_complete === false && loc.pathname !== "/welcome") return <Navigate to="/welcome" replace />;
   if (roles && !roles.includes(user.role)) return <Navigate to="/dashboard" replace />;
   return children;
 }
 
 function Shell() {
+  const loc = useLocation();
+  // Emergent OAuth returns to {origin}/dashboard#session_id=... — exchange it before any route renders.
+  if (loc.hash?.includes("session_id=")) return <AuthCallback />;
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
@@ -54,6 +60,7 @@ function Shell() {
           <Route path="/payment/success" element={<PaymentSuccess />} />
           <Route path="/payment/cancel" element={<PaymentCancel />} />
 
+          <Route path="/welcome" element={<Protected><Welcome /></Protected>} />
           <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
           <Route path="/discover" element={<Protected><Discover /></Protected>} />
           <Route path="/messages" element={<Protected><Messages /></Protected>} />

@@ -191,6 +191,34 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
 - Known dev-only noise: a hydration warning from the visual-editor instrumentation (not app code); the backend
   suite intermittently drops 1–2 tests to connection resets when run with 2 xdist workers — all pass serially.
 
+## Implemented — iteration 11 (June 2026): Emergent-managed Google sign-in
+- **Google sign-in** wired to the Emergent-managed OAuth flow: `GoogleButton` (in `pages/Auth.jsx`, used on
+  both `/login` and `/register`) sends the browser to `https://auth.emergentagent.com/?redirect=` +
+  `window.location.origin + "/dashboard"` (derived from the browser, never hardcoded). The return hash is
+  detected **during render** in `Shell()` via `useLocation().hash` and handed to `pages/AuthCallback.jsx`,
+  which exchanges the `session_id` once (`useRef` guard). `AuthProvider` skips its `/auth/me` check while a
+  `session_id` is in the hash, so there is no race.
+- **Backend** `POST /api/auth/google/session` now: validates the session server-side at
+  `demobackend.emergentagent.com/auth/v1/env/oauth/session-data` (X-Session-ID), 401s on an expired link and
+  502s if the provider is unreachable, **links** an existing account by email (sets `google_linked`,
+  `google_id`, `email_verified`, backfills the photo) while preserving role/referral data, blocks
+  banned/suspended accounts like password login does, and for new members creates a global profile
+  (no more hardcoded "Delhi NCR"), a referral code, the welcome email + in-app notification, and
+  `profile_complete: false`. Buddilio keeps one session mechanism — its own 7-day JWT.
+- **Onboarding gate**: new `POST /api/auth/onboarding` enforces the 21+ rule server-side (DOB, `is_adult`,
+  `accept_terms`, city required) and derives country/country_code from the city. New `/welcome` page collects
+  DOB, gender, country/city, mobile, bio, photo, interests, categories and lifestyle; `Protected` keeps any
+  user with `profile_complete === false` on `/welcome` until it is submitted. Existing password users are
+  untouched (the field is absent, not `false`).
+- **Referrals survive Google**: `/register?ref=CODE` stores `localStorage['bud_ref']`, which `AuthCallback`
+  passes as `referral_code`, so a Google sign-up still credits the inviter.
+- Flow + how to test without a real Google account documented in `/app/auth_testing.md`.
+- Verified: `backend/tests/test_iteration11.py` **15/15**, clean `yarn build`, and testing-agent iteration 11
+  (`/app/test_reports/iteration_11.json`) — zero backend, UI and integration issues, including password-login
+  regressions (admin → `/admin`, member → `/dashboard`, neither sent to `/welcome`).
+- Not verified: a real end-to-end Google round trip (no Google account available in this environment).
+  Preview only — a redeploy is needed for buddilio.com.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

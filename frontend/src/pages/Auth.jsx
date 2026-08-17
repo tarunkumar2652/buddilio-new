@@ -34,20 +34,36 @@ const AuthShell = ({ title, sub, children }) => (
   </div>
 );
 
+export const GoogleButton = ({ label = "Continue with Google", testid = "google-login" }) => {
+  const go = () => {
+    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    const redirectUrl = window.location.origin + "/dashboard";
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
+  return (
+    <>
+      <div className="my-5 flex items-center gap-3 text-xs text-slate-400">
+        <div className="h-px flex-1 bg-slate-200" />OR<div className="h-px flex-1 bg-slate-200" />
+      </div>
+      <button type="button" onClick={go} data-testid={testid}
+        className="w-full flex items-center justify-center gap-2.5 rounded-full border border-slate-200 bg-white py-3.5 text-sm font-bold transition-colors hover:bg-slate-50">
+        <svg viewBox="0 0 48 48" className="h-4 w-4" aria-hidden="true">
+          <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.5 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.2l7.9 6.1C12.3 13.2 17.7 9.5 24 9.5z" />
+          <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-2.8-.4-4.1H24v8.4h12.7c-.3 2.1-1.6 5.2-4.6 7.3l7.7 6c4.5-4.2 6.7-10.3 6.7-17.6z" />
+          <path fill="#FBBC05" d="M10.4 28.7A14.6 14.6 0 0 1 9.6 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.5 10.8l7.9-6.1z" />
+          <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.8-5.8l-7.7-6c-2.1 1.4-4.9 2.4-8.1 2.4-6.3 0-11.7-3.7-13.6-9.9l-7.9 6.1C6.4 42.6 14.6 48 24 48z" />
+        </svg>
+        {label}
+      </button>
+    </>
+  );
+};
+
 export function Login() {
-  const { login, googleSession } = useAuth();
+  const { login } = useAuth();
   const nav = useNavigate();
   const [form, setForm] = useState({ email: "", password: "" });
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const sid = new URLSearchParams(window.location.hash.replace("#", "?")).get("session_id");
-    if (sid) {
-      googleSession(sid)
-        .then((u) => { toast.success("Signed in with Google"); nav(u.role === "admin" ? "/admin" : "/dashboard"); })
-        .catch((e) => toast.error(errMsg(e)));
-    }
-  }, [googleSession, nav]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -57,10 +73,6 @@ export function Login() {
       toast.success(`Welcome back, ${u.full_name.split(" ")[0]}`);
       nav(u.role === "admin" ? "/admin" : u.role === "partner" ? "/partner" : "/dashboard");
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
-  };
-
-  const google = () => {
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(window.location.origin + "/login")}`;
   };
 
   return (
@@ -79,11 +91,7 @@ export function Login() {
           {busy ? "Logging in…" : "Log in"}
         </button>
       </form>
-      <div className="my-5 flex items-center gap-3 text-xs text-slate-400"><div className="h-px flex-1 bg-slate-200" />OR<div className="h-px flex-1 bg-slate-200" /></div>
-      <button onClick={google} data-testid="google-login"
-        className="w-full rounded-full border border-slate-200 bg-white py-3.5 text-sm font-bold hover:bg-slate-50">
-        Continue with Google
-      </button>
+      <GoogleButton label="Log in with Google" />
       <p className="mt-6 text-sm text-slate-500">New here? <Link to="/register" className="font-bold text-slate-900" data-testid="to-register">Join Buddilio</Link></p>
     </AuthShell>
   );
@@ -110,7 +118,10 @@ export function Register() {
 
   useEffect(() => {
     const ref = params.get("ref");
-    if (ref) api.get(`/referrals/${ref}`).then(({ data }) => setInviter(data)).catch(() => setInviter(null));
+    if (ref) {
+      localStorage.setItem("bud_ref", ref);  // so Google sign-ups keep the referral credit
+      api.get(`/referrals/${ref}`).then(({ data }) => setInviter(data)).catch(() => setInviter(null));
+    }
   }, [params]);
 
   useEffect(() => { api.get("/meta").then(({ data }) => setMeta(data)).catch(() => {}); }, []);
@@ -161,6 +172,7 @@ export function Register() {
             <Field label="Email" type="email" required data-testid="reg-email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
             <Field label="Mobile number" required data-testid="reg-mobile" value={f.mobile} onChange={(e) => setF({ ...f, mobile: e.target.value })} />
             <Field label="Password" type="password" required data-testid="reg-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+            {!isPartner && <GoogleButton label="Sign up with Google" testid="google-signup" />}
           </>
         )}
 

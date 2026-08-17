@@ -19,7 +19,11 @@ export function AuthProvider({ children }) {
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    // Returning from the Emergent OAuth redirect: AuthCallback exchanges the session first.
+    if (window.location.hash?.includes("session_id=")) { setLoading(false); return; }
+    load();
+  }, [load]);
 
   const finish = (data) => {
     localStorage.setItem("bud_token", data.access_token);
@@ -37,10 +41,12 @@ export function AuthProvider({ children }) {
     return finish(data);
   };
 
-  const googleSession = async (session_id) => {
-    const { data } = await api.post("/auth/google/session", { session_id });
-    return finish(data);
-  };
+  const googleSession = useCallback(async (session_id, referral_code = "") => {
+    const { data } = await api.post("/auth/google/session", { session_id, referral_code });
+    localStorage.setItem("bud_token", data.access_token);
+    setUser(data.user);
+    return data.user;
+  }, []);
 
   const logout = async () => {
     try { await api.post("/auth/logout"); } catch { /* ignore */ }
