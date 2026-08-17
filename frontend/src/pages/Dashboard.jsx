@@ -4,7 +4,7 @@ import { api, money } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { EventCard, PersonCard } from "@/components/Cards";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
-import { Compass, Ticket, MessageCircle, Bell, Heart, CalendarDays, Star, Gift } from "lucide-react";
+import { Compass, Ticket, MessageCircle, Bell, Heart, CalendarDays, Star, Gift, Sparkles } from "lucide-react";
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -61,6 +61,7 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-6 flex flex-wrap gap-3">
+        <Link to="/ai" data-testid="quick-ai" className="inline-flex items-center gap-2 rounded-full brand-gradient text-white px-5 py-2.5 text-sm font-bold shadow-[0_6px_18px_rgba(232,30,124,0.26)]"><Sparkles className="h-4 w-4" />Ask Buddy AI</Link>
         <Link to="/discover" data-testid="quick-discover" className="inline-flex items-center gap-2 rounded-full bg-slate-900 text-white px-5 py-2.5 text-sm font-bold"><Compass className="h-4 w-4" />Discover companions</Link>
         <Link to="/events" data-testid="quick-events" className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold"><CalendarDays className="h-4 w-4" />Browse events</Link>
         <Link to="/passes" data-testid="quick-passes" className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold"><Ticket className="h-4 w-4" />Buy a pass</Link>

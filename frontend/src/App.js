@@ -17,6 +17,7 @@ import { Membership, Passes, Checkout } from "@/pages/Commerce";
 import { PaymentSuccess, PaymentCancel } from "@/pages/Payment";
 import { CmsPage, Safety } from "@/pages/Content";
 import Referrals from "@/pages/Referrals";
+import Concierge from "@/pages/Concierge";
 import LeaderboardPage from "@/pages/Leaderboard";
 import { CityIndex, CityPage } from "@/pages/Cities";
 import PartnerDashboard from "@/pages/Partner";
@@ -69,6 +70,7 @@ function Shell() {
           <Route path="/notifications" element={<Protected><Notifications /></Protected>} />
           <Route path="/profile" element={<Protected><MyProfile /></Protected>} />
           <Route path="/referrals" element={<Protected><Referrals /></Protected>} />
+          <Route path="/ai" element={<Protected><Concierge /></Protected>} />
           <Route path="/checkout" element={<Protected><Checkout /></Protected>} />
           <Route path="/partner" element={<Protected roles={["partner", "admin"]}><PartnerDashboard /></Protected>} />
           <Route path="/admin" element={<Protected roles={["admin"]}><Admin /></Protected>} />

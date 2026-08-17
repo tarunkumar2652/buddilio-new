@@ -219,6 +219,31 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
 - Not verified: a real end-to-end Google round trip (no Google account available in this environment).
   Preview only — a redeploy is needed for buddilio.com.
 
+## Implemented — iteration 12 (June 2026): Buddy AI concierge (ChatGPT)
+- **Buddy AI** — a member-facing concierge chat on `/ai` running **OpenAI `gpt-5.4`** through the Emergent
+  universal LLM key (`EMERGENT_LLM_KEY`, already in `backend/.env`; `AI_MODEL` overrides the model).
+- `backend/ai.py` holds the persona and guardrails: Buddy may only recommend events that are in the context
+  block, must link them as `[Title](/events/<id>)`, quotes the organiser's local price verbatim, always steers
+  to public venues, never shares another member's contact details, never invents refunds/discounts, and
+  declines paid-companionship framing. Also builds the member profile block (city, interests, membership,
+  wallet credit) and the starter prompts.
+- `backend/server.py` → `GET /api/ai/config` (enabled flag, model, suggestions, `used_today`/`daily_cap`),
+  `GET /api/ai/history?session_id=`, `POST /api/ai/concierge` streaming **SSE** (`data: {"delta": …}` →
+  `data: {"done": true}`, `X-Accel-Buffering: no`). Context = up to 45 upcoming **published** events, the
+  member's own city first. History lives in `db.ai_messages` (indexed on user+session+time), replayed into
+  `LlmChat(initial_messages=…)` — the library never owns the transcript. Abandoned turns (client disconnected
+  mid-stream) are filtered out of both the replay and the history response. Cap: **30 questions per member per
+  rolling 24h**, plus a 1000-character message limit.
+- `frontend/src/pages/Concierge.jsx` reads the stream with `fetch` + `ReadableStream` (Authorization header
+  needed, so no EventSource), renders `[label](/path)` links as router links and `**bold**`, shows suggestion
+  chips on a fresh thread, a thinking placeholder, a live streaming bubble, "New chat" (rotates
+  `localStorage['bud_ai_session']`) and a remaining-questions footnote. Entry points: gradient
+  **Ask Buddy AI** button on the dashboard, `nav-ai` pill in the desktop header, `mnav-ai` in the mobile menu.
+- Verified: `backend/tests/test_iteration12_ai.py` **15/15** and testing-agent iteration 12
+  (`/app/test_reports/iteration_12.json`) — zero backend/UI issues, including cross-member session isolation,
+  the three guardrail prompts, real-event link resolution, multi-turn recall, reload replay and new-chat.
+- Cost note: every question spends Universal Key balance (Profile → Manage plan → Universal Key → Add balance).
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

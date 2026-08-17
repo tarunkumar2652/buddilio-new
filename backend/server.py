@@ -6,6 +6,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 import os
 import asyncio
+import json
 import jwt
 import bcrypt
 import uuid
@@ -16,6 +17,7 @@ from typing import List, Optional, Annotated, Any
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -26,6 +28,7 @@ from realtime import hub
 from push import push_to, push_enabled, vapid_public_key
 from storage import init_storage, put_object, get_object, MIME_TYPES, APP_NAME
 from city_guides import guide_for
+import ai
 
 try:
     import razorpay
@@ -2710,6 +2713,125 @@ async def reminder_loop():
         await asyncio.sleep(3600)
 
 
+# ---------------- Buddy AI concierge ----------------
+class AiChatIn(BaseModel):
+    session_id: str
+    message: str
+
+
+async def ai_event_rows(user: dict) -> List[dict]:
+    """The only events Buddy is allowed to recommend: upcoming published ones, member's city first."""
+    fields = {"title": 1, "city": 1, "category": 1, "starts_at": 1, "venue": 1,
+              "price": 1, "price_input": 1, "price_currency": 1}
+    q = {"status": "published", "starts_at": {"$gte": iso(now_utc())}}
+    near = []
+    if user.get("city"):
+        near = await db.events.find({**q, "city": user["city"]}, fields) \
+            .sort("starts_at", 1).limit(20).to_list(20)
+    rest = await db.events.find(q, fields).sort("starts_at", 1).limit(40).to_list(40)
+    rows, seen = [], set()
+    for e in near + rest:
+        eid = str(e["_id"])
+        if eid in seen:
+            continue
+        seen.add(eid)
+        cur = (e.get("price_currency") or BASE_CURRENCY).upper()
+        amt = e.get("price_input") if e.get("price_input") not in (None, "") else e.get("price", 0)
+        try:
+            when = datetime.fromisoformat(e["starts_at"].replace("Z", "+00:00")).strftime("%a %d %b, %I:%M %p")
+        except Exception:
+            when = (e.get("starts_at") or "")[:16]
+        rows.append({"id": eid, "title": e.get("title", ""), "city": e.get("city", ""),
+                     "category": e.get("category", ""), "when": when,
+                     "price_label": "Free" if not amt else f"{cur} {float(amt):,.0f}"})
+    return rows[:45]
+
+
+async def ai_system_prompt(user: dict) -> str:
+    rows = await ai_event_rows(user)
+    plan = await membership_active(user["id"])
+    credit = await credit_balance(user["id"])
+    extras = {
+        "membership": (plan or {}).get("plan_name", ""),
+        "credit": f"{BASE_CURRENCY} {credit:,.0f}" if credit else "",
+        "today": now_utc().strftime("%A %d %B %Y"),
+    }
+    return ai.system_prompt(user, ai.event_lines(rows), extras)
+
+
+async def ai_used_today(user_id: str) -> int:
+    since = iso(now_utc() - timedelta(days=1))
+    return await db.ai_messages.count_documents(
+        {"user_id": user_id, "role": "user", "created_at": {"$gte": since}})
+
+
+@api.get("/ai/config")
+async def ai_config(user: dict = Depends(get_current_user)):
+    return {"enabled": ai.ai_enabled(), "model": ai.AI_MODEL,
+            "suggestions": ai.starter_prompts(user.get("city", "")),
+            "used_today": await ai_used_today(user["id"]), "daily_cap": ai.DAILY_MESSAGE_CAP}
+
+
+@api.get("/ai/history")
+async def ai_history(session_id: str, user: dict = Depends(get_current_user)):
+    docs = await db.ai_messages.find({"user_id": user["id"], "session_id": session_id},
+                                     {"role": 1, "content": 1, "created_at": 1}) \
+        .sort("created_at", 1).limit(200).to_list(200)
+    # hide user turns whose stream was abandoned — they never got a reply
+    out = [{"role": d["role"], "content": d["content"], "created_at": d["created_at"]}
+           for i, d in enumerate(docs)
+           if d["role"] != "user" or (i + 1 < len(docs) and docs[i + 1]["role"] == "assistant")]
+    return {"messages": out}
+
+
+@api.post("/ai/concierge")
+async def ai_concierge(payload: AiChatIn, user: dict = Depends(get_current_user)):
+    """Streams Buddy's reply as SSE. Conversation history lives in db.ai_messages, keyed by session."""
+    if not ai.ai_enabled():
+        raise HTTPException(status_code=503, detail="Buddy AI isn't switched on yet.")
+    text = payload.message.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Type a message first.")
+    if len(text) > 1000:
+        raise HTTPException(status_code=400, detail="Please keep your message under 1000 characters.")
+    if await ai_used_today(user["id"]) >= ai.DAILY_MESSAGE_CAP:
+        raise HTTPException(status_code=429,
+                            detail="You've used up today's Buddy AI questions. They reset in 24 hours.")
+
+    prior = await db.ai_messages.find({"user_id": user["id"], "session_id": payload.session_id},
+                                      {"role": 1, "content": 1}) \
+        .sort("created_at", 1).limit(40).to_list(40)
+    # keep only completed turns — a user message whose stream was abandoned has no assistant reply
+    history = []
+    for i, p in enumerate(prior):
+        if p["role"] == "user" and (i + 1 >= len(prior) or prior[i + 1]["role"] != "assistant"):
+            continue
+        history.append({"role": p["role"], "content": p["content"]})
+    system = await ai_system_prompt(user)
+    await db.ai_messages.insert_one({"user_id": user["id"], "session_id": payload.session_id,
+                                     "role": "user", "content": text, "created_at": iso(now_utc())})
+
+    async def gen():
+        parts = []
+        try:
+            async for delta in ai.stream_reply(payload.session_id, system, history, text):
+                parts.append(delta)
+                yield f"data: {json.dumps({'delta': delta})}\n\n"
+        except Exception as e:
+            logger.error(f"Buddy AI stream failed: {e}")
+            yield f"data: {json.dumps({'error': 'Buddy could not answer that one. Please try again.'})}\n\n"
+        reply = "".join(parts).strip()
+        if reply:
+            await db.ai_messages.insert_one({"user_id": user["id"], "session_id": payload.session_id,
+                                             "role": "assistant", "content": reply,
+                                             "created_at": iso(now_utc())})
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
@@ -2740,6 +2862,7 @@ async def startup():
     await db.referrals.create_index("referrer_id")
     await db.credits.create_index([("user_id", 1), ("created_at", -1)])
     await db.users.create_index("referral_code", sparse=True)
+    await db.ai_messages.create_index([("user_id", 1), ("session_id", 1), ("created_at", 1)])
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]

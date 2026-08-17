@@ -133,6 +133,10 @@ export const Navbar = () => {
               <span className="hidden sm:block"><CurrencyPicker /></span>
               {user ? (
                 <>
+                  <Link to="/ai" data-testid="nav-ai"
+                    className="hidden lg:inline-flex shrink-0 whitespace-nowrap items-center gap-1.5 rounded-full border border-brand-pink/40 bg-white px-3.5 py-2 text-xs font-bold text-brand-magenta transition-colors hover:bg-brand-pink/10">
+                    <Sparkles className="h-3.5 w-3.5" />Buddy AI
+                  </Link>
                   <Link to="/notifications" className="relative p-2 rounded-full hover:bg-slate-100 transition-colors" data-testid="nav-notifications">
                     <Bell className="h-5 w-5" />
                     {unread > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-brand-magenta ring-2 ring-white" />}
@@ -171,6 +175,7 @@ export const Navbar = () => {
               {user?.role === "partner" && <Link to="/partner" className="block px-3 py-2.5 rounded-lg text-sm font-bold hover:bg-slate-50" data-testid="mnav-partner">Partner</Link>}
               {user ? (
                 <>
+                  <Link to="/ai" className="block px-3 py-2.5 rounded-lg text-sm font-bold text-brand-magenta hover:bg-slate-50" data-testid="mnav-ai">Buddy AI</Link>
                   <Link to="/referrals" className="block px-3 py-2.5 rounded-lg text-sm font-bold hover:bg-slate-50" data-testid="mnav-referrals">Invite &amp; earn</Link>
                   <Link to="/profile" className="block px-3 py-2.5 rounded-lg text-sm font-bold hover:bg-slate-50" data-testid="mnav-profile">Profile</Link>
                   <button onClick={() => { logout(); nav("/"); }} className="block w-full text-left px-3 py-2.5 rounded-lg text-sm font-bold text-red-600" data-testid="mnav-logout">Log out</button>
