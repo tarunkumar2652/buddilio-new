@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 24 — Editable email templates (19-template registry) + refactor of every send_email(wrap(...)) call site to send_tpl(). Wrote /app/backend/tests/test_iteration24_emails.py (18 pytest cases, ALL PASSING) covering: list returns exactly the 19 expected keys with subject/title/body/cta_label/cta_url/label/group/vars/customised plus defaults and the 7 group list; member+partner+manager 403 on list; PUT sanitises <script> (bleach strips tag) + flips customised=true; PUT bad cta_url (javascript:) -> 400; PUT blank subject or blank body -> 400; PUT unknown key -> 404; PUT allows {{variable}}/http/mailto/relative cta_url; DELETE unknown key -> 404; DELETE resets customised to false; POST /test returns {ok,sent_to,message} (ok=false is EXPECTED for admin@buddilio.com because the Resend sandbox rejects it); override of password_reset persists through /api/auth/forgot-password and template still shows override; override of welcome + registration flow returns 2xx with no 500; /api/cron/payout-reminders 401 without secret, 200 with, and re-running the cron does NOT create duplicate (manager_id, ISO-week) rows in db.payout_reminders; /api/console/payout-reminder returns subject/intro/items/total/currency/schedule/next_send_at/already_sent_this_week and does NOT leak `values` or `html`; editing payout_reminder template subject changes the console preview subject and reset restores the exact original subject. Extra check via ad-hoc script: a staff account with staff_role='viewer' (no content:manage) gets 403 on GET /api/admin/email-templates. Playwright verified: admin-tab-emails opens the emails-panel; exactly 19 email-select-<key> buttons render across the 7 groups (Members, Bookings, Growth, Money, Organisers, Safety, Team); clicking email-select-welcome renders email-vars/email-subject/email-title/email-body/email-cta-label/email-cta-url/email-save/email-test/email-reset; Save flips the pill to show 'edited' + preview updates; Reset (window.confirm accepted) removes the badge and restores default 'Welcome to Buddilio'; every other admin tab still loads (pages, sections, guides, team, verification, photos, users, partners, events, payouts); homepage hero + /p/faq render; mobile 390px shows the emails panel cleanly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin \u2192 Emails (mobile 390px)", "issues": ["The left rail (template list) and right editor stack vertically as expected on mobile, but the list is not visually separated from the editor \u2014 selecting an email scrolls the page to keep the list on top and the editor pushed down. Consider a mobile-first accordion or hiding the list once a template is selected with a back-button. Not a bug; purely UX polish."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration24_emails.py",
+    "/app/test_reports/pytest/iteration24.xml"
+  ],
+  "action_items": [
+    "None blocking. Consider adding a Playwright/RTL smoke test for the reset flow that auto-accepts window.confirm so future refactors don\u2019t regress the DELETE call.",
+    "OPTIONAL: EmailTemplates.reset() calls window.confirm() \u2014 which is fine, but the /test endpoint has no such guard and will send a real (or attempted) email on every click. If admins misclick a template with a placeholder-driven subject, they still get a filled sample. Consider a small confirm or a per-key rate-limit (currently no rate-limit)."
+  ],
+  "critical_code_review_comments": [
+    "Nice: send_tpl() correctly resolves overrides on every send (async DB read per call). If email volume grows, consider an in-memory cache keyed on `key` with a short TTL and invalidation on PUT/DELETE \u2014 today every email send does one extra Mongo round-trip.",
+    "safe_html() is applied to body but NOT to `title`, `subject`, `cta_label` or `cta_url` beyond a startswith allow-list. Subjects render in the email client \u2014 mostly harmless \u2014 but titles are wrapped into HTML via wrap(); an admin (or a compromised content:manage staff) can inject arbitrary HTML into `title` (e.g. `<script>` in a <title> won\u2019t execute but `<img onerror>` could). Sanitize title too.",
+    "The test_email_template endpoint has no rate limiting. A tight loop clicking the button hammers the provider (which will 429 or ban the domain). Add a 10s per-admin cooldown or a queue.",
+    "audit(user, 'email_template.update', 'email_template', key, {}) passes an empty diff \u2014 so audit rows can\u2019t tell you what wording actually changed. Consider recording old_subject/new_subject at minimum.",
+    "list_email_templates does one Mongo round-trip per template inside a list comprehension (await email_template(k) for each of 19 keys). Prefer one `find({key: {$in: list(EMAIL_TEMPLATES)}}).to_list()` then merge in memory.",
+    "EmailTpl payload has no length caps. subject/title/body could be pushed to megabytes; Mongo will accept, provider will reject at send time. Add Field(max_length=...) caps (e.g. subject 200, title 200, body 20000).",
+    "sends still block on the provider in the request path for /auth/forgot-password, /auth/register etc. (send_tpl awaited inline). A slow Resend response stalls the user\u2019s HTTP request. Consider asyncio.create_task for user-facing transactional sends where the caller doesn\u2019t need to know success.",
+    "The cta_url whitelist accepts `http://` (not just https://). Downgrade attack surface if these ever templated into a mixed-content email client. Restrict to https/mailto/{{}}/relative."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration24_emails.py (new pytest module, 18 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18)",
+    "frontend": "100% (all iteration-24 testids resolve on desktop + mobile; all regression tabs load; homepage + /p/faq unaffected)"
+  },
+  "test_credentials": "admin@buddilio.com / Admin@123, ops.manager@buddilio.com / Console@123, partner@buddilio.com / Partner@123, tara.joshi@example.com / User@123. Ephemeral test_viewer24@buddilio.com/Test@1234 upserted + deleted in the same script.",
+  "seed_data_creation": "None persistent. Every email_template override my tests wrote is reset in a try/finally (verified db.email_templates ends the run empty). No stray TEST_iter24_* users remain. Skyline Sessions (invited.vendor@example.com) confirmed still verification_status='pending' with 1 document.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 19 email templates are wired end-to-end. When testing the reset button in Playwright you MUST register `page.on('dialog', lambda d: d.accept())` because EmailTemplates.reset() uses window.confirm(). Cron POST /api/cron/payout-reminders is idempotent per (manager_id, ISO week) \u2014 verified by two consecutive cron hits leaving one row per manager. Skyline Sessions must stay verification_status='pending' with 1 document \u2014 my tests did not touch verification queues.",
+  "rca_of_the_issue": "N/A \u2014 no bugs found. Initial Playwright reset check appeared to fail because reset() triggers a window.confirm() dialog; adding page.on('dialog') to auto-accept made the reset succeed and the 'edited' badge disappear. Also cross-checked via curl DELETE /api/admin/email-templates/welcome which returned customised=false."
+}

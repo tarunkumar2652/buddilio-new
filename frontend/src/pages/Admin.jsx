@@ -10,6 +10,7 @@ import { Verifications } from "@/components/Verifications";
 import { PhotoModeration } from "@/components/PhotoModeration";
 import { Team } from "@/components/Team";
 import { Pages, SiteContent, CityGuides } from "@/components/ContentStudio";
+import { EmailTemplates } from "@/components/EmailTemplates";
 import { ProfileForm, EventForm } from "@/components/AdminForms";
 import { useAuth } from "@/context/AuthContext";
 
@@ -23,7 +24,7 @@ const NAV = [
   ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
   ["photos", "Photo wall", "moderation:manage"], ["content", "Content", "content:manage"],
   ["pages", "Pages", "content:manage"], ["sections", "Site sections", "content:manage"],
-  ["guides", "City guides", "content:manage"],
+  ["guides", "City guides", "content:manage"], ["emails", "Emails", "content:manage"],
   ["settings", "Settings", "content:manage"], ["audit", "Audit logs", "audit:view"],
   ["team", "Team & roles", "team:manage"],
 ];
@@ -174,6 +175,7 @@ export default function Admin() {
         {active === "pages" && <Pages />}
         {active === "sections" && <SiteContent />}
         {active === "guides" && <CityGuides />}
+        {active === "emails" && <EmailTemplates />}
       </div>
     </div>
   );

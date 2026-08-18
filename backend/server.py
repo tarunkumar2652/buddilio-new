@@ -349,6 +349,185 @@ PUSH_TYPES = {"message", "reminder"}
 REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "250"))
 
 
+# ---------------- editable email templates ----------------
+# Every automated email lives here. Admins can override subject/title/body/button; {{vars}} stay dynamic.
+EMAIL_TEMPLATES: dict[str, dict] = {
+    "notification": {
+        "label": "In-app notification email", "group": "Members",
+        "vars": ["first_name", "title", "message", "link_url"],
+        "subject": "{{title}} · Buddilio", "title": "{{title}}",
+        "body": "<p>Hi {{first_name}},</p><p>{{message}}</p>",
+        "cta_label": "Open Buddilio", "cta_url": "{{link_url}}"},
+    "welcome": {
+        "label": "Welcome (email signup)", "group": "Members",
+        "vars": ["first_name", "dashboard_url"],
+        "subject": "Welcome to Buddilio", "title": "Welcome to Buddilio, {{first_name}}",
+        "body": "<p>Your account is live. Here's how members get the most out of Buddilio:</p>"
+                "<p><b>1.</b> Finish your profile so we can match you with the right companions.<br/>"
+                "<b>2.</b> Browse curated experiences in your city.<br/>"
+                "<b>3.</b> Message a member, then pick a night out together.</p>"
+                "<p>Remember: always meet in public venues and never send money to another member.</p>",
+        "cta_label": "Open my dashboard", "cta_url": "{{dashboard_url}}"},
+    "welcome_google": {
+        "label": "Welcome (Google signup)", "group": "Members",
+        "vars": ["first_name", "welcome_url"],
+        "subject": "Welcome to Buddilio", "title": "Welcome to Buddilio, {{first_name}}",
+        "body": "<p>You signed in with Google, so there's no password to remember.</p>"
+                "<p><b>1.</b> Confirm your city and interests.<br/>"
+                "<b>2.</b> Browse curated experiences near you.<br/>"
+                "<b>3.</b> Message a member, then pick a night out together.</p>"
+                "<p>Remember: always meet in public venues and never send money to another member.</p>",
+        "cta_label": "Finish setting up", "cta_url": "{{welcome_url}}"},
+    "password_reset": {
+        "label": "Password reset", "group": "Members",
+        "vars": ["first_name", "reset_url"],
+        "subject": "Reset your Buddilio password", "title": "Reset your Buddilio password",
+        "body": "<p>Hi {{first_name}},</p><p>We received a request to reset your Buddilio password. "
+                "This link expires in one hour and can only be used once.</p>"
+                "<p>If you didn't ask for this, you can safely ignore this email.</p>",
+        "cta_label": "Choose a new password", "cta_url": "{{reset_url}}"},
+    "membership_active": {
+        "label": "Membership activated", "group": "Bookings",
+        "vars": ["plan_name", "receipt", "valid_until", "membership_url"],
+        "subject": "Your Buddilio membership is active", "title": "{{plan_name}} is live",
+        "body": "{{receipt}}<p>Valid until <b>{{valid_until}}</b>. Member pricing is applied automatically "
+                "at checkout.</p>",
+        "cta_label": "See member benefits", "cta_url": "{{membership_url}}"},
+    "booking_confirmed": {
+        "label": "Event booking confirmed", "group": "Bookings",
+        "vars": ["event_title", "receipt", "when", "venue", "city", "host", "cancellation", "event_url"],
+        "subject": "You're going to {{event_title}}", "title": "Booking confirmed",
+        "body": "{{receipt}}<p><b>When:</b> {{when}}<br/><b>Where:</b> {{venue}}, {{city}}<br/>"
+                "<b>Host:</b> {{host}}</p><p><b>Cancellation:</b> {{cancellation}}</p>"
+                "<p>Your paid-ticket group chat is now open — say hi before the night.</p>",
+        "cta_label": "Open event", "cta_url": "{{event_url}}"},
+    "purchase_confirmed": {
+        "label": "Purchase confirmed", "group": "Bookings",
+        "vars": ["receipt", "orders_url"],
+        "subject": "Your Buddilio purchase", "title": "Purchase confirmed",
+        "body": "{{receipt}}<p>You can view this any time under My Orders.</p>",
+        "cta_label": "View my orders", "cta_url": "{{orders_url}}"},
+    "event_reminder": {
+        "label": "Event reminder (day before)", "group": "Bookings",
+        "vars": ["first_name", "event_title", "when", "venue", "city", "host", "event_url"],
+        "subject": "Tomorrow: {{event_title}}", "title": "See you tomorrow",
+        "body": "<p>Hi {{first_name}},</p><p><b>{{event_title}}</b> starts <b>{{when}}</b>.</p>"
+                "<p><b>Venue:</b> {{venue}}, {{city}}<br/><b>Host:</b> {{host}}</p>"
+                "<p>Carry a government photo ID. Meet other members in the public venue only.</p>",
+        "cta_label": "View event", "cta_url": "{{event_url}}"},
+    "city_live": {
+        "label": "City waitlist — we're live", "group": "Growth",
+        "vars": ["city", "event_count", "currency", "city_url"],
+        "subject": "Buddilio is now live in {{city}}", "title": "{{city}} is open",
+        "body": "<p>You asked us to tell you the moment Buddilio opened in {{city}} — it just did.</p>"
+                "<p>There are <b>{{event_count}} experiences</b> on the calendar right now, priced in "
+                "{{currency}}, with verified members going to each one.</p>"
+                "<p>Join free, tell us what you enjoy, and book the first night that looks like you.</p>",
+        "cta_label": "See what's on in {{city}}", "cta_url": "{{city_url}}"},
+    "vendor_invite": {
+        "label": "Organiser invitation", "group": "Organisers",
+        "vars": ["inviter", "org_name", "note", "invite_days", "invite_url"],
+        "subject": "You're invited to host on Buddilio", "title": "Bring your experiences to Buddilio",
+        "body": "<p>{{inviter}} invited <b>{{org_name}}</b> to host on Buddilio.</p><p>{{note}}</p>"
+                "<p>Set up your organiser profile, upload your documents and publish your first experience. "
+                "This link expires in {{invite_days}} days.</p>",
+        "cta_label": "Start my organiser signup", "cta_url": "{{invite_url}}"},
+    "vendor_created": {
+        "label": "Organiser account created for them", "group": "Organisers",
+        "vars": ["first_name", "manager_name", "org_name", "reset_url"],
+        "subject": "Your Buddilio organiser account", "title": "You're set up on Buddilio, {{first_name}}",
+        "body": "<p>{{manager_name}} created an organiser account for <b>{{org_name}}</b> on Buddilio.</p>"
+                "<p>Choose a password to take over the account, then publish your first experience. "
+                "This link works for 7 days.</p>",
+        "cta_label": "Set my password", "cta_url": "{{reset_url}}"},
+    "vendor_verified": {
+        "label": "Organiser verified", "group": "Organisers",
+        "vars": ["org_name", "partner_url"],
+        "subject": "You're verified on Buddilio", "title": "Verified",
+        "body": "<p><b>{{org_name}}</b> is now a verified Buddilio organiser. Members will see the badge on "
+                "your profile and on every event you host.</p>",
+        "cta_label": "Open your dashboard", "cta_url": "{{partner_url}}"},
+    "vendor_rejected": {
+        "label": "Organiser verification rejected", "group": "Organisers",
+        "vars": ["org_name", "reason", "partner_url"],
+        "subject": "About your Buddilio verification", "title": "We need better documents",
+        "body": "<p>Hi {{org_name}}, we couldn't verify your account yet.</p><p><b>{{reason}}</b></p>"
+                "<p>Please re-upload your documents and we'll take another look.</p>",
+        "cta_label": "Upload documents", "cta_url": "{{partner_url}}"},
+    "console_requested": {
+        "label": "Console access requested", "group": "Team",
+        "vars": ["first_name", "console_url"],
+        "subject": "Your Buddilio console request", "title": "Request received",
+        "body": "<p>Thanks {{first_name}} — your Buddilio Vendor Console request is with our team.</p>"
+                "<p>You can sign in now, but adding vendors unlocks as soon as we approve you. "
+                "We usually review within one business day.</p>",
+        "cta_label": "Open the console", "cta_url": "{{console_url}}"},
+    "console_approved": {
+        "label": "Console access approved", "group": "Team",
+        "vars": ["first_name", "console_url"],
+        "subject": "Your Buddilio console is ready", "title": "You're approved",
+        "body": "<p>Hi {{first_name}}, your Buddilio Vendor Console is open. You can add organisers, manage "
+                "their accounts and follow their events.</p>",
+        "cta_label": "Open the console", "cta_url": "{{console_url}}"},
+    "team_invite": {
+        "label": "Team member invited", "group": "Team",
+        "vars": ["inviter", "role_label", "reset_url"],
+        "subject": "You've been added to the Buddilio team", "title": "Set your password",
+        "body": "<p>{{inviter}} added you to the Buddilio team as <b>{{role_label}}</b>.</p>"
+                "<p>Set a password to sign in. This link works for 7 days.</p>",
+        "cta_label": "Set my password", "cta_url": "{{reset_url}}"},
+    "account_created": {
+        "label": "Account created by admin", "group": "Team",
+        "vars": ["first_name", "reset_url"],
+        "subject": "Your Buddilio account is ready", "title": "Set your password",
+        "body": "<p>Hi {{first_name}}, the Buddilio team created an account for you. Set a password to "
+                "sign in — this link works for 7 days.</p>",
+        "cta_label": "Set my password", "cta_url": "{{reset_url}}"},
+    "payout_reminder": {
+        "label": "Weekly payout reminder (managers)", "group": "Money",
+        "vars": ["first_name", "intro", "rows", "total", "currency", "console_url"],
+        "subject": "Payouts due this week — {{currency}} {{total}}",
+        "title": "What your vendors are owed this week",
+        "body": "<p>{{intro}}</p><table width='100%' style='font-size:14px'>{{rows}}</table>"
+                "<p style='margin-top:14px'><b>Total pending: {{currency}} {{total}}</b></p>",
+        "cta_label": "Open the console", "cta_url": "{{console_url}}"},
+    "photo_removed": {
+        "label": "Photo removed / warning", "group": "Safety",
+        "vars": ["first_name", "event_title", "reason", "guidelines_url"],
+        "subject": "About a photo you posted on Buddilio", "title": "We removed one of your photos",
+        "body": "<p>Hi {{first_name}}, a photo you added to <b>{{event_title}}</b> has been taken down.</p>"
+                "<p><b>{{reason}}</b></p><p>Please keep the photo wall respectful and only post pictures "
+                "where everyone in frame is happy to be seen. Repeat reports can lead to your account being "
+                "suspended.</p>",
+        "cta_label": "Read the guidelines", "cta_url": "{{guidelines_url}}"},
+}
+TPL_FIELDS = ("subject", "title", "body", "cta_label", "cta_url")
+
+
+def fill(text: str, values: dict) -> str:
+    return re.sub(r"{{\s*(\w+)\s*}}", lambda m: str(values.get(m.group(1), "")), text or "")
+
+
+async def email_template(key: str) -> dict:
+    base = EMAIL_TEMPLATES[key]
+    saved = await db.email_templates.find_one({"key": key}) or {}
+    return {f: (saved.get(f) if saved.get(f) not in (None, "") else base[f]) for f in TPL_FIELDS} | {
+        "key": key, "label": base["label"], "group": base["group"], "vars": base["vars"],
+        "customised": bool(saved)}
+
+
+async def send_tpl(key: str, to: str, values: dict) -> bool:
+    """Send one of the registered emails, honouring any admin edits to its wording."""
+    tpl = await email_template(key)
+    return await send_email(to, fill(tpl["subject"], values),
+                            wrap(fill(tpl["title"], values), fill(tpl["body"], values),
+                                 fill(tpl["cta_label"], values), fill(tpl["cta_url"], values)))
+
+
+def first_name(name: str) -> str:
+    return (name or "there").split(" ")[0]
+
+
 async def notify(user_id: str, title: str, body: str, ntype: str = "system", link: str = "",
                  email: bool = True, cta: str = ""):
     await db.notifications.insert_one({
@@ -371,10 +550,9 @@ async def notify(user_id: str, title: str, body: str, ntype: str = "system", lin
         await push_to(db, user_id, {"title": title, "body": body,
                                     "url": link or "/dashboard", "tag": ntype})
     if want_email and prefs.get("email", True):
-        greeting = f"<p>Hi {user.get('full_name', 'there').split(' ')[0]},</p><p>{body}</p>"
-        html = wrap(title, greeting, cta or ("Open Buddilio" if link else ""),
-                    f"{FRONTEND_URL}{link}" if link else "")
-        await send_email(user["email"], f"{title} · Buddilio", html)
+        await send_tpl("notification", user["email"], {
+            "first_name": first_name(user.get("full_name")), "title": title, "message": body,
+            "link_url": f"{FRONTEND_URL}{link}" if link else ""})
 
 
 async def membership_active(user_id: str) -> Optional[dict]:
@@ -680,14 +858,8 @@ async def register(payload: RegisterIn, response: Response):
     uid = str(res.inserted_id)
     await register_referral(payload.referral_code, uid, payload.full_name)
     await notify(uid, "Welcome to Buddilio", "Complete your profile to get better companion matches.", "registration", "/profile")
-    await send_email(email, "Welcome to Buddilio", wrap(
-        f"Welcome to Buddilio, {payload.full_name.split(' ')[0]}",
-        "<p>Your account is live. Here's how members get the most out of Buddilio:</p>"
-        "<p><b>1.</b> Finish your profile so we can match you with the right companions.<br/>"
-        "<b>2.</b> Browse curated experiences in your city.<br/>"
-        "<b>3.</b> Message a member, then pick a night out together.</p>"
-        "<p>Remember: always meet in public venues and never send money to another member.</p>",
-        "Open my dashboard", f"{FRONTEND_URL}/dashboard"))
+    asyncio.create_task(send_tpl("welcome", email, {"first_name": first_name(payload.full_name),
+                                                   "dashboard_url": f"{FRONTEND_URL}/dashboard"}))
     token = create_access_token(uid, email, role)
     set_cookies(response, token)
     user = clean(await db.users.find_one({"_id": res.inserted_id}))
@@ -741,13 +913,10 @@ async def forgot_password(body: dict):
             "token": token, "user_id": str(user["_id"]), "used": False,
             "expires_at": now_utc() + timedelta(hours=1)})
         logger.info(f"[Buddilio] Password reset link: /reset-password?token={token}")
-        html = wrap("Reset your Buddilio password",
-                    f"<p>Hi {user.get('full_name','there').split(' ')[0]},</p>"
-                    "<p>We received a request to reset your Buddilio password. "
-                    "This link expires in one hour and can only be used once.</p>"
-                    "<p>If you didn't ask for this, you can safely ignore this email.</p>",
-                    "Choose a new password", f"{FRONTEND_URL}/reset-password?token={token}")
-        await send_email(user["email"], "Reset your Buddilio password", html)
+        # Don't make the user wait on the mail provider.
+        asyncio.create_task(send_tpl("password_reset", user["email"], {
+            "first_name": first_name(user.get("full_name")),
+            "reset_url": f"{FRONTEND_URL}/reset-password?token={token}"}))
     return {"message": "If that email exists, a reset link has been sent."}
 
 
@@ -817,14 +986,8 @@ async def google_session(payload: GoogleSessionIn, response: Response):
         await notify(uid, "Welcome to Buddilio",
                      "Finish the last step so we can match you with the right companions.",
                      "registration", "/welcome")
-        await send_email(email, "Welcome to Buddilio", wrap(
-            f"Welcome to Buddilio, {name.split(' ')[0]}",
-            "<p>You signed in with Google, so there's no password to remember.</p>"
-            "<p><b>1.</b> Confirm your city and interests.<br/>"
-            "<b>2.</b> Browse curated experiences near you.<br/>"
-            "<b>3.</b> Message a member, then pick a night out together.</p>"
-            "<p>Remember: always meet in public venues and never send money to another member.</p>",
-            "Finish setting up", f"{FRONTEND_URL}/welcome"))
+        asyncio.create_task(send_tpl("welcome_google", email, {"first_name": first_name(name),
+                                                              "welcome_url": f"{FRONTEND_URL}/welcome"}))
         user = await db.users.find_one({"_id": res.inserted_id})
 
     token = create_access_token(str(user["_id"]), email, user.get("role", "user"))
@@ -1359,10 +1522,10 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
                      "membership", "/membership", email=False)
         u = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1})
         if u:
-            await send_email(u["email"], "Your Buddilio membership is active", wrap(
-                f"{plan['name']} is live", receipt +
-                f"<p>Valid until <b>{ends.strftime('%d %b %Y')}</b>. Member pricing is applied automatically at checkout.</p>",
-                "See member benefits", f"{FRONTEND_URL}/membership"))
+            await send_tpl("membership_active", u["email"], {
+                "plan_name": plan["name"], "receipt": receipt,
+                "valid_until": ends.strftime("%d %b %Y"),
+                "membership_url": f"{FRONTEND_URL}/membership"})
     elif order["kind"] == "event":
         ev = await db.events.find_one({"_id": ObjectId(order["ref_id"])})
         part = await db.event_participants.find_one({"event_id": order["ref_id"], "user_id": uid})
@@ -1382,22 +1545,19 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
         u = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1})
         if u and ev:
             starts = datetime.fromisoformat(ev["starts_at"])
-            await send_email(u["email"], f"You're going to {ev['title']}", wrap(
-                "Booking confirmed", receipt +
-                f"<p><b>When:</b> {starts.strftime('%a %d %b %Y, %I:%M %p')}<br/>"
-                f"<b>Where:</b> {ev.get('venue','')}, {ev['city']}<br/>"
-                f"<b>Host:</b> {ev.get('partner_name','Buddilio')}</p>"
-                f"<p><b>Cancellation:</b> {ev.get('cancellation_policy','')}</p>"
-                "<p>Your paid-ticket group chat is now open — say hi before the night.</p>",
-                "Open event", f"{FRONTEND_URL}/events/{order['ref_id']}"))
+            await send_tpl("booking_confirmed", u["email"], {
+                "event_title": ev["title"], "receipt": receipt,
+                "when": starts.strftime("%a %d %b %Y, %I:%M %p"), "venue": ev.get("venue", ""),
+                "city": ev["city"], "host": ev.get("partner_name", "Buddilio"),
+                "cancellation": ev.get("cancellation_policy", ""),
+                "event_url": f"{FRONTEND_URL}/events/{order['ref_id']}"})
     else:
         await notify(uid, "Purchase successful", f"{order['item_name']} is now in your account.",
                      "order", "/orders", email=False)
         u = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1})
         if u:
-            await send_email(u["email"], "Your Buddilio purchase", wrap(
-                "Purchase confirmed", receipt + "<p>You can view this any time under My Orders.</p>",
-                "View my orders", f"{FRONTEND_URL}/orders"))
+            await send_tpl("purchase_confirmed", u["email"],
+                           {"receipt": receipt, "orders_url": f"{FRONTEND_URL}/orders"})
     return clean(await db.orders.find_one({"_id": order["_id"]}))
 
 
@@ -2030,14 +2190,9 @@ async def notify_city_waitlist(city: str) -> int:
     country = country_for_city(city) or {}
     live = await db.events.count_documents({"city": city, "status": "published"})
     for w in pending:
-        ok = await send_email(w["email"], f"Buddilio is now live in {city}", wrap(
-            f"{city} is open",
-            f"<p>You asked us to tell you the moment Buddilio opened in {city} — it just did.</p>"
-            f"<p>There {'is' if live == 1 else 'are'} <b>{live} experience{'' if live == 1 else 's'}</b> "
-            f"on the calendar right now, priced in {country.get('currency', BASE_CURRENCY)}, "
-            "with verified members going to each one.</p>"
-            "<p>Join free, tell us what you enjoy, and book the first night that looks like you.</p>",
-            f"See what's on in {city}", f"{FRONTEND_URL}/city/{slug}"))
+        ok = await send_tpl("city_live", w["email"], {
+            "city": city, "event_count": live, "currency": country.get("currency", BASE_CURRENCY),
+            "city_url": f"{FRONTEND_URL}/city/{slug}"})
         await db.city_waitlist.update_one({"_id": w["_id"]},
                                           {"$set": {"notified_at": iso(now_utc()), "email_sent": ok}})
     logger.info(f"city waitlist: emailed {len(pending)} people about {city}")
@@ -2949,14 +3104,11 @@ async def reminder_loop():
                                  "reminder", f"/events/{eid}", email=False)
                     u = people.get(p["user_id"])
                     if u and (u.get("notification_prefs") or {}).get("email", True):
-                        await send_email(u["email"], f"Tomorrow: {ev['title']}", wrap(
-                            "See you tomorrow",
-                            f"<p>Hi {u['full_name'].split(' ')[0]},</p>"
-                            f"<p><b>{ev['title']}</b> starts <b>{starts.strftime('%a %d %b, %I:%M %p')}</b>.</p>"
-                            f"<p><b>Venue:</b> {ev.get('venue','')}, {ev['city']}<br/>"
-                            f"<b>Host:</b> {ev.get('partner_name','Buddilio')}</p>"
-                            "<p>Carry a government photo ID. Meet other members in the public venue only.</p>",
-                            "View event", f"{FRONTEND_URL}/events/{eid}"))
+                        await send_tpl("event_reminder", u["email"], {
+                            "first_name": first_name(u.get("full_name")), "event_title": ev["title"],
+                            "when": starts.strftime("%a %d %b, %I:%M %p"), "venue": ev.get("venue", ""),
+                            "city": ev["city"], "host": ev.get("partner_name", "Buddilio"),
+                            "event_url": f"{FRONTEND_URL}/events/{eid}"})
         except Exception as e:
             logger.error(f"reminder loop error: {e}")
         await asyncio.sleep(3600)
@@ -3322,14 +3474,10 @@ async def console_create_invite(payload: InviteIn, user: dict = Depends(require_
     inv = await db.vendor_invites.find_one({"_id": res.inserted_id})
     if email:
         try:
-            await send_email(email, "You're invited to host on Buddilio", wrap(
-                "Bring your experiences to Buddilio",
-                f"<p>{user['full_name']} invited "
-                f"{'<b>' + payload.org_name + '</b>' if payload.org_name else 'you'} to host on Buddilio.</p>"
-                + (f"<p>{payload.note}</p>" if payload.note else "")
-                + "<p>Set up your organiser profile, upload your documents and publish your first experience. "
-                  f"This link expires in {INVITE_DAYS} days.</p>",
-                "Start my organiser signup", invite_public(inv)["link"]))
+            await send_tpl("vendor_invite", email, {
+                "inviter": user["full_name"], "org_name": payload.org_name or "you",
+                "note": payload.note or "", "invite_days": INVITE_DAYS,
+                "invite_url": invite_public(inv)["link"]})
         except Exception as e:
             logger.error(f"vendor invite email failed: {e}")
     await audit(user, "vendor.invite", "invite", str(res.inserted_id), {"email": email})
@@ -3616,13 +3764,10 @@ async def vendor_invite(vendor: dict, manager_name: str) -> None:
     token = secrets.token_urlsafe(32)
     await db.password_reset_tokens.insert_one({"token": token, "user_id": str(vendor["_id"]),
                                                "used": False, "expires_at": now_utc() + timedelta(days=7)})
-    await send_email(vendor["email"], "Your Buddilio organiser account", wrap(
-        f"You're set up on Buddilio, {vendor.get('full_name', 'there').split(' ')[0]}",
-        f"<p>{manager_name} created an organiser account for "
-        f"<b>{vendor.get('org_name') or vendor.get('full_name')}</b> on Buddilio.</p>"
-        "<p>Choose a password to take over the account, then publish your first experience. "
-        "This link works for 7 days.</p>",
-        "Set my password", f"{FRONTEND_URL}/reset-password?token={token}"))
+    await send_tpl("vendor_created", vendor["email"], {
+        "first_name": first_name(vendor.get("full_name")), "manager_name": manager_name,
+        "org_name": vendor.get("org_name") or vendor.get("full_name"),
+        "reset_url": f"{FRONTEND_URL}/reset-password?token={token}"})
 
 
 async def vendor_stats(ids: List[str]) -> dict:
@@ -3670,12 +3815,8 @@ async def console_register(payload: ManagerRegisterIn, response: Response):
         await notify(str(a["_id"]), "New console account request",
                      f"{payload.full_name} ({email}) wants vendor management access.",
                      "console", "/admin", email=False)
-    await send_email(email, "Your Buddilio console request", wrap(
-        "Request received",
-        f"<p>Thanks {payload.full_name.split(' ')[0]} — your Buddilio Vendor Console request is with our team.</p>"
-        "<p>You can sign in now, but adding vendors unlocks as soon as we approve you. "
-        "We usually review within one business day.</p>",
-        "Open the console", f"{FRONTEND_URL}/console"))
+    await send_tpl("console_requested", email, {"first_name": first_name(payload.full_name),
+                                               "console_url": f"{FRONTEND_URL}/console"})
     token = create_access_token(mid, email, "manager")
     set_cookies(response, token)
     return {"access_token": token, "user": clean(await db.users.find_one({"_id": res.inserted_id}))}
@@ -3792,6 +3933,96 @@ async def console_resend_invite(vid: str, user: dict = Depends(require_perm("ven
     return {"ok": True, "message": f"Set-password link sent to {doc['email']}."}
 
 
+# ---------------- email template editor ----------------
+class EmailTplIn(BaseModel):
+    subject: str = Field(max_length=200)
+    title: str = Field(max_length=200)
+    body: str = Field(max_length=20000)
+    cta_label: str = Field(default="", max_length=80)
+    cta_url: str = Field(default="", max_length=300)
+
+
+@api.get("/admin/email-templates")
+async def list_email_templates(user: dict = Depends(require_perm("content:manage"))):
+    saved = {d["key"]: d for d in await db.email_templates.find({}).limit(60).to_list(60)}
+    items = []
+    for key, base in EMAIL_TEMPLATES.items():
+        s = saved.get(key, {})
+        items.append({f: (s.get(f) if s.get(f) not in (None, "") else base[f]) for f in TPL_FIELDS} | {
+            "key": key, "label": base["label"], "group": base["group"], "vars": base["vars"],
+            "customised": key in saved})
+    return {"items": items,
+            "defaults": {k: {f: v[f] for f in TPL_FIELDS} for k, v in EMAIL_TEMPLATES.items()},
+            "groups": sorted({t["group"] for t in EMAIL_TEMPLATES.values()})}
+
+
+@api.put("/admin/email-templates/{key}")
+async def update_email_template(key: str, payload: EmailTplIn,
+                                user: dict = Depends(require_perm("content:manage"))):
+    if key not in EMAIL_TEMPLATES:
+        raise HTTPException(status_code=404, detail="Unknown email.")
+    if not payload.subject.strip() or not payload.body.strip():
+        raise HTTPException(status_code=400, detail="An email needs a subject and a body.")
+    before = await email_template(key)
+    doc = payload.model_dump()
+    doc["body"] = safe_html(doc["body"])
+    doc["title"] = safe_html(doc["title"])
+    doc["cta_url"] = doc["cta_url"].strip()
+    if doc["cta_url"] and not (doc["cta_url"].startswith("{{") or doc["cta_url"].startswith("https://")
+                               or doc["cta_url"].startswith("/") or doc["cta_url"].startswith("mailto:")):
+        raise HTTPException(status_code=400, detail="The button link must be a {{variable}}, /path or https://…")
+    await db.email_templates.update_one({"key": key},
+                                       {"$set": doc | {"updated_at": iso(now_utc())}}, upsert=True)
+    await audit(user, "email_template.update", "email_template", key,
+                {"old_subject": before["subject"][:120], "new_subject": doc["subject"][:120]})
+    return await email_template(key)
+
+
+@api.delete("/admin/email-templates/{key}")
+async def reset_email_template(key: str, user: dict = Depends(require_perm("content:manage"))):
+    if key not in EMAIL_TEMPLATES:
+        raise HTTPException(status_code=404, detail="Unknown email.")
+    await db.email_templates.delete_one({"key": key})
+    await audit(user, "email_template.reset", "email_template", key, {})
+    return await email_template(key)
+
+
+@api.post("/admin/email-templates/{key}/test")
+async def test_email_template(key: str, user: dict = Depends(require_perm("content:manage"))):
+    """Sends the email to yourself with placeholder sample values, so you can read it before it goes out."""
+    if key not in EMAIL_TEMPLATES:
+        raise HTTPException(status_code=404, detail="Unknown email.")
+    recent = await db.email_test_sends.find_one({"user_id": user["id"]}, sort=[("created_at", -1)])
+    if recent and (now_utc() - datetime.fromisoformat(recent["created_at"])).total_seconds() < 15:
+        raise HTTPException(status_code=429, detail="Give it a few seconds before sending another test.")
+    await db.email_test_sends.insert_one({"user_id": user["id"], "key": key, "created_at": iso(now_utc())})
+    samples = {"first_name": first_name(user.get("full_name")), "title": "Sample notification",
+               "message": "This is what the wording looks like.", "org_name": "Nightfall Collective",
+               "event_title": "Rooftop Jazz & Tapas Night", "city": "Dubai", "venue": "Sky Lounge",
+               "host": "Nightfall Collective", "when": "Fri 04 Sep, 08:30 PM",
+               "cancellation": "Free cancellation up to 24 hours before.",
+               "receipt": "<p><b>Sample receipt</b><br/>1 ticket · ₹2,500</p>",
+               "plan_name": "Buddilio Plus", "valid_until": "31 Dec 2026", "currency": BASE_CURRENCY,
+               "total": "12,500.00", "intro": "3 payouts across 2 vendors are still pending.",
+               "rows": "<tr><td style='padding:6px 0'><b>Nightfall Collective</b></td>"
+                       "<td style='text-align:right'>₹ 8,000.00</td></tr>",
+               "reason": "The document was too blurry to read.", "role_label": "Operations",
+               "inviter": user.get("full_name", "Buddilio"), "manager_name": "Ops Manager",
+               "note": "Looking forward to hosting with you.", "invite_days": 14, "event_count": 12,
+               "link_url": f"{FRONTEND_URL}/dashboard", "dashboard_url": f"{FRONTEND_URL}/dashboard",
+               "welcome_url": f"{FRONTEND_URL}/welcome", "orders_url": f"{FRONTEND_URL}/orders",
+               "membership_url": f"{FRONTEND_URL}/membership", "console_url": f"{FRONTEND_URL}/console",
+               "partner_url": f"{FRONTEND_URL}/partner", "city_url": f"{FRONTEND_URL}/city/dubai",
+               "guidelines_url": f"{FRONTEND_URL}/p/guidelines",
+               "event_url": f"{FRONTEND_URL}/events/sample",
+               "reset_url": f"{FRONTEND_URL}/reset-password?token=sample",
+               "invite_url": f"{FRONTEND_URL}/vendor-signup?token=sample"}
+    ok = await send_tpl(key, user["email"], samples)
+    return {"ok": ok, "sent_to": user["email"],
+            "message": "Check your inbox." if ok else
+                       "The email provider rejected that address (in this sandbox only real inboxes accept mail)."}
+
+
 @api.get("/admin/permissions")
 async def list_permissions(user: dict = Depends(require_perm("team:manage"))):
     """The catalogue plus the presets, so the UI never hardcodes permission keys."""
@@ -3865,11 +4096,9 @@ async def invite_team_member(payload: TeamIn, user: dict = Depends(require_perm(
         "token": token, "user_id": str(res.inserted_id),
         "expires_at": now_utc() + timedelta(days=7), "created_at": iso(now_utc())})
     role_label = STAFF_ROLES[payload.staff_role]["label"]
-    await send_email(email, "You've been added to the Buddilio team", wrap(
-        "Set your password",
-        f"<p>{user['full_name']} added you to the Buddilio team as <b>{role_label}</b>.</p>"
-        "<p>Set a password to sign in. This link works for 7 days.</p>",
-        "Set my password", f"{FRONTEND_URL}/reset-password?token={token}"))
+    await send_tpl("team_invite", email, {
+        "inviter": user["full_name"], "role_label": role_label,
+        "reset_url": f"{FRONTEND_URL}/reset-password?token={token}"})
     await audit(user, "team.invite", "user", str(res.inserted_id),
                 {"email": email, "staff_role": payload.staff_role, "scope": payload.scope})
     return staff_view(await db.users.find_one({"_id": res.inserted_id}, TEAM_FIELDS))
@@ -3940,11 +4169,8 @@ async def admin_update_manager(mid: str, body: dict, user: dict = Depends(requir
     if action == "approve":
         await notify(mid, "Console access approved",
                      "You can now add and manage vendors from the Buddilio console.", "console", "/console")
-        await send_email(doc["email"], "Your Buddilio console is ready", wrap(
-            "You're approved",
-            f"<p>Hi {doc.get('full_name','there').split(' ')[0]}, your Buddilio Vendor Console is open. "
-            "You can add organisers, manage their accounts and follow their events.</p>",
-            "Open the console", f"{FRONTEND_URL}/console"))
+        await send_tpl("console_approved", doc["email"], {
+            "first_name": first_name(doc.get("full_name")), "console_url": f"{FRONTEND_URL}/console"})
     return {"ok": True, "status": status}
 
 
@@ -4017,17 +4243,13 @@ async def admin_verify_vendor(vid: str, payload: VerifyIn, user: dict = Depends(
     if state == "verified":
         await notify(vid, "You're verified", "Your documents checked out — the verified badge is now on your "
                      "profile and events.", "vendor", "/partner")
-        await send_email(vendor["email"], "You're verified on Buddilio", wrap(
-            "Verified", f"<p><b>{name}</b> is now a verified Buddilio organiser. Members will see the badge "
-            "on your profile and on every event you host.</p>", "Open your dashboard", f"{FRONTEND_URL}/partner"))
+        await send_tpl("vendor_verified", vendor["email"],
+                       {"org_name": name, "partner_url": f"{FRONTEND_URL}/partner"})
     elif state == "rejected":
         reason = payload.note.strip() or "We couldn't read the documents you sent."
         await notify(vid, "Verification needs attention", reason, "vendor", "/partner")
-        await send_email(vendor["email"], "About your Buddilio verification", wrap(
-            "We need better documents",
-            f"<p>Hi {name}, we couldn't verify your account yet.</p><p><b>{reason}</b></p>"
-            "<p>Please re-upload your documents and we'll take another look.</p>",
-            "Upload documents", f"{FRONTEND_URL}/partner"))
+        await send_tpl("vendor_rejected", vendor["email"],
+                       {"org_name": name, "reason": reason, "partner_url": f"{FRONTEND_URL}/partner"})
     return {"ok": True, "verification_status": state, "verified": state == "verified"}
 
 
@@ -4290,13 +4512,13 @@ async def payout_digest(manager: dict) -> dict:
         f"<span style='color:#94A3B8;font-size:13px'>{i['event_title']}</span></td>"
         f"<td style='padding:6px 0;text-align:right;white-space:nowrap'>"
         f"{i['currency']} {i['net']:,.2f}</td></tr>" for i in items[:40])
-    html = wrap("What your vendors are owed this week",
-                f"<p>{intro}</p><table width='100%' style='font-size:14px'>{lines}</table>"
-                f"<p style='margin-top:14px'><b>Total pending: {BASE_CURRENCY} {total:,.2f}</b></p>",
-                "Open the console", f"{FRONTEND_URL}/console")
-    return {"manager_id": mid, "email": manager.get("email", ""), "subject": subject, "intro": intro,
+    values = {"first_name": first, "intro": intro, "rows": lines, "total": f"{total:,.2f}",
+              "currency": BASE_CURRENCY, "console_url": f"{FRONTEND_URL}/console"}
+    tpl = await email_template("payout_reminder")
+    return {"manager_id": mid, "email": manager.get("email", ""),
+            "subject": fill(tpl["subject"], values), "intro": intro,
             "items": items, "total": total, "currency": BASE_CURRENCY, "vendors": vendor_count,
-            "html": html, "will_send": bool(rows)}
+            "values": values, "will_send": bool(rows)}
 
 
 async def send_payout_reminders() -> dict:
@@ -4312,7 +4534,7 @@ async def send_payout_reminders() -> dict:
         digest = await payout_digest(clean(dict(m)))
         if not digest["will_send"]:
             continue
-        ok = await send_email(m["email"], digest["subject"], digest["html"])
+        ok = await send_tpl("payout_reminder", m["email"], digest["values"])
         await db.payout_reminders.insert_one({
             "manager_id": mid, "week": wk, "payouts": len(digest["items"]), "total": digest["total"],
             "email_sent": ok, "created_at": iso(now_utc())})
@@ -4326,7 +4548,7 @@ async def console_payout_reminder(user: dict = Depends(require_perm("payouts:vie
     """Exactly what Monday's email will say, so managers are never surprised by it."""
     digest = await payout_digest(user)
     last = await db.payout_reminders.find_one({"manager_id": user["id"]}, sort=[("created_at", -1)])
-    return {**{k: v for k, v in digest.items() if k != "html"},
+    return {**{k: v for k, v in digest.items() if k not in ("html", "values")},
             "next_send_at": next_monday(now_utc()), "schedule": "Every Monday, 09:00 IST",
             "already_sent_this_week": bool(last and last.get("week") == week_key(now_utc())),
             "last_sent_at": (last or {}).get("created_at", ""),
@@ -4542,13 +4764,10 @@ async def moderate_photo(pid: str, payload: PhotoModerateIn, user: dict = Depend
                      f"{text} Please keep the photo wall respectful — repeat issues can suspend your account.",
                      "warning", f"/events/{photo['event_id']}")
         if owner:
-            await send_email(owner["email"], "About a photo you posted on Buddilio", wrap(
-                "We removed one of your photos",
-                f"<p>Hi {owner.get('full_name', 'there').split(' ')[0]}, a photo you added to "
-                f"<b>{(ev or {}).get('title', 'an event')}</b> has been taken down.</p>"
-                f"<p><b>{text}</b></p><p>Please keep the photo wall respectful and only post pictures where "
-                "everyone in frame is happy to be seen. Repeat reports can lead to your account being suspended.</p>",
-                "Read the guidelines", f"{FRONTEND_URL}/guidelines"))
+            await send_tpl("photo_removed", owner["email"], {
+                "first_name": first_name(owner.get("full_name")),
+                "event_title": (ev or {}).get("title", "an event"), "reason": text,
+                "guidelines_url": f"{FRONTEND_URL}/guidelines"})
         warned = True
     await audit(user, f"photo.{payload.action}", "photo", pid, {"warn": warned, "note": reason[:120]})
     return {"ok": True, "action": payload.action, "warned": warned}
@@ -4804,11 +5023,9 @@ async def admin_create_user(payload: AdminProfileIn, user: dict = Depends(requir
         await db.password_reset_tokens.insert_one({
             "token": token, "user_id": str(res.inserted_id),
             "expires_at": now_utc() + timedelta(days=7), "created_at": iso(now_utc())})
-        await send_email(email, "Your Buddilio account is ready", wrap(
-            "Set your password",
-            f"<p>Hi {payload.full_name.split(' ')[0]}, the Buddilio team created an account for you. "
-            "Set a password to sign in — this link works for 7 days.</p>",
-            "Set my password", f"{FRONTEND_URL}/reset-password?token={token}"))
+        await send_tpl("account_created", email, {
+            "first_name": first_name(payload.full_name),
+            "reset_url": f"{FRONTEND_URL}/reset-password?token={token}"})
     await audit(user, "profile.create", "user", str(res.inserted_id), {"email": email, "role": payload.role})
     return clean(await db.users.find_one({"_id": res.inserted_id}))
 
@@ -5038,6 +5255,7 @@ async def startup():
     await db.cms_pages.create_index("slug", unique=True)
     await db.site_content.create_index("key", unique=True)
     await db.city_guides.create_index("slug", unique=True)
+    await db.email_templates.create_index("key", unique=True)
     await db.upload_parts.create_index([("upload_id", 1), ("index", 1)], unique=True)
     await db.upload_sessions.create_index("upload_id", unique=True)
     await db.upload_sessions.create_index("created_at", expireAfterSeconds=3600)

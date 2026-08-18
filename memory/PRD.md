@@ -463,6 +463,23 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   original launch copy.
 - **Not yet editable**: transactional email templates (still in code) — next candidate.
 
+## Iteration 24 — editable email templates (June 2026)
+- **All 19 automated emails are now editable**: a single `EMAIL_TEMPLATES` registry (groups: Members, Bookings,
+  Growth, Money, Organisers, Safety, Team) holds the default subject, in-email heading, body HTML and button,
+  with `{{placeholders}}` for the dynamic bits. `send_tpl(key, to, values)` resolves any admin override at send
+  time and every previous `send_email(wrap(...))` call site now goes through it, including `notify()` and the
+  weekly payout reminder (whose console preview shares the same rendering, so the two can't drift).
+- Admin → **Emails**: `GET /api/admin/email-templates`, `PUT /api/admin/email-templates/{key}`,
+  `DELETE …/{key}` (reset to default) and `POST …/{key}/test` (sends the email to yourself with sample values,
+  15s per-admin cooldown). Body and heading are bleach-sanitised, button links must be `{{var}}`, `/path`,
+  `https://` or `mailto:`, fields are length-capped, and edits are audited with the old/new subject.
+  UI: `frontend/src/components/EmailTemplates.jsx`.
+- Welcome, Google welcome and password-reset sends are now fired with `asyncio.create_task` so the mail provider
+  never stalls a signup or reset request.
+- Verified: `backend/tests/test_iteration24_emails.py` **18/18** and testing-agent iteration 24
+  (`/app/test_reports/iteration_24.json`) — no bugs; overrides proven to apply on real sends; templates reset,
+  nothing left in `db.email_templates`.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only
