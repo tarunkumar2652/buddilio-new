@@ -432,3 +432,28 @@ def guide_for(city: str) -> dict:
         pid = ids[i] if i < len(ids) else FALLBACK_PHOTOS[i % len(FALLBACK_PHOTOS)]
         areas.append([name, blurb, PHOTO.format(pid)])
     return {**g, "areas": areas}
+
+
+GENERIC_AREAS = [
+    ["The old centre", "Start here — the walkable core where most bars, cafés and live rooms sit within a few streets."],
+    ["The waterfront or park side", "Sunset drinks, weekend markets and easy first-meet spots out in the open."],
+    ["The dining strip", "Where the city eats late: chef-led kitchens, supper clubs and long-table dinners."],
+    ["The nightlife quarter", "Clubs, comedy basements and gig venues that run past midnight on weekends."],
+]
+
+
+def auto_guide(city: str, country: str = "") -> dict:
+    """Every city on the catalogue deserves a page, even before an editor writes one."""
+    where = f"{city}, {country}" if country else city
+    areas = [[name, blurb, PHOTO.format(FALLBACK_PHOTOS[i % len(FALLBACK_PHOTOS)])]
+             for i, (name, blurb) in enumerate(GENERIC_AREAS)]
+    return {
+        "intro": f"Buddilio is opening up {where}. Members here meet over dinners, gigs, sport and "
+                 "weekend trips — browse what's already on, or host the first one yourself and we'll "
+                 "put it in front of everyone nearby.",
+        "areas": areas,
+        "when": "Thursday to Sunday evenings draw the biggest crowds; weekday meetups stay small and easy.",
+        "around": "Public transport or app cabs get you between most meeting points. Groups usually share a ride.",
+        "tip": "Always meet in a public venue for a first hangout, and tell a friend where you're going.",
+        "auto": True,
+    }

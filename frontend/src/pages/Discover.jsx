@@ -7,6 +7,7 @@ import { PersonCard } from "@/components/Cards";
 import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { PushToggle } from "@/components/PushToggle";
+import { RichText, RichHtml } from "@/components/RichText";
 import { IdVerification } from "@/components/IdVerification";
 import { MessageCircle, UserPlus, Ban, Flag, CalendarDays, Ticket } from "lucide-react";
 
@@ -135,7 +136,7 @@ export function PublicProfile() {
 
   return (
     <div className="mx-auto max-w-5xl px-4 sm:px-6 py-10 pb-28" data-testid="public-profile-page">
-      <SEO title={p.full_name} description={p.bio} />
+      <SEO title={p.full_name} description={(p.bio || "").replace(/<[^>]*>/g, " ").slice(0, 155)} />
       <div className="rounded-3xl border border-slate-200 bg-white overflow-hidden">
         <div className="h-32 bg-slate-900" />
         <div className="px-6 sm:px-10 pb-8">
@@ -145,6 +146,7 @@ export function PublicProfile() {
             <div className="pb-2">
               <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-3">
                 {p.full_name}{p.membership && <Badge tone="dark">Premium</Badge>}
+                {p.verified && <Badge tone="green"><span data-testid="profile-verified-badge">ID verified</span></Badge>}
               </h1>
               <p className="text-sm text-slate-500 mt-1">
                 {p.age ? `${p.age} · ` : ""}{p.city} · Joined {new Date(p.created_at).toLocaleDateString(undefined, { month: "short", year: "numeric" })}
@@ -152,7 +154,8 @@ export function PublicProfile() {
             </div>
           </div>
 
-          <p className="mt-6 text-slate-600 leading-relaxed">{p.bio || "This member hasn't added a bio yet."}</p>
+          <RichHtml html={p.bio || "<p>This member hasn't added a bio yet.</p>"}
+            className="mt-6 text-slate-600 leading-relaxed" testid="profile-bio-body" />
 
           <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 gap-4">
             <div className="rounded-xl border border-slate-200 p-4"><p className="overline">Events attended</p><p className="text-xl font-display font-bold mt-1">{p.events_attended}</p></div>
@@ -254,8 +257,8 @@ export function MyProfile() {
             <input data-testid="profile-name" value={f.full_name} onChange={(e) => setF({ ...f, full_name: e.target.value })}
               className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
           <label className="block"><span className="text-xs font-bold text-slate-600">Bio</span>
-            <textarea data-testid="profile-bio" rows={3} value={f.bio} onChange={(e) => setF({ ...f, bio: e.target.value })}
-              className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
+            <RichText value={f.bio} rows={3} testid="profile-bio"
+              onChange={(html) => setF({ ...f, bio: html })} /></label>
           <div className="grid sm:grid-cols-2 gap-4">
             <label className="block"><span className="text-xs font-bold text-slate-600">Country</span>
               <select data-testid="profile-country" value={f.country}

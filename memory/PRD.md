@@ -557,3 +557,17 @@ visual-editor dev hydration warning.
 2. Supply Razorpay keys + webhook secret to go live (code complete, tested in simulation).
 3. Decide whether the leaderboard and city guides should be visible to guests (both are member-gated / public
    respectively today) and whether the monthly prize should scale with invite count.
+
+## Invoices, receipts & member ledger — 18 Jun 2026 (iteration 31, 9/9 green)
+- `backend/invoices.py`: ReportLab PDF renderer + one template per money-in kind
+  (membership, product, event, companion, wallet, travel, provider_fee) with its own heading,
+  line-item wording and footnote. Renders "INVOICE" when pending, "RECEIPT" when paid.
+- Endpoints: `GET /api/orders/{oid}/invoice` (JSON), `GET /api/orders/{oid}/invoice.pdf`
+  (application/pdf, filename INV-… or RCP-…), `GET /api/me/ledger`.
+  Authorization: buyer only, or staff with `finance:view` (403 otherwise, 400 bad id, 404 missing).
+- Frontend: `components/MyLedger.jsx` → `/ledger` page (Payments & ledger: totals, payments table with
+  View + Invoice/Receipt PDF per row, credits, payouts) and a compact 5-row section on the Dashboard.
+  `pages/Invoice.jsx` now shows the per-kind heading + footnote and a real Download PDF button.
+  Orders page and the admin Ledger tab both gained per-row PDF buttons.
+- Known nuance: `totals.paid` sums in base currency while rows show their own order currency (labelled).
+- Backlog (P2): email the receipt PDF automatically after payment; split refunded amounts out of totals.

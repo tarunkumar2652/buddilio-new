@@ -13,6 +13,7 @@ import bcrypt
 import bleach
 import uuid
 import io
+import csv
 import secrets
 import logging
 from datetime import datetime, timezone, timedelta
@@ -31,7 +32,9 @@ from realtime import hub
 from push import push_to, push_enabled, vapid_public_key
 from storage import init_storage, put_object, get_object, MIME_TYPES, ALL_MIME_TYPES, DOC_MIME_TYPES, APP_NAME
 from geo import COUNTRY_SEED, EXTRA_CURRENCIES, ID_DOC_TYPES
-from city_guides import guide_for
+from travel import PROVIDER_ROLES, TRIP_ACTIVITIES, TRAVEL_TERMS
+from invoices import invoice_pdf, template_for
+from city_guides import guide_for, auto_guide
 import ai
 
 try:
@@ -311,6 +314,10 @@ def with_country(doc: dict) -> dict:
     c = country_for_city(doc.get("city", ""))
     doc["country"] = doc.get("country") or (c or {}).get("name", "")
     doc["country_code"] = (c or {}).get("code", "")
+    # Descriptions and rules are authored in the rich-text editor, so they arrive as HTML.
+    for field in ("description", "rules"):
+        if doc.get(field):
+            doc[field] = safe_html(doc[field])[:6000]
     return doc
 
 
@@ -762,7 +769,7 @@ class CouponIn(BaseModel):
 
 
 class CheckoutIn(BaseModel):
-    kind: str  # membership | product | event | companion | wallet
+    kind: str  # membership | product | event | companion | wallet | travel | provider_fee
     item_id: str
     quantity: int = 1
     coupon_code: str = ""
@@ -835,7 +842,7 @@ async def register(payload: RegisterIn, response: Response):
         "full_name": payload.full_name, "email": email, "mobile": payload.mobile,
         "password_hash": hash_password(payload.password), "role": role, "status": "active",
         "dob": payload.dob, "age": age, "gender": payload.gender, "city": payload.city,
-        "bio": payload.bio, "photo": payload.photo, "interests": payload.interests,
+        "bio": safe_html(payload.bio or "")[:4000], "photo": payload.photo, "interests": payload.interests,
         "event_categories": payload.event_categories, "lifestyle": payload.lifestyle,
         "verified": False, "email_verified": False, "org_name": payload.org_name,
         "country": payload.country or (country_for_city(payload.city) or {}).get("name", ""),
@@ -1001,7 +1008,7 @@ async def complete_onboarding(payload: OnboardingIn, user: dict = Depends(get_cu
     upd = {
         "dob": payload.dob, "age": age, "gender": payload.gender, "city": city,
         "country": payload.country or c.get("name", ""), "country_code": c.get("code", ""),
-        "bio": payload.bio, "interests": payload.interests,
+        "bio": safe_html(payload.bio or "")[:4000], "interests": payload.interests,
         "event_categories": payload.event_categories, "lifestyle": payload.lifestyle,
         "profile_complete": True,
     }
@@ -1017,6 +1024,8 @@ async def complete_onboarding(payload: OnboardingIn, user: dict = Depends(get_cu
 @api.put("/users/me")
 async def update_me(payload: ProfileIn, user: dict = Depends(get_current_user)):
     upd = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if isinstance(upd.get("bio"), str):
+        upd["bio"] = safe_html(upd["bio"])[:4000]
     if upd.get("city"):
         c = country_for_city(upd["city"])
         if c:
@@ -1369,6 +1378,17 @@ async def my_membership(user: dict = Depends(get_current_user)):
 
 
 async def price_for(kind: str, item_id: str):
+    if kind == "provider_fee":
+        doc = await db.users.find_one({"_id": ObjectId(item_id)}, {"provider": 1})
+        p = (doc or {}).get("provider") or {}
+        if not p or float(p.get("fee_paid") or 0) > 0:
+            return None, 0, "", 0
+        return doc, float(p.get("fee") or 0), "Travel provider registration", 0
+    if kind == "travel":
+        b = await db.travel_bookings.find_one({"_id": ObjectId(item_id)})
+        if not b or float(b.get("due_amount") or 0) <= 0:
+            return None, 0, "", 0
+        return b, float(b["due_amount"]), b.get("item_name", "Travel service"), 0
     if kind == "wallet":
         d = await db.wallet_topups.find_one({"_id": ObjectId(item_id)})
         if not d or d.get("status") != "pending":
@@ -1428,7 +1448,7 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
     if currency not in rates:
         raise HTTPException(status_code=400, detail="We don't support that currency yet.")
     tax_pct, tax_label = tax_for(currency, tax_pct, user.get("country_code", ""))
-    if payload.kind in ("companion", "wallet"):
+    if payload.kind in ("companion", "wallet", "travel", "provider_fee"):
         # Hangouts are person-to-person time; the guest pays exactly the agreed amount.
         tax_pct, tax_label = 0.0, "No tax"
     taxable = subtotal - discount
@@ -1531,6 +1551,10 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
                 "plan_name": plan["name"], "receipt": receipt,
                 "valid_until": ends.strftime("%d %b %Y"),
                 "membership_url": f"{FRONTEND_URL}/membership"})
+    elif order["kind"] == "travel":
+        await fulfil_travel(order, uid)
+    elif order["kind"] == "provider_fee":
+        await fulfil_provider_fee(order, uid)
     elif order["kind"] == "wallet":
         await fulfil_topup(order, uid)
     elif order["kind"] == "companion":
@@ -2471,6 +2495,30 @@ async def admin_stats(days: int = 30, user: dict = Depends(require_perm("analyti
     }
 
 
+def mask_email(value: str) -> str:
+    """Admin lists show ta••@g••.com — the full address needs a deliberate, audited reveal."""
+    email = (value or "").strip()
+    if "@" not in email:
+        return "•" * len(email)
+    name, _, domain = email.partition("@")
+    host, _, tld = domain.rpartition(".")
+    return f"{name[:2]}{'•' * max(len(name) - 2, 2)}@{host[:1]}{'•' * max(len(host) - 1, 2)}" + (f".{tld}" if tld else "")
+
+
+def mask_phone(value: str) -> str:
+    digits = (value or "").strip()
+    if len(digits) < 4:
+        return "•" * len(digits)
+    return f"{digits[:2]}{'•' * (len(digits) - 4)}{digits[-2:]}"
+
+
+def masked_user(doc: dict) -> dict:
+    doc["email"] = mask_email(doc.get("email", ""))
+    doc["mobile"] = mask_phone(doc.get("mobile", ""))
+    doc["pii_masked"] = True
+    return doc
+
+
 @api.get("/admin/users")
 async def admin_users(q: str = "", role: str = "", status: str = "",
                       page: int = 1, limit: int = 20, user: dict = Depends(require_perm("members:view"))):
@@ -2485,10 +2533,57 @@ async def admin_users(q: str = "", role: str = "", status: str = "",
     docs = await db.users.find(flt).sort([("created_at", -1)]).skip((page - 1) * limit).limit(limit).to_list(limit)
     items = []
     for d in docs:
-        c = clean(d)
+        c = masked_user(clean(d))
         c["membership"] = await membership_active(c["id"])
         items.append(c)
-    return {"items": items, "total": total, "page": page}
+    return {"items": items, "total": total, "page": page,
+            "can_reveal": "team:manage" in perms_of(user)}
+
+
+REVEAL_SECONDS = 10
+
+
+@api.post("/admin/users/{uid}/reveal")
+async def reveal_user_pii(uid: str, user: dict = Depends(require_perm("team:manage"))):
+    """Super-admin only, logged every time, and the UI hides it again after ten seconds."""
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1, "mobile": 1, "full_name": 1})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid member id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Member not found")
+    await audit(user, "user.pii_reveal", "user", uid, {"name": doc.get("full_name", "")})
+    return {"email": doc.get("email", ""), "mobile": doc.get("mobile", ""),
+            "seconds": REVEAL_SECONDS}
+
+
+@api.post("/admin/users/{uid}/temp-password")
+async def issue_temp_password(uid: str, user: dict = Depends(require_perm("team:manage"))):
+    """Stored passwords are one-way hashes, so we mint a single-use one instead of exposing the old one."""
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1, "full_name": 1})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid member id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Member not found")
+    temp = secrets.token_urlsafe(9) + "aA1!"
+    await db.users.update_one({"_id": doc["_id"]}, {"$set": {
+        "password_hash": hash_password(temp), "must_change_password": True,
+        "password_reset_by": user["id"], "password_reset_at": iso(now_utc())}})
+    await audit(user, "user.temp_password", "user", uid, {"name": doc.get("full_name", "")})
+    await notify(uid, "Your password was reset",
+                 "A Buddilio admin issued you a new temporary password. Change it the next time you sign in.",
+                 "system", "/profile")
+    return {"password": temp, "seconds": REVEAL_SECONDS, "must_change": True}
+
+
+MASK_CHAR = "•"
+
+
+def reject_masked(value: str, field: str = "email"):
+    if MASK_CHAR in (value or ""):
+        raise HTTPException(status_code=400,
+                            detail=f"Reveal the {field} before saving it — masked values can't be stored.")
 
 
 @api.patch("/admin/users/{uid}")
@@ -2644,7 +2739,8 @@ crud_routes("coupons", "coupons", CouponIn)
 @api.put("/admin/cms/{slug}")
 async def update_cms(slug: str, body: dict, user: dict = Depends(require_perm("content:manage"))):
     await db.cms_pages.update_one({"slug": slug},
-                                  {"$set": {"title": body.get("title", slug), "content": body.get("content", ""),
+                                  {"$set": {"title": body.get("title", slug),
+                                            "content": safe_html(body.get("content", ""))[:20000],
                                             "seo_title": body.get("seo_title", ""),
                                             "seo_description": body.get("seo_description", ""),
                                             "updated_at": iso(now_utc())}}, upsert=True)
@@ -3621,7 +3717,7 @@ async def accept_vendor_invite(token: str, payload: InviteAcceptIn, response: Re
            "password_hash": hash_password(payload.password), "role": "partner", "status": "active",
            "org_name": payload.org_name.strip(), "city": payload.city.strip(),
            "country": c.get("name", ""), "country_code": c.get("code", ""),
-           "bio": payload.bio[:600], "photo": payload.photo, "verified": False, "email_verified": True,
+           "bio": safe_html(payload.bio or "")[:4000], "photo": payload.photo, "verified": False, "email_verified": True,
            "documents": [], "managed_by": inv["manager_id"], "created_by_name": inv.get("manager_name", ""),
            "privacy": {"profile_visibility": "public", "who_can_message": "everyone"},
            "notification_prefs": {"email": True, "in_app": True, "sms": False, "push": True},
@@ -3971,7 +4067,7 @@ async def console_create_vendor(payload: VendorIn, user: dict = Depends(require_
            "password_hash": hash_password(secrets.token_urlsafe(24)), "role": "partner", "status": "active",
            "org_name": payload.org_name.strip(), "city": payload.city.strip(),
            "country": payload.country or c.get("name", ""), "country_code": c.get("code", ""),
-           "bio": payload.bio, "photo": payload.photo, "verified": False, "email_verified": False,
+           "bio": safe_html(payload.bio or "")[:4000], "photo": payload.photo, "verified": False, "email_verified": False,
            "managed_by": user["id"], "created_by_name": user["full_name"],
            "privacy": {"profile_visibility": "public", "who_can_message": "everyone"},
            "notification_prefs": {"email": True, "in_app": True, "sms": False, "push": True},
@@ -4435,6 +4531,48 @@ async def submit_verification(payload: IdVerificationIn, user: dict = Depends(ge
            "status": "pending", "note": "", "submitted_at": iso(now_utc())}
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"id_verification": sub}})
     return {"ok": True, "submission": sub}
+
+
+@api.post("/me/verification/start")
+async def start_verification(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    """Marks the check as started so we can nudge anyone who never finishes uploading."""
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"verified": 1, "id_verification": 1})
+    if (doc or {}).get("verified"):
+        return {"ok": True, "started": False}
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {
+        "id_verification_started": {"doc_type": str(payload.get("doc_type", ""))[:40],
+                                    "at": iso(now_utc()), "reminders": 0}}})
+    return {"ok": True, "started": True}
+
+
+@api.post("/cron/verification-reminders")
+async def cron_verification_reminders(_: None = Depends(cron_guard)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    asyncio.create_task(send_verification_reminders())
+    return {"ok": True, "queued": "verification-reminders"}
+
+
+async def send_verification_reminders() -> int:
+    """Two gentle nudges, a day apart, for members who opened the ID check but never sent it in."""
+    cutoff = iso(now_utc() - timedelta(hours=24))
+    rows = await db.users.find(
+        {"verified": {"$ne": True}, "status": "active",
+         "id_verification_started.at": {"$lte": cutoff},
+         "id_verification_started.reminders": {"$lt": 2},
+         "id_verification": {"$exists": False}},
+        {"full_name": 1, "email": 1, "id_verification_started": 1}).limit(300).to_list(300)
+    sent = 0
+    for u in rows:
+        uid = str(u["_id"])
+        await notify(uid, "Finish your ID check",
+                     "You're one upload away from the verified badge — add your document and we'll review it "
+                     "within a day.", "reminder", "/profile")
+        await db.users.update_one({"_id": u["_id"]},
+                                  {"$inc": {"id_verification_started.reminders": 1},
+                                   "$set": {"id_verification_started.reminded_at": iso(now_utc())}})
+        sent += 1
+    logger.info(f"verification reminders sent: {sent}")
+    return sent
 
 
 @api.get("/admin/id-verifications")
@@ -5048,7 +5186,7 @@ def clean_blocks(blocks: list) -> list:
             raise HTTPException(status_code=400,
                                 detail=f"Unknown block type '{kind}'. Allowed: {', '.join(BLOCK_TYPES)}.")
         text = str(b.get("text", ""))[:8000]
-        if kind in ("richtext", "html"):
+        if kind in ("richtext", "html", "text", "quote", "cta", "faq"):
             text = safe_html(text)
         out.append({"type": kind, "heading": str(b.get("heading", ""))[:200],
                     "text": text, "image": safe_url(str(b.get("image", ""))),
@@ -5070,6 +5208,7 @@ async def create_page(payload: PageIn, user: dict = Depends(require_perm("conten
     if await db.cms_pages.find_one({"slug": slug}):
         raise HTTPException(status_code=400, detail="A page already uses that slug.")
     doc = payload.model_dump() | {"slug": slug, "blocks": clean_blocks(payload.blocks),
+                                 "content": safe_html(payload.content)[:20000],
                                  "created_at": iso(now_utc()), "updated_at": iso(now_utc())}
     res = await db.cms_pages.insert_one(doc)
     await audit(user, "page.create", "cms_page", slug, {"title": payload.title})
@@ -5089,6 +5228,7 @@ async def update_page(pid: str, payload: PageIn, user: dict = Depends(require_pe
     if clash:
         raise HTTPException(status_code=400, detail="Another page already uses that slug.")
     upd = payload.model_dump() | {"slug": slug, "blocks": clean_blocks(payload.blocks),
+                                 "content": safe_html(payload.content)[:20000],
                                  "updated_at": iso(now_utc())}
     await db.cms_pages.update_one({"_id": page["_id"]}, {"$set": upd})
     await audit(user, "page.update", "cms_page", slug, {"title": payload.title})
@@ -5262,6 +5402,10 @@ async def admin_edit_profile(uid: str, body: dict, user: dict = Depends(require_
     if not target:
         raise HTTPException(status_code=404, detail="Profile not found")
     upd = {k: v for k, v in body.items() if k in PROFILE_EDITABLE}
+    reject_masked(upd.get("email", ""))
+    reject_masked(upd.get("mobile", ""), "phone number")
+    if isinstance(upd.get("bio"), str):
+        upd["bio"] = safe_html(upd["bio"])[:4000]
     if not upd:
         raise HTTPException(status_code=400, detail="Nothing to change.")
     if ("staff_role" in upd or "extra_permissions" in upd or upd.get("role") in ("admin", "manager")) \
@@ -5398,9 +5542,11 @@ async def admin_delete_event(eid: str, force: bool = False, user: dict = Depends
 @api.get("/admin/city-guides")
 async def admin_city_guides(user: dict = Depends(require_perm("content:manage"))):
     saved = {d["slug"]: d.get("data", {}) for d in await db.city_guides.find({}).limit(200).to_list(200)}
-    cities = [c for country in COUNTRIES for c in country["cities"]]
-    return {"items": [{"city": c, "slug": city_slug(c), "guide": saved.get(city_slug(c)) or guide_for(c),
-                       "custom": city_slug(c) in saved} for c in cities]}
+    cities = [(c, country["name"]) for country in COUNTRIES for c in country["cities"]]
+    return {"items": [{"city": c, "slug": city_slug(c),
+                       "guide": saved.get(city_slug(c)) or guide_for(c) or auto_guide(c, cn),
+                       "custom": city_slug(c) in saved,
+                       "auto": city_slug(c) not in saved and not guide_for(c)} for c, cn in cities]}
 
 
 @api.put("/admin/city-guides/{slug}")
@@ -5421,12 +5567,14 @@ async def reset_city_guide(slug: str, user: dict = Depends(require_perm("content
     city, _ = find_city(slug)
     await db.city_guides.delete_one({"slug": slug})
     await audit(user, "city_guide.reset", "city", slug, {})
-    return {"ok": True, "guide": guide_for(city)}
+    country = country_for_city(city) or {}
+    return {"ok": True, "guide": guide_for(city) or auto_guide(city, country.get("name", ""))}
 
 
 async def city_guide(city: str) -> dict:
     saved = await db.city_guides.find_one({"slug": city_slug(city)})
-    return (saved or {}).get("data") or guide_for(city)
+    country = country_for_city(city) or {}
+    return (saved or {}).get("data") or guide_for(city) or auto_guide(city, country.get("name", ""))
 
 
 # ---------------- paid companion hangouts (premium only) ----------------
@@ -5495,7 +5643,7 @@ def companion_card(u: dict, mine: bool = False) -> dict:
            "packages": c.get("packages", []), "currency": BASE_CURRENCY,
            "status": c.get("status", "none"), "enabled": bool(c.get("enabled")),
            "hangouts": c.get("completed", 0), "rating": c.get("rating", 0),
-           "rating_count": c.get("rating_count", 0)}
+           "rating_count": c.get("rating_count", 0), "verified": bool(u.get("verified"))}
     if mine:
         out |= {"full_name": u.get("full_name", ""), "rejected_reason": c.get("rejected_reason", ""),
                 "cut_percent": COMPANION_CUT, "terms": HANGOUT_TERMS}
@@ -5541,7 +5689,7 @@ async def apply_as_companion(payload: CompanionIn, user: dict = Depends(get_curr
     status = existing.get("status") if existing.get("status") == "approved" else "pending"
     c = {"hourly_rate": round(payload.hourly_rate, 2), "min_hours": payload.min_hours,
          "max_hours": payload.max_hours, "headline": payload.headline[:120],
-         "about": payload.about[:1200], "city": payload.city or doc.get("city", ""),
+         "about": safe_html(payload.about)[:4000], "city": payload.city or doc.get("city", ""),
          "languages": [l[:30] for l in payload.languages][:6],
          "packages": clean_packages(payload.packages), "enabled": payload.enabled,
          "status": status, "completed": existing.get("completed", 0),
@@ -5574,7 +5722,8 @@ async def list_companions(q: str = "", city: str = "", max_rate: float = -1,
     order = {"rating": [("companion.rating", -1), ("companion.completed", -1)],
              "experience": [("companion.completed", -1), ("companion.rating", -1)],
              "rate_desc": [("companion.hourly_rate", -1)]}.get(sort, [("companion.hourly_rate", 1)])
-    docs = await db.users.find(flt).sort(order) \
+    docs = await db.users.find(flt, {"full_name": 1, "photo": 1, "city": 1, "age": 1, "companion": 1,
+                                     "verified": 1}).sort(order) \
         .skip((page - 1) * limit).limit(limit).to_list(limit)
     return {"items": [companion_card(d) for d in docs], "total": total, "page": page,
             "terms": HANGOUT_TERMS, "currency": BASE_CURRENCY, "request_fee": await request_fee(),
@@ -6174,6 +6323,822 @@ async def admin_grant_credit(bid: str, payload: CreditIn,
                                payload.reason or "Buddilio credit added by our team.", bid)
     await audit(user, "companion.credit", "booking", bid, {"amount": credit, "reason": payload.reason[:120]})
     return {"ok": True, "credit_issued": credit}
+
+
+# ---------------- solo travel: trips, providers, service requests ----------------
+# Trips are free for every member. Providers pay once to be listed, then Buddilio takes a cut of each
+# booking. Prices shown to travellers carry a markup on the provider's own rate, and everywhere outside
+# India pays the international uplift.
+PROVIDER_FEE_DEFAULT = float(os.environ.get("PROVIDER_FEE", "999"))
+TRAVEL_MARKUP_DEFAULT = 18.0            # 15–20% band the founder asked for
+TRAVEL_UPLIFT_DEFAULT = 30.0            # non-India uplift on every booking
+TRAVEL_CUT_DEFAULT = 25.0
+
+
+async def travel_config() -> dict:
+    s = await db.settings.find_one({}, {"provider_fee": 1, "travel_markup_percent": 1,
+                                        "travel_uplift_percent": 1, "travel_cut_percent": 1}) or {}
+
+    def num(key, default):
+        try:
+            return round(float(s.get(key)), 2)
+        except (TypeError, ValueError):
+            return default
+
+    return {"fee": num("provider_fee", PROVIDER_FEE_DEFAULT),
+            "markup_percent": num("travel_markup_percent", TRAVEL_MARKUP_DEFAULT),
+            "uplift_percent": num("travel_uplift_percent", TRAVEL_UPLIFT_DEFAULT),
+            "cut_percent": num("travel_cut_percent", TRAVEL_CUT_DEFAULT)}
+
+
+def uplift_factor(country_code: str, cfg: dict) -> float:
+    """India pays the base rate; everywhere else carries the international uplift."""
+    return 1.0 if (country_code or "").upper() == "IN" else 1 + cfg["uplift_percent"] / 100
+
+
+def listed_price(day_rate: float, cfg: dict, country_code: str) -> float:
+    return round(day_rate * (1 + cfg["markup_percent"] / 100) * uplift_factor(country_code, cfg), 2)
+
+
+class ProviderIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    roles: List[str]
+    day_rate: float = Field(gt=0)
+    destinations: List[str] = []
+    languages: List[str] = []
+    headline: str = ""
+    about: str = ""
+    experience_years: int = Field(default=0, ge=0, le=60)
+    documents: List[dict] = []
+    accept_terms: bool = False
+
+
+def provider_card(u: dict, cfg: dict, country_code: str, mine: bool = False) -> dict:
+    p = u.get("provider") or {}
+    out = {"id": str(u["_id"]), "name": short_name(u.get("full_name", "Member")),
+           "photo": u.get("photo", ""), "roles": p.get("roles", []),
+           "destinations": p.get("destinations", []), "languages": p.get("languages", []),
+           "headline": p.get("headline", ""), "about": p.get("about", ""),
+           "experience_years": p.get("experience_years", 0), "trips_done": p.get("trips_done", 0),
+           "rating": p.get("rating", 0), "rating_count": p.get("rating_count", 0),
+           "verified": bool(u.get("verified")), "status": p.get("status", "none"),
+           "day_price": listed_price(float(p.get("day_rate") or 0), cfg, country_code),
+           "currency": BASE_CURRENCY}
+    if mine:
+        out |= {"day_rate": p.get("day_rate", 0), "fee_paid": p.get("fee_paid", 0),
+                "documents": p.get("documents", []), "rejected_reason": p.get("rejected_reason", ""),
+                "cut_percent": cfg["cut_percent"], "markup_percent": cfg["markup_percent"],
+                "terms": TRAVEL_TERMS}
+    return out
+
+
+@api.get("/travel/meta")
+async def travel_meta(user: dict = Depends(get_current_user)):
+    cfg = await travel_config()
+    fee = round(cfg["fee"] * uplift_factor(user.get("country_code", ""), cfg), 2)
+    return {"roles": PROVIDER_ROLES, "activities": TRIP_ACTIVITIES, "terms": TRAVEL_TERMS,
+            "provider_fee": fee, "markup_percent": cfg["markup_percent"],
+            "uplift_percent": cfg["uplift_percent"], "currency": BASE_CURRENCY}
+
+
+# ---- provider onboarding ----
+@api.get("/me/provider")
+async def my_provider(user: dict = Depends(get_current_user)):
+    cfg = await travel_config()
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])})
+    fee = round(cfg["fee"] * uplift_factor(doc.get("country_code", ""), cfg), 2)
+    return {"profile": provider_card(doc, cfg, doc.get("country_code", ""), mine=True),
+            "provider_fee": fee, "roles": PROVIDER_ROLES, "terms": TRAVEL_TERMS}
+
+
+@api.post("/me/provider")
+async def apply_as_provider(payload: ProviderIn, user: dict = Depends(get_current_user)):
+    """Anyone can offer their services; they pay the one-time fee, then an admin checks the documents."""
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])})
+    roles = [r for r in payload.roles if r in {x["key"] for x in PROVIDER_ROLES}][:9]
+    if not roles:
+        raise HTTPException(status_code=400, detail="Pick at least one service you offer.")
+    if not payload.accept_terms:
+        raise HTTPException(status_code=400, detail="Please accept the travel terms to continue.")
+    files = []
+    for d in (payload.documents or [])[:5]:
+        url = str(d.get("url", ""))
+        if not url.startswith("/api/files/"):
+            raise HTTPException(status_code=400, detail="Upload your documents through Buddilio first.")
+        files.append({"url": url, "name": str(d.get("name", "Document"))[:120]})
+    if not files:
+        raise HTTPException(status_code=400, detail="Attach at least one ID or licence.")
+    cfg = await travel_config()
+    existing = doc.get("provider") or {}
+    fee = round(cfg["fee"] * uplift_factor(doc.get("country_code", ""), cfg), 2)
+    paid = float(existing.get("fee_paid") or 0) > 0
+    p = {"roles": roles, "day_rate": round(payload.day_rate, 2),
+         "destinations": [d[:60] for d in payload.destinations][:12],
+         "languages": [l[:30] for l in payload.languages][:6],
+         "headline": payload.headline[:120], "about": safe_html(payload.about)[:4000],
+         "experience_years": payload.experience_years, "documents": files,
+         "status": existing.get("status") if existing.get("status") == "approved"
+                   else ("pending" if paid else "pending_fee"),
+         "fee_paid": existing.get("fee_paid", 0), "fee": fee,
+         "trips_done": existing.get("trips_done", 0), "rating": existing.get("rating", 0),
+         "rating_count": existing.get("rating_count", 0), "rejected_reason": "",
+         "accepted_terms_at": iso(now_utc()),
+         "applied_at": existing.get("applied_at") or iso(now_utc())}
+    await db.users.update_one({"_id": doc["_id"]}, {"$set": {"provider": p}})
+    if not paid:
+        return {"ok": True, "status": "pending_fee", "provider_fee": fee, "next": "checkout",
+                "checkout": {"kind": "provider_fee", "item_id": user["id"], "amount": fee}}
+    return {"ok": True, "status": p["status"], "next": "review"}
+
+
+async def fulfil_provider_fee(order: dict, uid: str):
+    doc = await db.users.find_one({"_id": ObjectId(uid)}, {"provider": 1, "full_name": 1})
+    p = (doc or {}).get("provider") or {}
+    if not p or float(p.get("fee_paid") or 0) > 0:
+        return
+    await db.users.update_one({"_id": ObjectId(uid)}, {"$set": {
+        "provider.fee_paid": float(order["total"]), "provider.fee_order_id": str(order["_id"]),
+        "provider.status": "approved" if p.get("status") == "approved" else "pending",
+        "provider.paid_at": iso(now_utc())}})
+    await notify(uid, "Registration fee received",
+                 "Thanks — our team reviews new travel providers within a business day.",
+                 "system", "/travel/provider")
+
+
+@api.get("/admin/providers")
+async def admin_providers(status: str = "pending", user: dict = Depends(require_perm("verification:manage"))):
+    cfg = await travel_config()
+    flt: dict[str, Any] = {"provider": {"$exists": True}}
+    if status and status != "all":
+        flt["provider.status"] = status
+    docs = await db.users.find(flt).sort("provider.applied_at", -1).limit(200).to_list(200)
+    counts = {s: await db.users.count_documents({"provider.status": s})
+              for s in ("pending_fee", "pending", "approved", "rejected")}
+    items = []
+    for d in docs:
+        card = provider_card(d, cfg, d.get("country_code", ""), mine=True)
+        card |= {"email": mask_email(d.get("email", "")), "city": d.get("city", ""),
+                 "country": d.get("country", ""), "full_name": d.get("full_name", "")}
+        items.append(card)
+    return {"items": items, "counts": counts, "roles": PROVIDER_ROLES, "config": cfg}
+
+
+@api.post("/admin/providers/{uid}")
+async def moderate_provider(uid: str, payload: VerifyIn,
+                            user: dict = Depends(require_perm("verification:manage"))):
+    if payload.action not in ("approve", "reject", "suspend"):
+        raise HTTPException(status_code=400, detail="Unknown action")
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(uid), "provider": {"$exists": True}})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid member id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="No provider application from that member.")
+    if payload.action == "approve" and float((doc.get("provider") or {}).get("fee_paid") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="They haven't paid the registration fee yet.")
+    state = {"approve": "approved", "reject": "rejected", "suspend": "suspended"}[payload.action]
+    await db.users.update_one({"_id": doc["_id"]}, {"$set": {
+        "provider.status": state, "provider.rejected_reason": payload.note[:300],
+        "provider.reviewed_at": iso(now_utc())}})
+    await audit(user, f"provider.{payload.action}", "user", uid, {"note": payload.note[:120]})
+    await notify(uid, f"Travel provider profile {state}",
+                 "You're listed — travellers can book you now." if state == "approved"
+                 else (payload.note or "Our team couldn't approve your profile yet."),
+                 "moderation", "/travel/provider")
+    return {"ok": True, "status": state}
+
+
+@api.get("/travel/providers")
+async def list_providers(role: str = "", destination: str = "", q: str = "",
+                         sort: Literal["price", "price_desc", "rating", "experience"] = "rating",
+                         page: int = 1, limit: int = 12, user: dict = Depends(get_current_user)):
+    cfg = await travel_config()
+    flt: dict[str, Any] = {"provider.status": "approved", "status": "active"}
+    if role:
+        flt["provider.roles"] = role
+    if destination:
+        flt["provider.destinations"] = {"$regex": destination, "$options": "i"}
+    if q:
+        flt["$or"] = [{"full_name": {"$regex": q, "$options": "i"}},
+                      {"provider.headline": {"$regex": q, "$options": "i"}}]
+    order = {"rating": [("provider.rating", -1), ("provider.trips_done", -1)],
+             "experience": [("provider.experience_years", -1), ("provider.trips_done", -1)],
+             "price_desc": [("provider.day_rate", -1)]}.get(sort, [("provider.day_rate", 1)])
+    total = await db.users.count_documents(flt)
+    docs = await db.users.find(flt).sort(order).skip((page - 1) * limit).limit(limit).to_list(limit)
+    cc = user.get("country_code", "")
+    return {"items": [provider_card(d, cfg, cc) for d in docs], "total": total, "page": page,
+            "roles": PROVIDER_ROLES, "currency": BASE_CURRENCY, "terms": TRAVEL_TERMS}
+
+
+@api.get("/travel/providers/{pid}")
+async def provider_detail(pid: str, user: dict = Depends(get_current_user)):
+    cfg = await travel_config()
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(pid), "provider.status": "approved"})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid provider id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return provider_card(doc, cfg, user.get("country_code", "")) | {"terms": TRAVEL_TERMS}
+
+
+# ---- trips: free to post, free to join ----
+class TripIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    title: str
+    destination: str
+    country: str = ""
+    starts_at: str
+    ends_at: str = ""
+    activity: str = "Trekking"
+    group_size: int = Field(default=4, ge=2, le=30)
+    budget: float = 0
+    gender_pref: Literal["any", "women", "men"] = "any"
+    notes: str = ""
+
+
+def trip_view(t: dict, me: str, names: dict) -> dict:
+    host = names.get(t["host_id"]) or {}
+    return {"id": str(t["_id"]), "title": t["title"], "destination": t["destination"],
+            "country": t.get("country", ""), "starts_at": t["starts_at"], "ends_at": t.get("ends_at", ""),
+            "activity": t["activity"], "group_size": t["group_size"], "budget": t.get("budget", 0),
+            "gender_pref": t.get("gender_pref", "any"), "notes": t.get("notes", ""),
+            "status": t.get("status", "open"), "joined": t.get("joined", 0),
+            "host_id": t["host_id"], "host_name": short_name(host.get("full_name", "Member")),
+            "host_photo": host.get("photo", ""), "host_verified": bool(host.get("verified")),
+            "is_host": t["host_id"] == me, "currency": BASE_CURRENCY,
+            "created_at": t.get("created_at", "")}
+
+
+@api.post("/travel/trips")
+async def create_trip(payload: TripIn, user: dict = Depends(get_current_user)):
+    try:
+        starts = datetime.fromisoformat(payload.starts_at.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Pick a valid start date.")
+    if starts < now_utc():
+        raise HTTPException(status_code=400, detail="Trips have to start in the future.")
+    if payload.activity not in TRIP_ACTIVITIES:
+        raise HTTPException(status_code=400, detail="Choose one of the listed activities.")
+    live = await db.trips.count_documents({"host_id": user["id"], "status": "open"})
+    if live >= 5:
+        raise HTTPException(status_code=400, detail="You already have five open trips — close one first.")
+    doc = payload.model_dump() | {
+        "host_id": user["id"], "status": "open", "joined": 0,
+        "destination": payload.destination.strip()[:80], "title": payload.title.strip()[:120],
+        "notes": safe_html(payload.notes)[:4000], "starts_at": iso(starts),
+        "country": payload.country or (country_for_city(payload.destination) or {}).get("name", ""),
+        "created_at": iso(now_utc())}
+    res = await db.trips.insert_one(doc)
+    t = await db.trips.find_one({"_id": res.inserted_id})
+    names = await load_many(db.users, [user["id"]], {"full_name": 1, "photo": 1, "verified": 1})
+    return trip_view(t, user["id"], names)
+
+
+@api.get("/travel/trips")
+async def list_trips(destination: str = "", activity: str = "", mine: bool = False,
+                     page: int = 1, limit: int = 12, user: dict = Depends(get_current_user)):
+    flt: dict[str, Any] = {"status": "open"} if not mine else {"host_id": user["id"]}
+    if destination:
+        flt["destination"] = {"$regex": destination, "$options": "i"}
+    if activity:
+        flt["activity"] = activity
+    total = await db.trips.count_documents(flt)
+    rows = await db.trips.find(flt).sort("starts_at", 1).skip((page - 1) * limit).limit(limit).to_list(limit)
+    names = await load_many(db.users, [t["host_id"] for t in rows],
+                            {"full_name": 1, "photo": 1, "verified": 1})
+    joined = {j["trip_id"] for j in await db.trip_joins.find(
+        {"user_id": user["id"], "trip_id": {"$in": [str(t["_id"]) for t in rows]}},
+        {"trip_id": 1}).to_list(200)}
+    items = []
+    for t in rows:
+        v = trip_view(t, user["id"], names)
+        v["requested"] = v["id"] in joined
+        items.append(v)
+    return {"items": items, "total": total, "page": page, "activities": TRIP_ACTIVITIES,
+            "terms": TRAVEL_TERMS}
+
+
+@api.post("/travel/trips/{tid}/join")
+async def join_trip(tid: str, body: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    """Joining is free — the host just has to say yes."""
+    try:
+        t = await db.trips.find_one({"_id": ObjectId(tid), "status": "open"})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid trip id")
+    if not t:
+        raise HTTPException(status_code=404, detail="That trip isn't open any more.")
+    if t["host_id"] == user["id"]:
+        raise HTTPException(status_code=400, detail="It's your own trip.")
+    if await db.trip_joins.find_one({"trip_id": tid, "user_id": user["id"]}):
+        raise HTTPException(status_code=400, detail="You've already asked to join this trip.")
+    if t.get("joined", 0) >= t["group_size"] - 1:
+        raise HTTPException(status_code=400, detail="This group is full.")
+    await db.trip_joins.insert_one({"trip_id": tid, "user_id": user["id"], "status": "requested",
+                                    "note": str(body.get("note", ""))[:500], "created_at": iso(now_utc())})
+    await notify(t["host_id"], "Someone wants to join your trip",
+                 f"{short_name(user['full_name'])} asked to join {t['title']}.",
+                 "connection", "/travel/trips")
+    return {"ok": True, "status": "requested"}
+
+
+@api.get("/travel/trips/{tid}/requests")
+async def trip_requests(tid: str, user: dict = Depends(get_current_user)):
+    try:
+        t = await db.trips.find_one({"_id": ObjectId(tid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid trip id")
+    if not t or t["host_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the host can see who asked to join.")
+    rows = await db.trip_joins.find({"trip_id": tid}).sort("created_at", 1).limit(100).to_list(100)
+    people = await load_many(db.users, [r["user_id"] for r in rows],
+                             {"full_name": 1, "photo": 1, "city": 1, "verified": 1, "age": 1})
+    return {"items": [{"id": str(r["_id"]), "user_id": r["user_id"], "status": r["status"],
+                       "note": r.get("note", ""), "created_at": r.get("created_at", ""),
+                       "name": short_name((people.get(r["user_id"]) or {}).get("full_name", "")),
+                       "photo": (people.get(r["user_id"]) or {}).get("photo", ""),
+                       "city": (people.get(r["user_id"]) or {}).get("city", ""),
+                       "verified": bool((people.get(r["user_id"]) or {}).get("verified"))}
+                      for r in rows]}
+
+
+@api.post("/travel/trips/{tid}/requests/{jid}")
+async def decide_trip_request(tid: str, jid: str, payload: VerifyIn,
+                              user: dict = Depends(get_current_user)):
+    if payload.action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="Unknown action")
+    try:
+        t = await db.trips.find_one({"_id": ObjectId(tid)})
+        j = await db.trip_joins.find_one({"_id": ObjectId(jid), "trip_id": tid})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    if not t or not j:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if t["host_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the host decides who joins.")
+    if j["status"] != "requested":
+        raise HTTPException(status_code=400, detail="You've already answered this one.")
+    state = "joined" if payload.action == "approve" else "declined"
+    await db.trip_joins.update_one({"_id": j["_id"]}, {"$set": {"status": state,
+                                                               "decided_at": iso(now_utc())}})
+    if state == "joined":
+        await db.trips.update_one({"_id": t["_id"]}, {"$inc": {"joined": 1}})
+        full = t.get("joined", 0) + 1 >= t["group_size"] - 1
+        if full:
+            await db.trips.update_one({"_id": t["_id"]}, {"$set": {"status": "full"}})
+    await notify(j["user_id"], f"Trip request {state}",
+                 f"{t['title']} · {t['destination']}" if state == "joined"
+                 else f"The host couldn't fit you into {t['title']} this time.",
+                 "connection", "/travel/trips")
+    return {"ok": True, "status": state}
+
+
+@api.delete("/travel/trips/{tid}")
+async def close_trip(tid: str, user: dict = Depends(get_current_user)):
+    try:
+        t = await db.trips.find_one({"_id": ObjectId(tid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid trip id")
+    if not t:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if t["host_id"] != user["id"] and "members:manage" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="Only the host can close this trip.")
+    await db.trips.update_one({"_id": t["_id"]}, {"$set": {"status": "closed"}})
+    return {"ok": True, "status": "closed"}
+
+
+# ---- service requests and provider bookings ----
+class ServiceRequestIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    destination: str
+    roles: List[str]
+    starts_at: str
+    days: int = Field(default=1, ge=1, le=30)
+    people: int = Field(default=1, ge=1, le=30)
+    budget: float = 0
+    notes: str = ""
+
+
+class QuoteIn(BaseModel):
+    amount: float = Field(gt=0)
+    note: str = ""
+
+
+@api.post("/travel/requests")
+async def create_service_request(payload: ServiceRequestIn, user: dict = Depends(get_current_user)):
+    roles = [r for r in payload.roles if r in {x["key"] for x in PROVIDER_ROLES}][:4]
+    if not roles:
+        raise HTTPException(status_code=400, detail="Pick at least one service you need.")
+    try:
+        starts = datetime.fromisoformat(payload.starts_at.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Pick a valid start date.")
+    if starts < now_utc():
+        raise HTTPException(status_code=400, detail="Requests have to start in the future.")
+    doc = payload.model_dump() | {"roles": roles, "traveller_id": user["id"], "status": "open",
+                                  "destination": payload.destination.strip()[:80],
+                                  "notes": safe_html(payload.notes)[:2000],
+                                  "starts_at": iso(starts), "created_at": iso(now_utc())}
+    res = await db.service_requests.insert_one(doc)
+    return clean(await db.service_requests.find_one({"_id": res.inserted_id}))
+
+
+@api.get("/travel/requests")
+async def list_service_requests(mine: bool = False, user: dict = Depends(get_current_user)):
+    """Travellers see their own; approved providers see open requests matching their roles."""
+    if mine:
+        flt: dict[str, Any] = {"traveller_id": user["id"]}
+    else:
+        doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"provider": 1})
+        p = (doc or {}).get("provider") or {}
+        if p.get("status") != "approved":
+            raise HTTPException(status_code=403, detail="Only listed providers can browse open requests.")
+        flt = {"status": "open", "roles": {"$in": p.get("roles", [])}}
+    rows = await db.service_requests.find(flt).sort("created_at", -1).limit(60).to_list(60)
+    ids = [str(r["_id"]) for r in rows]
+    quotes = await db.service_quotes.find({"request_id": {"$in": ids}}).limit(500).to_list(500)
+    names = await load_many(db.users, [r["traveller_id"] for r in rows], {"full_name": 1, "photo": 1})
+    items = []
+    for r in rows:
+        rid = str(r["_id"])
+        mine_quotes = [q for q in quotes if q["request_id"] == rid]
+        items.append(clean(r) | {
+            "traveller_name": short_name((names.get(r["traveller_id"]) or {}).get("full_name", "")),
+            "quote_count": len(mine_quotes),
+            "my_quote": next((round(q["amount"], 2) for q in mine_quotes
+                              if q["provider_id"] == user["id"]), 0),
+            "quotes": [{"id": str(q["_id"]), "provider_id": q["provider_id"], "amount": q["amount"],
+                        "note": q.get("note", ""), "status": q.get("status", "open"),
+                        "provider_name": q.get("provider_name", "")}
+                       for q in mine_quotes] if r["traveller_id"] == user["id"] else []})
+    return {"items": items, "roles": PROVIDER_ROLES}
+
+
+@api.post("/travel/requests/{rid}/quotes")
+async def send_quote(rid: str, payload: QuoteIn, user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"provider": 1, "full_name": 1})
+    if ((doc or {}).get("provider") or {}).get("status") != "approved":
+        raise HTTPException(status_code=403, detail="Only listed providers can quote.")
+    try:
+        req = await db.service_requests.find_one({"_id": ObjectId(rid), "status": "open"})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request id")
+    if not req:
+        raise HTTPException(status_code=404, detail="That request is closed.")
+    if await db.service_quotes.find_one({"request_id": rid, "provider_id": user["id"]}):
+        raise HTTPException(status_code=400, detail="You've already quoted on this request.")
+    cfg = await travel_config()
+    traveller = await db.users.find_one({"_id": ObjectId(req["traveller_id"])}, {"country_code": 1})
+    price = listed_price(round(payload.amount, 2), cfg, (traveller or {}).get("country_code", ""))
+    res = await db.service_quotes.insert_one({
+        "request_id": rid, "provider_id": user["id"], "provider_name": short_name(doc.get("full_name", "")),
+        "provider_amount": round(payload.amount, 2), "amount": price,
+        "note": payload.note[:500], "status": "open", "created_at": iso(now_utc())})
+    await notify(req["traveller_id"], "New quote for your trip",
+                 f"{short_name(doc.get('full_name', 'A provider'))} quoted {fmt_money(price)} "
+                 f"for {req['destination']}.", "order", "/travel/requests")
+    return {"ok": True, "quote_id": str(res.inserted_id), "amount": price}
+
+
+class ProviderBookingIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    days: int = Field(default=1, ge=1, le=30)
+    starts_at: str
+    people: int = Field(default=1, ge=1, le=30)
+    notes: str = ""
+
+
+async def open_travel_booking(traveller: dict, provider_id: str, amount: float, days: int,
+                              starts: str, label: str, request_id: str = "") -> dict:
+    cfg = await travel_config()
+    cut = round(amount * cfg["cut_percent"] / 100, 2)
+    doc = {"traveller_id": traveller["id"], "provider_id": provider_id, "days": days,
+           "amount": round(amount, 2), "due_amount": round(amount, 2), "paid_total": 0.0,
+           "cut_percent": cfg["cut_percent"], "platform_fee": cut, "provider_net": round(amount - cut, 2),
+           "currency": BASE_CURRENCY, "status": "pending_payment", "starts_at": starts,
+           "request_id": request_id, "item_name": label[:120], "created_at": iso(now_utc())}
+    res = await db.travel_bookings.insert_one(doc)
+    return {"booking_id": str(res.inserted_id), "amount": doc["amount"],
+            "checkout": {"kind": "travel", "item_id": str(res.inserted_id), "amount": doc["amount"]}}
+
+
+@api.post("/travel/providers/{pid}/bookings")
+async def book_provider(pid: str, payload: ProviderBookingIn, user: dict = Depends(get_current_user)):
+    cfg = await travel_config()
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(pid), "provider.status": "approved"})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid provider id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Provider not available")
+    if pid == user["id"]:
+        raise HTTPException(status_code=400, detail="You can't book yourself.")
+    try:
+        starts = datetime.fromisoformat(payload.starts_at.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Pick a valid start date.")
+    if starts < now_utc():
+        raise HTTPException(status_code=400, detail="Pick a date in the future.")
+    day_price = listed_price(float((doc.get("provider") or {}).get("day_rate") or 0), cfg,
+                             user.get("country_code", ""))
+    amount = round(day_price * payload.days, 2)
+    return await open_travel_booking(user, pid, amount, payload.days, iso(starts),
+                                     f"{payload.days}-day service · {short_name(doc.get('full_name', ''))}")
+
+
+@api.post("/travel/quotes/{qid}/accept")
+async def accept_quote(qid: str, user: dict = Depends(get_current_user)):
+    try:
+        q = await db.service_quotes.find_one({"_id": ObjectId(qid), "status": "open"})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid quote id")
+    if not q:
+        raise HTTPException(status_code=404, detail="That quote is no longer open.")
+    req = await db.service_requests.find_one({"_id": ObjectId(q["request_id"])})
+    if not req or req["traveller_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the traveller can accept a quote.")
+    out = await open_travel_booking(user, q["provider_id"], float(q["amount"]), int(req.get("days", 1)),
+                                    req["starts_at"], f"{req['destination']} · {q['provider_name']}",
+                                    q["request_id"])
+    await db.service_quotes.update_one({"_id": q["_id"]}, {"$set": {"status": "accepted",
+                                                                   "booking_id": out["booking_id"]}})
+    await db.service_requests.update_one({"_id": req["_id"]}, {"$set": {"status": "matched"}})
+    return out
+
+
+async def fulfil_travel(order: dict, uid: str):
+    b = await db.travel_bookings.find_one({"_id": ObjectId(order["ref_id"])})
+    if not b or b["traveller_id"] != uid or b["status"] != "pending_payment":
+        return
+    await db.travel_bookings.update_one({"_id": b["_id"]}, {"$set": {
+        "status": "confirmed", "paid_total": round(float(order["total"]), 2), "due_amount": 0,
+        "order_id": str(order["_id"]), "confirmed_at": iso(now_utc())}})
+    await db.payouts.insert_one({
+        "partner_id": b["provider_id"], "booking_id": str(b["_id"]), "kind": "travel",
+        "event_id": "", "event_title": f"Travel service · {b['days']}d from {b['starts_at'][:10]}",
+        "orders": 1, "gross": b["amount"], "fee_percent": b["cut_percent"], "fee": b["platform_fee"],
+        "net": b["provider_net"], "currency": b.get("currency", BASE_CURRENCY),
+        "status": "pending", "created_at": iso(now_utc())})
+    await db.users.update_one({"_id": ObjectId(b["provider_id"])}, {"$inc": {"provider.trips_done": 1}})
+    await notify(b["provider_id"], "You've been booked",
+                 f"A traveller paid for {b['days']} day(s) from {b['starts_at'][:10]}. "
+                 f"Your payout is {fmt_money(b['provider_net'])}.", "order", "/travel/provider")
+    await notify(uid, "Travel service confirmed",
+                 "Your provider has been notified and paid through Buddilio.", "order", "/travel/bookings")
+
+
+@api.get("/travel/bookings")
+async def my_travel_bookings(user: dict = Depends(get_current_user)):
+    rows = await db.travel_bookings.find({"$or": [{"traveller_id": user["id"]},
+                                                  {"provider_id": user["id"]}]}) \
+        .sort("created_at", -1).limit(60).to_list(60)
+    names = await load_many(db.users, [r["traveller_id"] for r in rows] + [r["provider_id"] for r in rows],
+                            {"full_name": 1, "photo": 1})
+    items = []
+    for b in rows:
+        mine_role = "traveller" if b["traveller_id"] == user["id"] else "provider"
+        other = b["provider_id"] if mine_role == "traveller" else b["traveller_id"]
+        items.append({"id": str(b["_id"]), "role": mine_role, "status": b["status"],
+                      "days": b["days"], "amount": b["amount"], "due_amount": b.get("due_amount", 0),
+                      "starts_at": b["starts_at"], "item_name": b.get("item_name", ""),
+                      "provider_net": b["provider_net"] if mine_role == "provider" else 0,
+                      "with_name": short_name((names.get(other) or {}).get("full_name", "Member")),
+                      "created_at": b.get("created_at", "")})
+    return {"items": items}
+
+
+# ---------------- finance: ledger, invoices, receipts, exports ----------------
+# Every rupee in (orders) and out (payouts) lands in one filterable ledger, with a printable invoice for
+# money we collect and a receipt/voucher for money we pass on.
+MONEY_IN_KINDS = {"membership": "Membership", "product": "Store", "event": "Event ticket",
+                  "companion": "Hangout", "wallet": "Wallet top-up", "travel": "Travel service",
+                  "provider_fee": "Provider registration"}
+
+
+def invoice_no(order: dict) -> str:
+    return "INV-" + (order.get("order_no") or str(order["_id"])[-8:].upper())
+
+
+def receipt_no(order: dict) -> str:
+    return "RCP-" + (order.get("order_no") or str(order["_id"])[-8:].upper())
+
+
+async def commission_for(order: dict) -> float:
+    """What Buddilio keeps on this order: the whole thing, unless a payout hands most of it on."""
+    if order["kind"] in ("companion", "travel"):
+        p = await db.payouts.find_one({"booking_id": order.get("ref_id", "")}, {"fee": 1})
+        if p:
+            return round(float(p.get("fee") or 0), 2)
+    if order["kind"] == "event":
+        return 0.0                      # organiser payouts settle event revenue separately
+    if order["kind"] == "wallet":
+        return 0.0                      # credit we still owe the member
+    return round(float(order.get("total") or 0), 2)
+
+
+def ledger_line(order: dict, commission: float, name: str) -> dict:
+    return {"id": str(order["_id"]), "date": order.get("paid_at") or order.get("created_at", ""),
+            "direction": "in", "reference": invoice_no(order), "order_no": order.get("order_no", ""),
+            "kind": order["kind"], "kind_label": MONEY_IN_KINDS.get(order["kind"], order["kind"]),
+            "client": name, "client_id": order.get("user_id", ""), "email": order.get("user_email", ""),
+            "description": order.get("item_name", ""), "gross": round(float(order.get("total") or 0), 2),
+            "tax": round(float(order.get("tax") or 0), 2), "commission": commission,
+            "payout": round(round(float(order.get("total") or 0), 2) - commission, 2),
+            "status": order.get("refund_status") if order.get("refund_status", "none") != "none"
+                      else order.get("payment_status", ""),
+            "gateway": order.get("gateway", ""), "currency": order.get("currency", BASE_CURRENCY)}
+
+
+def payout_line(p: dict, name: str) -> dict:
+    return {"id": str(p["_id"]), "date": p.get("paid_at") or p.get("created_at", ""),
+            "direction": "out", "reference": "PO-" + str(p["_id"])[-8:].upper(),
+            "order_no": "", "kind": p.get("kind", "event"), "kind_label": "Payout",
+            "client": name, "client_id": p.get("partner_id", ""), "email": "",
+            "description": p.get("event_title", ""), "gross": round(float(p.get("gross") or 0), 2),
+            "tax": 0.0, "commission": round(float(p.get("fee") or 0), 2),
+            "payout": round(float(p.get("net") or 0), 2), "status": p.get("status", "pending"),
+            "gateway": "", "currency": p.get("currency", BASE_CURRENCY)}
+
+
+async def ledger_rows(frm: str, to: str, kind: str, direction: str, q: str, status: str) -> list:
+    span: dict[str, Any] = {}
+    if frm:
+        span["$gte"] = frm
+    if to:
+        span["$lte"] = to + "T23:59:59"
+    rows = []
+    if direction in ("", "all", "in"):
+        flt: dict[str, Any] = {"payment_status": "paid"}
+        if span:
+            flt["created_at"] = span
+        if kind and kind in MONEY_IN_KINDS:
+            flt["kind"] = kind
+        if status and status != "all":
+            flt["$or"] = [{"payment_status": status}, {"refund_status": status}]
+        if q:
+            flt["$and"] = [{"$or": [{"user_email": {"$regex": q, "$options": "i"}},
+                                    {"item_name": {"$regex": q, "$options": "i"}},
+                                    {"order_no": {"$regex": q, "$options": "i"}}]}]
+        orders = await db.orders.find(flt).sort("created_at", -1).limit(1000).to_list(1000)
+        names = await load_many(db.users, [o.get("user_id", "") for o in orders], {"full_name": 1})
+        for o in orders:
+            rows.append(ledger_line(o, await commission_for(o),
+                                    (names.get(o.get("user_id", "")) or {}).get("full_name", "Guest")))
+    if direction in ("", "all", "out"):
+        pflt: dict[str, Any] = {}
+        if span:
+            pflt["created_at"] = span
+        if status and status != "all":
+            pflt["status"] = status
+        payouts = await db.payouts.find(pflt).sort("created_at", -1).limit(1000).to_list(1000)
+        pnames = await load_many(db.users, [p.get("partner_id", "") for p in payouts], {"full_name": 1})
+        for p in payouts:
+            name = (pnames.get(p.get("partner_id", "")) or {}).get("full_name", "Partner")
+            ref = "PO-" + str(p["_id"])[-8:].upper()
+            if q and q.lower() not in (name + p.get("event_title", "") + ref).lower():
+                continue
+            rows.append(payout_line(p, name))
+    rows.sort(key=lambda r: r["date"], reverse=True)
+    return rows
+
+
+@api.get("/admin/ledger")
+async def admin_ledger(frm: str = "", to: str = "", kind: str = "", direction: str = "all",
+                       q: str = "", status: str = "", page: int = 1, limit: int = 50,
+                       user: dict = Depends(require_perm("finance:view"))):
+    rows = await ledger_rows(frm, to, kind, direction, q, status)
+    money_in = [r for r in rows if r["direction"] == "in"]
+    paid_out = [r for r in rows if r["direction"] == "out"]
+    totals = {"collected": round(sum(r["gross"] for r in money_in), 2),
+              "commission": round(sum(r["commission"] for r in money_in), 2),
+              "tax": round(sum(r["tax"] for r in money_in), 2),
+              "payouts_pending": round(sum(r["payout"] for r in paid_out if r["status"] == "pending"), 2),
+              "payouts_paid": round(sum(r["payout"] for r in paid_out if r["status"] == "paid"), 2),
+              "entries": len(rows)}
+    start = (page - 1) * limit
+    return {"items": rows[start:start + limit], "total": len(rows), "page": page,
+            "totals": totals, "kinds": MONEY_IN_KINDS, "currency": BASE_CURRENCY,
+            "can_manage": "finance:manage" in perms_of(user)}
+
+
+@api.get("/admin/ledger/export")
+async def export_ledger(frm: str = "", to: str = "", kind: str = "", direction: str = "all",
+                        q: str = "", status: str = "",
+                        user: dict = Depends(require_perm("finance:view"))):
+    """CSV that opens straight in Excel."""
+    rows = await ledger_rows(frm, to, kind, direction, q, status)
+    cols = ["date", "direction", "reference", "order_no", "kind_label", "client", "email",
+            "description", "currency", "gross", "tax", "commission", "payout", "status", "gateway"]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        writer.writerow({c: r.get(c, "") for c in cols})
+    await audit(user, "ledger.export", "ledger", "", {"rows": len(rows), "from": frm, "to": to})
+    stamp = now_utc().strftime("%Y%m%d-%H%M")
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="buddilio-ledger-{stamp}.csv"'})
+
+
+async def invoice_doc(order: dict) -> dict:
+    buyer = None
+    if order.get("user_id"):
+        try:
+            buyer = await db.users.find_one({"_id": ObjectId(order["user_id"])},
+                                            {"full_name": 1, "email": 1, "city": 1, "country": 1})
+        except Exception:
+            buyer = None
+    paid = order.get("payment_status") == "paid"
+    tpl = template_for(order["kind"])
+    return {"invoice_no": invoice_no(order), "receipt_no": receipt_no(order) if paid else "",
+            "order_no": order.get("order_no", ""), "issued_at": order.get("created_at", ""),
+            "paid_at": order.get("paid_at", ""), "status": order.get("payment_status", ""),
+            "refund_status": order.get("refund_status", "none"),
+            "kind": order["kind"], "kind_label": MONEY_IN_KINDS.get(order["kind"], order["kind"]),
+            "template": tpl["heading"], "line_label": tpl["line"], "note": tpl["note"],
+            "seller": {"name": "Buddilio", "email": os.environ.get("SUPPORT_EMAIL", "hello@buddilio.com"),
+                       "site": "buddilio.com"},
+            "buyer": {"name": (buyer or {}).get("full_name", "Guest"),
+                      "email": order.get("user_email", ""), "city": (buyer or {}).get("city", ""),
+                      "country": (buyer or {}).get("country", "")},
+            "lines": [{"description": order.get("item_name", ""), "quantity": order.get("quantity", 1),
+                       "amount": round(float(order.get("subtotal") or 0), 2)}],
+            "discount": round(float(order.get("discount") or 0), 2),
+            "credit_applied": round(float(order.get("credit_applied") or 0), 2),
+            "tax": round(float(order.get("tax") or 0), 2),
+            "tax_label": order.get("tax_label", "Tax"), "tax_percent": order.get("tax_percent", 0),
+            "total": round(float(order.get("total") or 0), 2),
+            "commission": await commission_for(order),
+            "currency": order.get("currency", BASE_CURRENCY), "gateway": order.get("gateway", ""),
+            "transaction_id": order.get("transaction_id", "")}
+
+
+@api.get("/orders/{oid}/invoice")
+async def order_invoice(oid: str, user: dict = Depends(get_current_user)):
+    """Buyers see their own invoice/receipt; finance staff can pull anyone's."""
+    order = await invoice_order(oid, user)
+    return await invoice_doc(order)
+
+
+@api.get("/orders/{oid}/invoice.pdf")
+async def order_invoice_pdf(oid: str, user: dict = Depends(get_current_user)):
+    order = await invoice_order(oid, user)
+    inv = await invoice_doc(order)
+    conf = await currency_config()
+    symbol = (conf.get(inv["currency"]) or {}).get("symbol", "")
+    pdf = invoice_pdf(inv, symbol)
+    name = (inv["receipt_no"] or inv["invoice_no"]) + ".pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+async def invoice_order(oid: str, user: dict) -> dict:
+    try:
+        order = await db.orders.find_one({"_id": ObjectId(oid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid order id")
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("user_id") != user["id"] and "finance:view" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="That invoice isn't yours.")
+    return order
+
+
+@api.get("/me/ledger")
+async def my_ledger(kind: str = "", user: dict = Depends(get_current_user)):
+    """Everything a member paid us, everything we owe them, and the invoice behind each line."""
+    flt: dict[str, Any] = {"user_id": user["id"], "payment_status": {"$in": ["paid", "pending", "failed"]}}
+    if kind and kind in MONEY_IN_KINDS:
+        flt["kind"] = kind
+    orders = await db.orders.find(flt).sort("created_at", -1).limit(200).to_list(200)
+    payments = [{"id": str(o["_id"]), "date": o.get("paid_at") or o.get("created_at", ""),
+                 "reference": invoice_no(o), "receipt": receipt_no(o) if o.get("payment_status") == "paid" else "",
+                 "kind": o["kind"], "kind_label": MONEY_IN_KINDS.get(o["kind"], o["kind"]),
+                 "template": template_for(o["kind"])["heading"],
+                 "description": o.get("item_name", ""), "amount": round(float(o.get("total") or 0), 2),
+                 "tax": round(float(o.get("tax") or 0), 2),
+                 "status": o.get("refund_status") if o.get("refund_status", "none") != "none"
+                           else o.get("payment_status", ""),
+                 "currency": o.get("currency", BASE_CURRENCY)} for o in orders]
+    credits = await db.credits.find({"user_id": user["id"]}).sort("created_at", -1).limit(100).to_list(100)
+    payouts = await db.payouts.find({"partner_id": user["id"]}).sort("created_at", -1).limit(100).to_list(100)
+    return {"payments": payments,
+            "credits": [{"date": c.get("created_at", ""), "amount": round(float(c["amount"]), 2),
+                         "reason": c.get("reason", ""), "type": c.get("type", "")} for c in credits],
+            "earnings": [{"id": str(p["_id"]), "date": p.get("created_at", ""),
+                          "reference": "PO-" + str(p["_id"])[-8:].upper(),
+                          "description": p.get("event_title", ""), "kind": p.get("kind", "event"),
+                          "gross": round(float(p.get("gross") or 0), 2),
+                          "fee": round(float(p.get("fee") or 0), 2),
+                          "net": round(float(p.get("net") or 0), 2), "status": p.get("status", "pending"),
+                          "currency": p.get("currency", BASE_CURRENCY)} for p in payouts],
+            "totals": {"paid": round(sum(p["amount"] for p in payments if p["status"] == "paid"), 2),
+                       "credit_balance": await credit_balance(user["id"]),
+                       "earned": round(sum(float(p.get("net") or 0) for p in payouts), 2),
+                       "earned_pending": round(sum(float(p.get("net") or 0) for p in payouts
+                                                   if p.get("status") == "pending"), 2)},
+            "kinds": MONEY_IN_KINDS, "currency": BASE_CURRENCY}
 
 
 app.include_router(api)

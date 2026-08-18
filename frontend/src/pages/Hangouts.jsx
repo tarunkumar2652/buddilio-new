@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Clock, Lock, MapPin, ShieldCheck, Search, Sparkles } from "lucide-react";
+import { Clock, Lock, MapPin, ShieldCheck, Search, Sparkles, BadgeCheck } from "lucide-react";
 import { api, errMsg, fileUrl, fmtDate, money } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
+import { RichText, RichHtml } from "@/components/RichText";
 
 const cls = "mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm";
 const L = ({ label, children }) => (
@@ -104,6 +105,11 @@ export function Hangouts() {
               <p className="mt-3 flex items-center gap-3 text-[11px] font-semibold text-slate-400">
                 <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />{c.min_hours}–{c.max_hours}h</span>
                 {c.rating_count > 0 && <span data-testid={`companion-rating-${c.id}`}>★ {c.rating} ({c.rating_count})</span>}
+                {c.verified && (
+                  <span className="inline-flex items-center gap-1 text-emerald-700" data-testid={`companion-verified-${c.id}`}>
+                    <BadgeCheck className="h-3 w-3" />ID verified
+                  </span>
+                )}
                 {c.packages?.length > 0 && <span>{c.packages.length} package{c.packages.length === 1 ? "" : "s"}</span>}
                 {c.hangouts > 0 && <span>{c.hangouts} hangouts</span>}
               </p>
@@ -161,13 +167,19 @@ export function CompanionDetail() {
         <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-bold">{c.name}{c.age ? `, ${c.age}` : ""}</h1>
           <p className="mt-1 text-sm text-slate-500">{c.city || "Global"} · {c.hangouts} hangouts{c.rating_count ? ` · ★ ${c.rating} (${c.rating_count})` : ""}{c.languages?.length ? ` · ${c.languages.join(", ")}` : ""}</p>
+          {c.verified && (
+            <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700"
+              data-testid="companion-detail-verified">
+              <BadgeCheck className="h-3.5 w-3.5" />Government ID verified by Buddilio
+            </p>
+          )}
           <p className="mt-3 text-base font-semibold text-slate-500" data-testid="companion-rate">
             Rate stays private until they accept your request
           </p>
         </div>
       </div>
       {c.headline && <p className="mt-5 text-lg font-semibold">{c.headline}</p>}
-      {c.about && <p className="mt-3 whitespace-pre-line text-slate-600 leading-relaxed">{c.about}</p>}
+      {c.about && <RichHtml html={c.about} className="mt-3 text-slate-600 leading-relaxed" testid="companion-about" />}
       <Terms text={c.terms} />
 
       <form onSubmit={book} className="mt-8 space-y-4 rounded-2xl border border-slate-200 bg-white p-6" data-testid="booking-form">
@@ -415,8 +427,8 @@ export function HostHangouts() {
         </div>
         <L label="Headline"><input value={f.headline} data-testid="host-headline"
           onChange={(e) => setF({ ...f, headline: e.target.value })} className={cls} /></L>
-        <L label="About you"><textarea rows={5} value={f.about} data-testid="host-about"
-          onChange={(e) => setF({ ...f, about: e.target.value })} className={cls} /></L>
+        <L label="About you"><RichText value={f.about} rows={5} testid="host-about"
+          onChange={(html) => setF({ ...f, about: html })} /></L>
         <div className="grid gap-3 sm:grid-cols-2">
           <L label="City"><input value={f.city} data-testid="host-city"
             onChange={(e) => setF({ ...f, city: e.target.value })} className={cls} /></L>

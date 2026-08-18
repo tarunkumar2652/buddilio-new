@@ -4,6 +4,7 @@ import { api, money } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { EventCard, PersonCard } from "@/components/Cards";
 import { AiPicks } from "@/components/AiPicks";
+import { MyLedger, downloadInvoicePdf } from "@/components/MyLedger";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { Compass, Ticket, MessageCircle, Bell, Heart, CalendarDays, Star, Gift, Sparkles } from "lucide-react";
 
@@ -85,6 +86,17 @@ export default function Dashboard() {
           </span>
         </div>
       </Link>
+
+      <section className="mt-14" data-testid="dash-ledger-section">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-2xl font-bold">Payments &amp; invoices</h2>
+            <p className="mt-1 text-sm text-slate-500">Download the invoice or receipt for anything you've paid for.</p>
+          </div>
+          <Link to="/ledger" data-testid="dash-ledger-link" className="text-sm font-bold border-b-2 border-slate-900 pb-0.5">Full ledger</Link>
+        </div>
+        <div className="mt-5"><MyLedger compact /></div>
+      </section>
 
       <AiPicks />
 
@@ -185,6 +197,11 @@ export function Orders() {
               <div className="mt-1 flex gap-1.5 justify-end">
                 <Badge tone={o.payment_status === "paid" ? "green" : o.payment_status === "failed" ? "red" : "amber"}>{o.payment_status}</Badge>
                 {o.refund_status !== "none" && <Badge tone="red">{o.refund_status}</Badge>}
+              </div>
+              <div className="mt-2 flex gap-3 justify-end">
+                <Link to={`/invoice/${o.id}`} data-testid={`order-invoice-${o.id}`} className="text-xs font-bold hover:underline">View invoice</Link>
+                <button onClick={() => downloadInvoicePdf(o.id, o.order_no)} data-testid={`order-invoice-pdf-${o.id}`}
+                  className="text-xs font-bold text-pink-700 hover:underline">{o.payment_status === "paid" ? "Receipt PDF" : "Invoice PDF"}</button>
               </div>
             </div>
           </div>

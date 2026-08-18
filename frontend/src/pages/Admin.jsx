@@ -10,7 +10,11 @@ import { Verifications } from "@/components/Verifications";
 import { PhotoModeration } from "@/components/PhotoModeration";
 import { Companions } from "@/components/Companions";
 import { Places } from "@/components/Places";
+import { RichText } from "@/components/RichText";
+import { RevealPii, TempPassword } from "@/components/RevealPii";
 import { IdVerifications } from "@/components/IdVerifications";
+import { ProvidersAdmin } from "@/components/ProvidersAdmin";
+import { Ledger } from "@/components/Ledger";
 import { Team } from "@/components/Team";
 import { Pages, SiteContent, CityGuides } from "@/components/ContentStudio";
 import { EmailTemplates } from "@/components/EmailTemplates";
@@ -26,7 +30,8 @@ const NAV = [
   ["payouts", "Payouts", "payouts:view"], ["coupons", "Coupons", "finance:manage"],
   ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
   ["photos", "Photo wall", "moderation:manage"], ["companions", "Hangouts", "members:manage"],
-  ["idchecks", "ID checks", "verification:manage"], ["places", "Countries & cities", "content:manage"],
+  ["idchecks", "ID checks", "verification:manage"], ["providers", "Travel crew", "verification:manage"],
+  ["ledger", "Ledger", "finance:view"], ["places", "Countries & cities", "content:manage"],
   ["content", "Content", "content:manage"],
   ["pages", "Pages", "content:manage"], ["sections", "Site sections", "content:manage"],
   ["guides", "City guides", "content:manage"], ["emails", "Emails", "content:manage"],
@@ -175,6 +180,8 @@ export default function Admin() {
         {active === "photos" && <PhotoModeration />}
         {active === "companions" && <Companions />}
         {active === "idchecks" && <IdVerifications />}
+        {active === "providers" && <ProvidersAdmin />}
+        {active === "ledger" && <Ledger />}
         {active === "places" && <Places />}
         {active === "content" && <Content />}
         {active === "settings" && <Settings />}
@@ -300,7 +307,7 @@ function Users({ role }) {
               <tr key={u.id} data-testid={`admin-user-row-${u.id}`}>
                 <td className="px-4 py-3">
                   <Link to={`/u/${u.id}`} className="font-semibold hover:underline">{u.full_name}</Link>
-                  <p className="text-xs text-slate-500">{u.email}</p>
+                  <RevealPii user={u} canReveal={!!data.can_reveal} />
                 </td>
                 <td className="px-4 py-3">{u.city}{u.org_name ? ` · ${u.org_name}` : ""}</td>
                 <td className="px-4 py-3"><Badge tone={statusTone(u.status)}>{u.status}</Badge></td>
@@ -313,6 +320,7 @@ function Users({ role }) {
                     {u.status !== "banned" && <button onClick={() => act(u, { status: "banned" }, "Member banned")} data-testid={`ban-${u.id}`} className="rounded-full border border-red-200 text-red-600 px-3 py-1.5 text-[11px] font-bold">Ban</button>}
                     {!u.verified && <button onClick={() => act(u, { verified: true }, "Member verified")} data-testid={`verify-${u.id}`} className="rounded-full bg-slate-900 text-white px-3 py-1.5 text-[11px] font-bold">Verify</button>}
                     <button onClick={() => setForm(u)} data-testid={`edit-profile-${u.id}`} className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold">Edit</button>
+                    {data.can_reveal && <TempPassword user={u} />}
                     {u.status === "deleted"
                       ? <button onClick={() => restore(u)} data-testid={`restore-${u.id}`} className="rounded-full border border-emerald-200 text-emerald-700 px-3 py-1.5 text-[11px] font-bold">Restore</button>
                       : <button onClick={() => remove(u)} data-testid={`delete-profile-${u.id}`} className="rounded-full border border-red-200 text-red-600 px-3 py-1.5 text-[11px] font-bold">Delete</button>}
@@ -713,8 +721,8 @@ function Content() {
           <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
             <Input label="Title" data-testid="cms-title" value={sel.title} onChange={(e) => setSel({ ...sel, title: e.target.value })} />
             <label className="block"><span className="text-xs font-bold text-slate-600">Content</span>
-              <textarea rows={12} data-testid="cms-content" value={sel.content} onChange={(e) => setSel({ ...sel, content: e.target.value })}
-                className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" /></label>
+              <RichText value={sel.content} rows={12} testid="cms-content"
+                onChange={(html) => setSel({ ...sel, content: html })} /></label>
             <Input label="SEO title" data-testid="cms-seo-title" value={sel.seo_title || ""} onChange={(e) => setSel({ ...sel, seo_title: e.target.value })} />
             <Input label="SEO description" data-testid="cms-seo-desc" value={sel.seo_description || ""} onChange={(e) => setSel({ ...sel, seo_description: e.target.value })} />
             <button onClick={save} data-testid="cms-save" className="rounded-full bg-slate-900 text-white px-6 py-2.5 text-sm font-bold">Save page</button>

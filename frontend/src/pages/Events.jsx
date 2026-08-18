@@ -10,6 +10,7 @@ import { CompanionMatches } from "@/components/CompanionMatches";
 import { PhotoWall } from "@/components/PhotoWall";
 import { RecapCard } from "@/components/RecapCard";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
+import { RichHtml } from "@/components/RichText";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert, BadgeCheck } from "lucide-react";
 export function Events() {
   const { fmt } = useCurrency();
@@ -166,7 +167,7 @@ export function EventDetail() {
 
   return (
     <div data-testid="event-detail-page">
-      <SEO title={ev.title} description={ev.description?.slice(0, 155)} />
+      <SEO title={ev.title} description={(ev.description || "").replace(/<[^>]*>/g, " ").slice(0, 155)} />
       <div className="relative h-[45vh] min-h-[300px] bg-slate-900">
         <img src={fileUrl(ev.cover_image)} alt={ev.title} className="absolute inset-0 h-full w-full object-cover opacity-70" />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
@@ -214,7 +215,7 @@ export function EventDetail() {
 
           <div>
             <h2 className="text-2xl font-bold">About this experience</h2>
-            <p className="mt-4 text-slate-600 leading-relaxed whitespace-pre-line">{ev.description}</p>
+            <RichHtml html={ev.description} className="mt-4 text-slate-600 leading-relaxed" testid="event-description-body" />
           </div>
 
           {ev.gallery?.length > 0 && (
@@ -228,7 +229,7 @@ export function EventDetail() {
 
           <div className="grid sm:grid-cols-2 gap-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-6">
-              <p className="overline">Rules</p><p className="mt-2 text-sm text-slate-600">{ev.rules}</p>
+              <p className="overline">Rules</p><RichHtml html={ev.rules} className="mt-2 text-sm text-slate-600" testid="event-rules-body" />
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-6">
               <p className="overline">Cancellation policy</p><p className="mt-2 text-sm text-slate-600">{ev.cancellation_policy}</p>

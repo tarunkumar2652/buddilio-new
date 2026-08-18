@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Mail, Save, RotateCcw, Send } from "lucide-react";
 import { api, errMsg } from "@/lib/api";
 import { Spinner, Badge, Empty } from "@/components/Shared";
+import { RichText } from "@/components/RichText";
 
 const cls = "mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm";
 const L = ({ label, children, hint }) => (
@@ -91,10 +92,9 @@ export const EmailTemplates = () => {
               <input value={sel.title} data-testid="email-title"
                 onChange={(e) => setSel({ ...sel, title: e.target.value })} className={cls} />
             </L>
-            <L label="Body" hint="Basic HTML is allowed: <p>, <b>, <br/>, links and lists.">
-              <textarea rows={12} value={sel.body} data-testid="email-body"
-                onChange={(e) => setSel({ ...sel, body: e.target.value })}
-                className={`${cls} font-mono text-xs`} />
+            <L label="Body" hint="Use the toolbar to format — bold, headings, lists and links.">
+              <RichText value={sel.body} rows={10} testid="email-body"
+                onChange={(html) => setSel({ ...sel, body: html })} />
             </L>
             <div className="grid gap-3 sm:grid-cols-2">
               <L label="Button label"><input value={sel.cta_label} data-testid="email-cta-label"

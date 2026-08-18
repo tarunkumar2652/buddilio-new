@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api, errMsg, money, fmtDate, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { ImageUpload } from "@/components/ImageUpload";
+import { RichText } from "@/components/RichText";
 import { GalleryUpload } from "@/components/GalleryUpload";
 import { CopyHelper } from "@/components/CopyHelper";
 import { Stars } from "@/components/Cards";
@@ -147,7 +148,9 @@ export default function PartnerDashboard() {
           <ImageUpload value={f.cover_image} onChange={(url) => setF({ ...f, cover_image: url })} label="Cover image" testid="event-cover-upload" aspect="wide" />
           <GalleryUpload value={f.gallery} onChange={(gallery) => setF({ ...f, gallery })} testid="event-gallery-upload" />
           <label className="block"><span className="text-xs font-bold text-slate-600">Description</span>
-            <textarea data-testid="event-description" rows={4} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })}
+            <textarea data-testid="event-description-json" hidden value={f.description} readOnly />
+            <RichText value={f.description} rows={5} testid="event-description"
+              onChange={(html) => setF({ ...f, description: html })} />
               className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
           <div className="grid sm:grid-cols-2 gap-4">
             <label className="block"><span className="text-xs font-bold text-slate-600">Category</span>
@@ -197,11 +200,11 @@ export default function PartnerDashboard() {
               </select></label>
           </div>
           <label className="block"><span className="text-xs font-bold text-slate-600">Rules / terms</span>
-            <textarea data-testid="event-rules" rows={2} value={f.rules} onChange={(e) => setF({ ...f, rules: e.target.value })}
-              className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
+            <RichText value={f.rules} rows={3} testid="event-rules"
+              onChange={(html) => setF({ ...f, rules: html })} /></label>
           <label className="block"><span className="text-xs font-bold text-slate-600">Cancellation policy</span>
-            <textarea data-testid="event-cancellation" rows={2} value={f.cancellation_policy} onChange={(e) => setF({ ...f, cancellation_policy: e.target.value })}
-              className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" /></label>
+            <RichText value={f.cancellation_policy} rows={3} testid="event-cancellation"
+              onChange={(html) => setF({ ...f, cancellation_policy: html })} /></label>
           <div className="flex gap-3 pt-2">
             <button onClick={() => save(false)} data-testid="save-draft-btn" className="rounded-full border border-slate-200 px-6 py-3 text-sm font-bold">Save draft</button>
             <button onClick={() => save(true)} data-testid="submit-review-btn" className="rounded-full bg-slate-900 text-white px-6 py-3 text-sm font-bold inline-flex items-center gap-2"><Plus className="h-4 w-4" />Submit for review</button>

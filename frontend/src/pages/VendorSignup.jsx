@@ -6,6 +6,7 @@ import { api, errMsg, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { uploadFile, prettySize } from "@/lib/uploads";
 import { ImageUpload } from "@/components/ImageUpload";
+import { RichText } from "@/components/RichText";
 import { Spinner, SEO } from "@/components/Shared";
 
 const Field = ({ label, hint, ...p }) => (
@@ -124,9 +125,9 @@ export default function VendorSignup() {
             onChange={(e) => setF({ ...f, password: e.target.value })} hint="At least 8 characters." />
           <label className="block">
             <span className="text-xs font-bold text-slate-600">About your events</span>
-            <textarea rows={3} data-testid="vs-bio" value={f.bio} onChange={(e) => setF({ ...f, bio: e.target.value })}
+            <RichText value={f.bio} rows={3} testid="vs-bio"
               placeholder="What kind of nights do you run, and what makes them yours?"
-              className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-magenta" />
+              onChange={(html) => setF({ ...f, bio: html })} />
           </label>
           <ImageUpload value={f.photo} onChange={(url) => setF({ ...f, photo: url })} label="Logo or photo" testid="vs-photo" />
           <button disabled={busy} data-testid="vs-submit"

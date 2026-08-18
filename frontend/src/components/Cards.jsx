@@ -65,13 +65,21 @@ export const PersonCard = ({ p }) => (
       )}
       <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
       {p.membership && <span className="absolute top-3 right-3 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-bold">PREMIUM</span>}
+      {p.verified && (
+        <span className="absolute top-3 left-3 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white"
+          data-testid={`person-verified-${p.id}`}>
+          <BadgeCheck className="h-3 w-3" />ID verified
+        </span>
+      )}
       <div className="absolute bottom-0 p-4 text-white">
         <p className="font-display font-semibold text-lg leading-tight">{p.full_name}{p.age ? `, ${p.age}` : ""}</p>
         <p className="text-xs opacity-85">{p.city}</p>
       </div>
     </div>
     <div className="p-4">
-      <p className="text-sm text-slate-600 line-clamp-2 min-h-[40px]">{p.bio || "Buddilio member"}</p>
+      <p className="text-sm text-slate-600 line-clamp-2 min-h-[40px]">
+        {(p.bio || "Buddilio member").replace(/<[^>]*>/g, " ").trim()}
+      </p>
       <div className="mt-3 flex flex-wrap gap-1.5">
         {(p.interests || []).slice(0, 3).map((i) => <Badge key={i}>{i}</Badge>)}
       </div>

@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { X } from "lucide-react";
 import { api, errMsg } from "@/lib/api";
 import { ImageUpload } from "@/components/ImageUpload";
+import { RichText } from "@/components/RichText";
 
 const cls = "mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm";
 const L = ({ label, children }) => (
@@ -155,10 +156,10 @@ export const EventForm = ({ event, onClose, onSaved }) => {
             {["published", "draft", "submitted", "rejected", "completed"].map((s) => <option key={s} value={s}>{s}</option>)}
           </select></L>
         </div>
-        <L label="Description"><textarea rows={5} value={f.description} data-testid="event-description"
-          onChange={(e) => setF({ ...f, description: e.target.value })} className={cls} /></L>
-        <L label="Rules"><textarea rows={3} value={f.rules || ""} data-testid="event-rules"
-          onChange={(e) => setF({ ...f, rules: e.target.value })} className={cls} /></L>
+        <L label="Description"><RichText value={f.description} rows={5} testid="event-description"
+          onChange={(html) => setF({ ...f, description: html })} /></L>
+        <L label="Rules"><RichText value={f.rules || ""} rows={3} testid="event-rules"
+          onChange={(html) => setF({ ...f, rules: html })} /></L>
         <ImageUpload value={f.cover_image} onChange={(url) => setF({ ...f, cover_image: url })}
           label="Cover image" testid="event-cover" aspect="wide" />
         <label className="flex items-center gap-2 text-sm font-semibold">

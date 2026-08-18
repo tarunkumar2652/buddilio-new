@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Plus, Trash2, ArrowUp, ArrowDown, Save, RotateCcw } from "lucide-react";
 import { api, errMsg } from "@/lib/api";
 import { ImageUpload } from "@/components/ImageUpload";
+import { RichText } from "@/components/RichText";
 import { Spinner, Empty, Badge } from "@/components/Shared";
 
 const fieldCls = "mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm";
@@ -38,10 +39,9 @@ const BlockEditor = ({ block, onChange, onRemove, onMove, index, types }) => (
       </L>
     )}
     {["text", "richtext", "quote", "cta", "faq", "html"].includes(block.type) && (
-      <L label={block.type === "richtext" || block.type === "html" ? "Rich text (HTML allowed)" : "Text"}>
-        <textarea rows={block.type === "richtext" || block.type === "html" ? 8 : 4} value={block.text}
-          data-testid={`block-text-${index}`} onChange={(e) => onChange({ ...block, text: e.target.value })}
-          className={fieldCls} />
+      <L label="Text — use the toolbar to format">
+        <RichText value={block.text} rows={block.type === "richtext" || block.type === "html" ? 8 : 4}
+          testid={`block-text-${index}`} onChange={(html) => onChange({ ...block, text: html })} />
       </L>
     )}
     {block.type === "image" && (
@@ -150,8 +150,8 @@ export const Pages = () => {
             </div>
 
             <L label="Intro text (used when there are no blocks)">
-              <textarea rows={5} value={sel.content} data-testid="page-content"
-                onChange={(e) => setSel({ ...sel, content: e.target.value })} className={fieldCls} />
+              <RichText value={sel.content} rows={5} testid="page-content"
+                onChange={(html) => setSel({ ...sel, content: html })} />
             </L>
 
             <div>

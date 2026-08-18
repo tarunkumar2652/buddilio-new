@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 31 — invoice PDF + per-kind templates + member ledger tested end-to-end. Backend suite /app/backend/tests/test_iteration31_invoice_pdf_ledger.py — 9/9 PASS covering: GET /api/me/ledger shape (payments/credits/earnings/totals/kinds/currency), member with orders returns template+kind_label populated, member with zero/few orders (arjun.sethi) returns 200 with empty payments (no 500), GET /api/orders/{oid}/invoice returns per-kind template + note matching TEMPLATES for every distinct kind in aarav.mehta's ledger (required kinds membership/product/event/wallet all present), GET /api/orders/{oid}/invoice.pdf returns Content-Type application/pdf with %PDF magic bytes and Content-Disposition filename RCP-<no>.pdf for paid orders / INV-<no>.pdf for pending, 403 when tara.joshi requests aarav's invoice (both JSON and PDF), admin@buddilio.com pulls any member's invoice + PDF via finance:view perm, invalid ObjectId → 400 and non-existent id → 404. Frontend spot-check (1440x900) as aarav.mehta: /ledger renders my-ledger-page + my-ledger + all 4 total cards (my-ledger-paid=₹9,440, credit=₹0, earned=₹0, earned-pending=₹0) + my-ledger-kind filter + 200 my-ledger-row-* rows each with my-ledger-view-<id> link and my-ledger-pdf-<id> button; clicking pdf button downloads INV-BUDF7366DB9.pdf (2709 bytes, valid %PDF). Clicking View navigates to /invoice/<id> which shows invoice-template='Membership invoice', invoice-number='INV-BUDF7366DB9', invoice-total=₹5,444, invoice-note with the correct membership footnote, invoice-download-pdf + invoice-print buttons both present and download button emits a real PDF. Dashboard shows dash-ledger-section wrapping the compact MyLedger with exactly 5 rows and my-ledger-see-all link that navigates to /ledger. Admin ledger tab (admin@buddilio.com → Ledger): 47 ledger-invoice-pdf-<id> buttons + 47 Invoice links + Export to Excel button all visible. No console errors observed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/ledger table", "issues": ["Row currencies mix ₹ and $ signs because payments use their order.currency for amount, while total-paid card sums across all currencies in ₹. Not a functional bug (per-row currency is correct) but visually the summed total may not equal the sum of visible row amounts. Consider normalising per user's base currency or showing 'mixed currencies' hint."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration31_invoice_pdf_ledger.py",
+    "/app/test_reports/pytest/iteration31.xml"
+  ],
+  "action_items": [
+    "Optional (design): /ledger total-paid card sums across mixed currencies (₹9,440) while some rows show $ amounts. Consider labelling totals as base-currency only or converting per row for display consistency.",
+    "Optional (naming): review request refers to 'CSV export' on admin Ledger tab; UI button says 'Export to Excel' (still calls the same endpoint) — clarify copy if needed."
+  ],
+  "critical_code_review_comments": [
+    "backend/server.py:7096 invoice_order authorization uses `order.get('user_id') != user['id']` — safe since user_id is always a str; but if any legacy order stored ObjectId user_id (pre-refactor rows) the equality would silently fail-open for owner match and always fall through to the finance:view branch (member sees 403 on their own order). Worth a spot check.",
+    "backend/server.py:7115 my_ledger includes payment_status in [paid, pending, failed] but sums totals['paid'] using `p['status'] == 'paid'` where status may have been overwritten to a refund_status string (line 7121). A refunded-then-paid row would drop out of the total. Consider tracking paid vs refunded separately.",
+    "backend/invoices.py:76 uses inv['seller']['name'] etc. without defensive .get — if invoice_doc ever returns a partial buyer/seller dict the PDF renderer will 500 rather than degrade gracefully.",
+    "frontend/src/components/MyLedger.jsx: downloadInvoicePdf swallows non-blob errors (axios error handler runs errMsg(e) but if responseType blob returns a JSON error body it may show '[object Blob]'; consider blob→text fallback for {detail} messages).",
+    "frontend/src/components/MyLedger.jsx line 92: uses `p.receipt || p.reference` as filename; when reference contains slashes or bad chars nothing sanitises it. Low priority (invoice_no format is safe today)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration31_invoice_pdf_ledger.py (new — 9 tests)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% of listed testids verified (/ledger + /invoice/<id> + dashboard dash-ledger-section + admin ledger-invoice-pdf-*)"},
+  "test_credentials": "aarav.mehta@example.com/User@123 (member with orders), tara.joshi@example.com/User@123 (403 test), arjun.sethi@example.com/User@123 (no-orders regression), admin@buddilio.com/Admin@123 (finance:view + Admin Ledger tab)",
+  "seed_data_creation": "None. No data was created or mutated. Backend tests are all read-only GETs; no cleanup required.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && pytest tests/test_iteration31_invoice_pdf_ledger.py -n 0 -v . All 9 tests are read-only against seeded orders belonging to aarav.mehta@example.com. Ledger UI testids follow pattern my-ledger-{paid,credit,earned,earned-pending,kind,payments,see-all}, my-ledger-row-<oid>, my-ledger-view-<oid>, my-ledger-pdf-<oid>. Invoice page testids: invoice-page, invoice-template, invoice-number, invoice-total, invoice-note, invoice-download-pdf, invoice-print. Admin ledger testids: ledger-invoice-<id> + ledger-invoice-pdf-<id>. Frontend token key is 'bud_token' in localStorage.",
+  "rca of the issue": "N/A — no bugs found. All acceptance criteria in review request are met."
+}

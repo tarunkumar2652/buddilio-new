@@ -41,8 +41,14 @@ export const IdVerification = () => {
     try {
       const { data: res } = await api.put("/me/verification", { doc_type: docType, documents: files, address });
       setData((d) => ({ ...d, submission: res.submission }));
+      setEditing(false);
       toast.success("Sent for review — usually within a day.");
     } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const pickType = (value) => {
+    setDocType(value);
+    api.post("/me/verification/start", { doc_type: value }).catch(() => {});
   };
 
   if (!data) return null;
@@ -64,7 +70,7 @@ export const IdVerification = () => {
       {status !== "verified" || editing ? (
         <div className="mt-5 space-y-4">
           <label className="block"><span className="text-xs font-bold text-slate-600">Document type</span>
-            <select value={docType} onChange={(e) => setDocType(e.target.value)} data-testid="id-doc-type"
+            <select value={docType} onChange={(e) => pickType(e.target.value)} data-testid="id-doc-type"
               className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
               {data.types.map((t) => <option key={t.key} value={t.key}>{t.label} · proves {t.proves}</option>)}
             </select></label>

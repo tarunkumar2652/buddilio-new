@@ -25,9 +25,11 @@ const NAV_USER = [
   { to: "/events", label: "Events" },
   { to: "/hosts", label: "Organisers" },
   { to: "/hangouts", label: "Hangouts" },
+  { to: "/travel", label: "Solo travel" },
   { to: "/messages", label: "Messages" },
   { to: "/membership", label: "Membership" },
   { to: "/orders", label: "Orders" },
+  { to: "/ledger", label: "Payments" },
   { to: "/wallet", label: "Wallet" },
 ];
 
