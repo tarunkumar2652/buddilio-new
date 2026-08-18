@@ -30,6 +30,7 @@ from emailer import send_email, wrap
 from realtime import hub
 from push import push_to, push_enabled, vapid_public_key
 from storage import init_storage, put_object, get_object, MIME_TYPES, ALL_MIME_TYPES, DOC_MIME_TYPES, APP_NAME
+from geo import COUNTRY_SEED, EXTRA_CURRENCIES, ID_DOC_TYPES
 from city_guides import guide_for
 import ai
 
@@ -237,38 +238,28 @@ DEFAULT_CURRENCIES = {
     "AUD": {"rate": 0.018, "symbol": "A$", "label": "Australian Dollar", "stripe_min": 50},
     "THB": {"rate": 0.39, "symbol": "฿", "label": "Thai Baht", "stripe_min": 1000},
     "JPY": {"rate": 1.8, "symbol": "¥", "label": "Japanese Yen", "stripe_min": 50},
+    **EXTRA_CURRENCIES,
 }
 ZERO_DECIMAL = {"JPY", "KRW"}
 
-# Buddilio operates city by city. Each country carries its own currency and tax treatment.
-COUNTRIES = [
-    {"code": "IN", "name": "India", "currency": "INR", "tax_percent": 18, "tax_label": "GST",
-     "emergency": "112", "cities": ["Delhi NCR", "Gurugram", "Noida", "Mumbai", "Bengaluru", "Hyderabad", "Pune", "Goa"]},
-    {"code": "AE", "name": "United Arab Emirates", "currency": "AED", "tax_percent": 5, "tax_label": "VAT",
-     "emergency": "999", "cities": ["Dubai", "Abu Dhabi"]},
-    {"code": "SG", "name": "Singapore", "currency": "SGD", "tax_percent": 9, "tax_label": "GST",
-     "emergency": "999", "cities": ["Singapore"]},
-    {"code": "GB", "name": "United Kingdom", "currency": "GBP", "tax_percent": 20, "tax_label": "VAT",
-     "emergency": "999", "cities": ["London", "Manchester"]},
-    {"code": "US", "name": "United States", "currency": "USD", "tax_percent": 8.875, "tax_label": "Sales tax",
-     "emergency": "911", "cities": ["New York", "Los Angeles", "Miami", "Austin"]},
-    {"code": "CA", "name": "Canada", "currency": "CAD", "tax_percent": 13, "tax_label": "HST",
-     "emergency": "911", "cities": ["Toronto", "Vancouver"]},
-    {"code": "AU", "name": "Australia", "currency": "AUD", "tax_percent": 10, "tax_label": "GST",
-     "emergency": "000", "cities": ["Sydney", "Melbourne"]},
-    {"code": "DE", "name": "Germany", "currency": "EUR", "tax_percent": 19, "tax_label": "VAT",
-     "emergency": "112", "cities": ["Berlin"]},
-    {"code": "ES", "name": "Spain", "currency": "EUR", "tax_percent": 21, "tax_label": "VAT",
-     "emergency": "112", "cities": ["Barcelona", "Madrid"]},
-    {"code": "FR", "name": "France", "currency": "EUR", "tax_percent": 20, "tax_label": "VAT",
-     "emergency": "112", "cities": ["Paris"]},
-    {"code": "TH", "name": "Thailand", "currency": "THB", "tax_percent": 7, "tax_label": "VAT",
-     "emergency": "191", "cities": ["Bangkok"]},
-    {"code": "JP", "name": "Japan", "currency": "JPY", "tax_percent": 10, "tax_label": "Consumption tax",
-     "emergency": "110", "cities": ["Tokyo"]},
-]
+# Buddilio operates city by city. The live catalogue lives in db.countries so admins can add
+# countries, cities and tax rules without a deploy; this in-memory copy is refreshed on every write.
+COUNTRIES = [dict(c) for c in COUNTRY_SEED]
 COUNTRY_BY_CODE = {c["code"]: c for c in COUNTRIES}
 CITY_COUNTRY = {city: c for c in COUNTRIES for city in c["cities"]}
+
+
+async def refresh_countries():
+    """Reload the in-memory catalogue from MongoDB so every sync helper stays current."""
+    global COUNTRIES, COUNTRY_BY_CODE, CITY_COUNTRY
+    rows = await db.countries.find({"active": True}).sort("name", 1).to_list(500)
+    if not rows:
+        return
+    COUNTRIES = [{"code": r["code"], "name": r["name"], "currency": r["currency"],
+                  "tax_percent": float(r.get("tax_percent", 0)), "tax_label": r.get("tax_label", "Tax"),
+                  "emergency": r.get("emergency", ""), "cities": list(r.get("cities") or [])} for r in rows]
+    COUNTRY_BY_CODE = {c["code"]: c for c in COUNTRIES}
+    CITY_COUNTRY = {city: c for c in COUNTRIES for city in c["cities"]}
 
 
 def country_for_city(city: str) -> Optional[dict]:
@@ -2355,6 +2346,81 @@ async def meta():
             "settings": clean(await db.settings.find_one({}) or {"_id": ObjectId(), "platform_name": "Buddilio"})}
 
 
+class CountryIn(BaseModel):
+    code: str
+    name: str
+    currency: str = BASE_CURRENCY
+    tax_percent: float = 0
+    tax_label: str = "Tax"
+    emergency: str = ""
+    cities: List[str] = []
+    active: bool = True
+
+
+@api.get("/admin/countries")
+async def admin_countries(user: dict = Depends(require_perm("content:manage"))):
+    rows = await db.countries.find({}).sort("name", 1).to_list(500)
+    conf = await currency_config()
+    return {"items": [clean(r) for r in rows], "currencies": sorted(conf.keys())}
+
+
+@api.post("/admin/countries")
+async def create_country(payload: CountryIn, user: dict = Depends(require_perm("content:manage"))):
+    code = payload.code.strip().upper()[:2]
+    if len(code) != 2 or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="A country needs a two-letter code and a name.")
+    if await db.countries.find_one({"code": code}):
+        raise HTTPException(status_code=400, detail="That country is already on the list.")
+    doc = payload.dict() | {"code": code, "name": payload.name.strip()[:60],
+                            "currency": payload.currency.strip().upper()[:3],
+                            "cities": clean_city_list(payload.cities),
+                            "created_at": iso(now_utc())}
+    res = await db.countries.insert_one(doc)
+    await refresh_countries()
+    await audit(user, "country.create", "country", code, {"name": doc["name"]})
+    return clean(await db.countries.find_one({"_id": res.inserted_id}))
+
+
+@api.put("/admin/countries/{code}")
+async def update_country(code: str, payload: CountryIn, user: dict = Depends(require_perm("content:manage"))):
+    row = await db.countries.find_one({"code": code.upper()})
+    if not row:
+        raise HTTPException(status_code=404, detail="Country not found")
+    upd = {"name": payload.name.strip()[:60], "currency": payload.currency.strip().upper()[:3],
+           "tax_percent": float(payload.tax_percent), "tax_label": payload.tax_label[:30] or "Tax",
+           "emergency": payload.emergency[:12], "cities": clean_city_list(payload.cities),
+           "active": payload.active, "updated_at": iso(now_utc())}
+    await db.countries.update_one({"_id": row["_id"]}, {"$set": upd})
+    await refresh_countries()
+    await audit(user, "country.update", "country", code.upper(), {"cities": len(upd["cities"])})
+    return clean(await db.countries.find_one({"_id": row["_id"]}))
+
+
+@api.delete("/admin/countries/{code}")
+async def delete_country(code: str, user: dict = Depends(require_perm("content:manage"))):
+    row = await db.countries.find_one({"code": code.upper()})
+    if not row:
+        raise HTTPException(status_code=404, detail="Country not found")
+    live = await db.events.count_documents({"city": {"$in": row.get("cities") or []},
+                                            "status": "published"})
+    if live:
+        raise HTTPException(status_code=400,
+                            detail=f"{live} published events still run in this country — move them first.")
+    await db.countries.delete_one({"_id": row["_id"]})
+    await refresh_countries()
+    await audit(user, "country.delete", "country", code.upper(), {"name": row.get("name", "")})
+    return {"ok": True}
+
+
+def clean_city_list(cities: List[str]) -> list:
+    out = []
+    for c in cities[:200]:
+        name = str(c).strip()[:60]
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
 @api.get("/cms/{slug}")
 async def cms_page(slug: str):
     doc = await db.cms_pages.find_one({"slug": slug, "status": {"$ne": "draft"}})
@@ -4271,6 +4337,143 @@ async def admin_verify_vendor(vid: str, payload: VerifyIn, user: dict = Depends(
     return {"ok": True, "verification_status": state, "verified": state == "verified"}
 
 
+class AutoReloadIn(BaseModel):
+    enabled: bool = True
+    threshold: float = Field(ge=0, le=100000)
+    amount: float = Field(ge=500, le=200000)
+
+
+@api.put("/wallet/auto-reload")
+async def set_auto_reload(payload: AutoReloadIn, user: dict = Depends(get_current_user)):
+    """Keep the wallet topped up so an accepted hangout never waits on a payment screen."""
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"saved_card": 1})
+    if payload.enabled and not (doc or {}).get("saved_card"):
+        raise HTTPException(status_code=400, detail="Save a card first — auto reload charges that card.")
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"auto_reload": {
+        "enabled": payload.enabled, "threshold": round(payload.threshold, 2),
+        "amount": round(payload.amount, 2), "updated_at": iso(now_utc())}}})
+    return {"ok": True, "auto_reload": {"enabled": payload.enabled, "threshold": payload.threshold,
+                                        "amount": payload.amount}}
+
+
+async def run_auto_reload(user_id: str) -> float:
+    """Charge the saved card and credit the wallet when the balance falls under the member's limit."""
+    u = await db.users.find_one({"_id": ObjectId(user_id)}, {"auto_reload": 1, "saved_card": 1, "email": 1})
+    cfg = (u or {}).get("auto_reload") or {}
+    if not cfg.get("enabled") or not (u or {}).get("saved_card"):
+        return 0.0
+    balance = await credit_balance(user_id)
+    if balance > float(cfg.get("threshold", 0)):
+        return 0.0
+    amount = round(float(cfg.get("amount", 0)), 2)
+    charged = await charge_saved_card({"_id": ObjectId(user_id), "member_id": user_id,
+                                       "item_name": "Wallet auto reload",
+                                       "currency": BASE_CURRENCY}, amount)
+    if not charged:
+        return 0.0
+    await db.orders.update_one({"_id": ObjectId(charged["id"])}, {"$set": {"kind": "wallet", "ref_id": ""}})
+    await grant_credit(user_id, amount, f"Auto reload from your card ending {charged['last4']}", "")
+    return amount
+
+
+@api.post("/cron/rating-nudges")
+async def cron_rating_nudges(_: None = Depends(cron_guard)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    asyncio.create_task(send_rating_nudges())
+    return {"ok": True, "queued": "rating-nudges"}
+
+
+async def send_rating_nudges() -> int:
+    """A day after a hangout, nudge the guest once for their private rating."""
+    since = iso(now_utc() - timedelta(days=3))
+    until = iso(now_utc() - timedelta(hours=20))
+    rows = await db.companion_bookings.find(
+        {"status": "completed", "rated": {"$ne": True}, "nudged_at": {"$exists": False},
+         "completed_at": {"$gte": since, "$lte": until}}).limit(200).to_list(200)
+    sent = 0
+    for b in rows:
+        await notify(b["member_id"], "How was your hangout?",
+                     "Leave a private rating — it only takes a second and helps other members choose well.",
+                     "reminder", "/hangouts/bookings")
+        await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {"nudged_at": iso(now_utc())}})
+        sent += 1
+    logger.info(f"rating nudges sent: {sent}")
+    return sent
+
+
+# ---------------- member ID & address verification ----------------
+ID_TYPE_KEYS = {d["key"] for d in ID_DOC_TYPES}
+
+
+class IdVerificationIn(BaseModel):
+    doc_type: str
+    documents: List[dict] = []
+    address: str = ""
+
+
+@api.get("/me/verification")
+async def my_verification(user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])},
+                                  {"id_verification": 1, "verified": 1})
+    return {"types": ID_DOC_TYPES, "verified": bool((doc or {}).get("verified")),
+            "submission": (doc or {}).get("id_verification") or None}
+
+
+@api.put("/me/verification")
+async def submit_verification(payload: IdVerificationIn, user: dict = Depends(get_current_user)):
+    if payload.doc_type not in ID_TYPE_KEYS:
+        raise HTTPException(status_code=400, detail="Pick one of the accepted document types.")
+    if not payload.documents or len(payload.documents) > 4:
+        raise HTTPException(status_code=400, detail="Attach between one and four files.")
+    files = []
+    for d in payload.documents:
+        url = str(d.get("url", ""))
+        if not url.startswith("/api/files/"):
+            raise HTTPException(status_code=400, detail="Upload your documents through Buddilio first.")
+        files.append({"url": url, "name": str(d.get("name", "Document"))[:120]})
+    sub = {"doc_type": payload.doc_type, "documents": files, "address": payload.address[:300],
+           "status": "pending", "note": "", "submitted_at": iso(now_utc())}
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"id_verification": sub}})
+    return {"ok": True, "submission": sub}
+
+
+@api.get("/admin/id-verifications")
+async def admin_id_verifications(status: str = "pending",
+                                 user: dict = Depends(require_perm("verification:manage"))):
+    flt: dict[str, Any] = {"id_verification": {"$exists": True}}
+    if status and status != "all":
+        flt["id_verification.status"] = status
+    docs = await db.users.find(flt, {"full_name": 1, "email": 1, "city": 1, "country": 1, "photo": 1,
+                                     "verified": 1, "id_verification": 1}) \
+        .sort("id_verification.submitted_at", -1).limit(300).to_list(300)
+    counts = {s: await db.users.count_documents({"id_verification.status": s})
+              for s in ("pending", "verified", "rejected")}
+    return {"items": [clean(d) for d in docs], "counts": counts, "types": ID_DOC_TYPES}
+
+
+@api.post("/admin/id-verifications/{uid}")
+async def moderate_id_verification(uid: str, payload: VerifyIn,
+                                   user: dict = Depends(require_perm("verification:manage"))):
+    if payload.action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="Unknown action")
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(uid), "id_verification": {"$exists": True}})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid member id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Nothing submitted by that member.")
+    state = "verified" if payload.action == "approve" else "rejected"
+    await db.users.update_one({"_id": doc["_id"]}, {"$set": {
+        "id_verification.status": state, "id_verification.note": payload.note[:300],
+        "id_verification.reviewed_at": iso(now_utc()), "verified": state == "verified"}})
+    await audit(user, f"id_verification.{payload.action}", "user", uid, {"note": payload.note[:120]})
+    await notify(uid, "ID check " + state,
+                 "You're verified — the badge is on your profile." if state == "verified"
+                 else (payload.note or "We couldn't read your documents. Please upload clearer copies."),
+                 "moderation", "/profile")
+    return {"ok": True, "status": state}
+
+
 # ---------------- public host profiles ----------------
 HOST_FIELDS = {"full_name": 1, "org_name": 1, "photo": 1, "city": 1, "country": 1, "bio": 1,
                "verified": 1, "rating": 1, "rating_count": 1, "created_at": 1, "website": 1}
@@ -5353,7 +5556,9 @@ async def apply_as_companion(payload: CompanionIn, user: dict = Depends(get_curr
 
 
 @api.get("/companions")
-async def list_companions(q: str = "", city: str = "", max_rate: float = -1, page: int = 1, limit: int = 12,
+async def list_companions(q: str = "", city: str = "", max_rate: float = -1,
+                          sort: Literal["rate", "rate_desc", "rating", "experience"] = "rate",
+                          page: int = 1, limit: int = 12,
                           user: dict = Depends(premium_member)):
     flt: dict[str, Any] = {"role": "user", "status": "active", "verified": True,
                            "companion.status": "approved", "companion.enabled": True,
@@ -5366,7 +5571,10 @@ async def list_companions(q: str = "", city: str = "", max_rate: float = -1, pag
         flt["$or"] = [{"full_name": {"$regex": q, "$options": "i"}},
                       {"companion.headline": {"$regex": q, "$options": "i"}}]
     total = await db.users.count_documents(flt)
-    docs = await db.users.find(flt).sort("companion.hourly_rate", 1) \
+    order = {"rating": [("companion.rating", -1), ("companion.completed", -1)],
+             "experience": [("companion.completed", -1), ("companion.rating", -1)],
+             "rate_desc": [("companion.hourly_rate", -1)]}.get(sort, [("companion.hourly_rate", 1)])
+    docs = await db.users.find(flt).sort(order) \
         .skip((page - 1) * limit).limit(limit).to_list(limit)
     return {"items": [companion_card(d) for d in docs], "total": total, "page": page,
             "terms": HANGOUT_TERMS, "currency": BASE_CURRENCY, "request_fee": await request_fee(),
@@ -5597,13 +5805,15 @@ async def free_requests_left(user_id: str, member: Optional[dict]) -> int:
 
 @api.get("/wallet")
 async def my_wallet(user: dict = Depends(get_current_user)):
-    doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"saved_card": 1})
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"saved_card": 1, "auto_reload": 1})
     rows = await db.credits.find({"user_id": user["id"]}).sort("created_at", -1).limit(30).to_list(30)
     member = await membership_active(user["id"])
     return {"balance": await credit_balance(user["id"]),
             "entries": [{"amount": r["amount"], "reason": r.get("reason", ""), "type": r.get("type", ""),
                          "created_at": r.get("created_at", "")} for r in rows],
             "card": card_view(doc or {}), "min_topup": WALLET_MIN, "max_topup": WALLET_MAX,
+            "auto_reload": (doc or {}).get("auto_reload") or {"enabled": False, "threshold": 500,
+                                                             "amount": 1000},
             "free_requests_left": await free_requests_left(user["id"], member)}
 
 
@@ -5715,6 +5925,7 @@ async def try_auto_debit(b: dict, agreed: float) -> Optional[str]:
                                      "reason": "Hangout paid from your Buddilio wallet",
                                      "booking_id": str(b["_id"]), "created_at": iso(now_utc())})
         await confirm_booking(b, agreed, round(float(b.get("paid_total") or 0) + agreed, 2), "wallet")
+        asyncio.create_task(run_auto_reload(b["member_id"]))
         return "wallet"
     charged = await charge_saved_card(b, agreed)
     if charged:
@@ -5977,6 +6188,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    if not await db.countries.count_documents({}):
+        await db.countries.insert_many([dict(c) | {"created_at": iso(now_utc())} for c in COUNTRY_SEED])
+    await db.countries.create_index("code", unique=True)
+    await refresh_countries()
     await db.users.create_index("email", unique=True)
     await db.users.create_index([("city", 1), ("role", 1)])
     await db.events.create_index([("status", 1), ("starts_at", 1)])

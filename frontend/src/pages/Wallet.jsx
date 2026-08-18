@@ -14,11 +14,24 @@ export default function Wallet() {
   const [amount, setAmount] = useState(1000);
   const [busy, setBusy] = useState(false);
   const [card, setCard] = useState({ name: "", number: "", exp_month: "", exp_year: "", autopay: true });
+  const [reload, setReload] = useState({ enabled: false, threshold: 500, amount: 1000 });
 
   const load = useCallback(() => {
-    api.get("/wallet").then(({ data }) => setData(data)).catch((e) => { toast.error(errMsg(e)); setData(false); });
+    api.get("/wallet").then(({ data }) => {
+      setData(data);
+      if (data.auto_reload) setReload(data.auto_reload);
+    }).catch((e) => { toast.error(errMsg(e)); setData(false); });
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const saveReload = async () => {
+    try {
+      await api.put("/wallet/auto-reload", {
+        enabled: reload.enabled, threshold: Number(reload.threshold), amount: Number(reload.amount),
+      });
+      toast.success("Auto reload saved.");
+    } catch (er) { toast.error(errMsg(er)); }
+  };
 
   const topUp = async (e) => {
     e.preventDefault();
@@ -130,6 +143,30 @@ export default function Wallet() {
           </form>
         )}
         <p className="mt-3 text-[11px] text-slate-400">We store only the brand, last four digits and expiry — never the full number.</p>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6" data-testid="auto-reload-section">
+        <p className="font-bold">Auto reload</p>
+        <p className="mt-1 text-sm text-slate-500">Top the wallet back up from your saved card whenever it runs low.</p>
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="flex items-center gap-2 text-sm font-semibold">
+            <input type="checkbox" checked={reload.enabled} data-testid="auto-reload-enabled"
+              onChange={(e) => setReload({ ...reload, enabled: e.target.checked })} />
+            Enabled
+          </label>
+          <label className="text-sm">
+            <span className="block text-xs font-bold uppercase tracking-wide text-slate-500">When balance drops below</span>
+            <input type="number" min={0} value={reload.threshold} data-testid="auto-reload-threshold"
+              onChange={(e) => setReload({ ...reload, threshold: e.target.value })} className={`${cls} mt-1 w-40`} />
+          </label>
+          <label className="text-sm">
+            <span className="block text-xs font-bold uppercase tracking-wide text-slate-500">Add this much</span>
+            <input type="number" min={500} value={reload.amount} data-testid="auto-reload-amount"
+              onChange={(e) => setReload({ ...reload, amount: e.target.value })} className={`${cls} mt-1 w-40`} />
+          </label>
+          <button onClick={saveReload} data-testid="auto-reload-save"
+            className="rounded-full bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">Save</button>
+        </div>
       </div>
 
       <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">

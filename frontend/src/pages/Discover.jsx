@@ -7,6 +7,7 @@ import { PersonCard } from "@/components/Cards";
 import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { PushToggle } from "@/components/PushToggle";
+import { IdVerification } from "@/components/IdVerification";
 import { MessageCircle, UserPlus, Ban, Flag, CalendarDays, Ticket } from "lucide-react";
 
 export function Discover() {
@@ -274,9 +275,10 @@ export function MyProfile() {
           </div>
         </div>
 
+        <IdVerification />
+
         <div className="rounded-2xl border border-slate-200 bg-white p-6">
-          <p className="overline">Interests</p>
-          <div className="mt-3 flex flex-wrap gap-2" data-testid="profile-interests">
+          <p className="overline">Interests</p>          <div className="mt-3 flex flex-wrap gap-2" data-testid="profile-interests">
             {meta.interests.map((i) => (
               <button key={i} onClick={() => toggle("interests", i)}
                 className={`rounded-full px-3 py-1.5 text-xs font-semibold border ${f.interests.includes(i) ? "bg-slate-900 text-white border-slate-900" : "border-slate-200"}`}>{i}</button>

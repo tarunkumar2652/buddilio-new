@@ -30,7 +30,7 @@ const Terms = ({ text }) => (
 export function Hangouts() {
   const { user } = useAuth();
   const nav = useNavigate();
-  const [f, setF] = useState({ q: "", city: "", max_rate: -1 });
+  const [f, setF] = useState({ q: "", city: "", max_rate: -1, sort: "rate" });
   const [data, setData] = useState(null);
   const [locked, setLocked] = useState("");
 
@@ -74,6 +74,14 @@ export function Hangouts() {
         <input data-testid="hangouts-city" value={f.city} placeholder="City"
           onChange={(e) => setF({ ...f, city: e.target.value })}
           className="rounded-full border border-slate-200 px-4 py-2.5 text-sm w-40" />
+        <select data-testid="hangouts-sort" value={f.sort}
+          onChange={(e) => setF({ ...f, sort: e.target.value })}
+          className="rounded-full border border-slate-200 px-4 py-2.5 text-sm">
+          <option value="rating">Top rated</option>
+          <option value="experience">Most experienced</option>
+          <option value="rate">Price: low to high</option>
+          <option value="rate_desc">Price: high to low</option>
+        </select>
       </div>
 
       {data.items.length === 0 ? (
@@ -95,6 +103,7 @@ export function Hangouts() {
               {c.headline && <p className="mt-3 line-clamp-2 text-sm text-slate-600">{c.headline}</p>}
               <p className="mt-3 flex items-center gap-3 text-[11px] font-semibold text-slate-400">
                 <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />{c.min_hours}–{c.max_hours}h</span>
+                {c.rating_count > 0 && <span data-testid={`companion-rating-${c.id}`}>★ {c.rating} ({c.rating_count})</span>}
                 {c.packages?.length > 0 && <span>{c.packages.length} package{c.packages.length === 1 ? "" : "s"}</span>}
                 {c.hangouts > 0 && <span>{c.hangouts} hangouts</span>}
               </p>

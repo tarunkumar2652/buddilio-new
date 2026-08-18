@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 28 — dynamic country/city catalogue, ID/address verification, wallet auto-reload, rating-nudge cron and companion sorting. New pytest module /app/backend/tests/test_iteration28_geo_verify_autoreload.py with 32 tests across 5 classes (TestCountryCatalogue 10, TestIdVerification 11, TestAutoReload 5, TestRatingNudgeCron 2, TestCompanionSort 4) — 32/32 PASS. Regression: test_iteration25_hangouts.py (22) + test_iteration27_wallet.py (17) both green with -n 0 — 39/39 PASS. Total 71/71 backend tests green. Frontend spot-check on 1440x900 desktop confirmed: (Admin) admin-tab-places -> places-panel + country-create-form + country-row-IN present; admin-tab-idchecks -> id-verifications-panel + idv-filter-pending visible. (Wallet as aarav) auto-reload-section renders all four testids (enabled/threshold/amount/save). (Hangouts) hangouts-sort <select> exposes exactly ['rating','experience','rate','rate_desc']. (Profile /profile as aarav) id-verification-card + id-verification-status render; for an already-verified account the form widgets (id-doc-type/id-address/id-file-pick/id-verification-submit) intentionally hide, which matches IdVerification.jsx (form only mounts when status!=='verified'). All test artefacts cleaned up (tara.joshi verified reset to False and id_verification unset; aarav auto_reload+saved_card unset; ananya companion completed/rating/rating_count restored to 0, hourly_rate 1500; ZZ/QQ test countries deleted).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Profile → ID & address verification (verified state)", "issues": ["When users.verified is true, the IdVerification component only shows a 'verified' badge with no way to re-submit updated documents. If a member's ID expires the flow requires an admin to unset users.verified first. Consider a small 'update documents' button that re-opens the form."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration28_geo_verify_autoreload.py",
+    "/app/test_reports/pytest/iteration28.xml",
+    "/app/test_reports/pytest/iteration28_regression.xml"
+  ],
+  "action_items": [
+    "None blocking. Optional: rating-nudge cron endpoint acks immediately and enqueues asyncio.create_task; there is no idempotency key on the cron endpoint itself, only on the underlying booking (nudged_at). Consider a small db.cron_runs guard so a stuck loop can't spam invocations.",
+    "Optional: DEFAULT `sort` value in list_companions is 'rate' — the docstring/review-request notes 'sort=rate ascending price (default)'. That matches. But the pydantic input has no enum guard; an arbitrary sort string silently falls back to rate-asc. Consider Literal[...] to 400 on bad values.",
+    "Optional design nit: on /profile for an already-verified member, IdVerification shows only the green badge — no way to re-submit if docs expire (see design_issues above)."
+  ],
+  "critical_code_review_comments": [
+    "backend/server.py:252 refresh_countries() — reloads only when db.countries has rows; if an admin deletes every country the in-memory globals silently stick to the last snapshot. Not a real-world problem (delete_country blocks removing INR/USD homes because published events exist) but worth a defensive log.",
+    "backend/server.py:2384 update_country() — accepts payload.code from the URL but ignores payload.code in the body, so a client can't accidentally rename the two-letter code. Good.",
+    "backend/server.py:4386 send_rating_nudges() — window is [now-3d, now-20h]; a booking finished 72+ hours ago will never get a nudge. Fine because the cron runs daily, but note that if the cron misses two consecutive days a booking silently drops off.",
+    "backend/server.py:4359 run_auto_reload() — logs no failure path when charge_saved_card returns None (card declined). Consider a member-visible notification so they know why the wallet didn't top up.",
+    "backend/server.py:5559 list_companions() — sort param is a free string; illegal values fall back to rate-asc. Consider Literal['rating','experience','rate','rate_desc'] on the query to 422 on bad input.",
+    "backend/server.py:4422 submit_verification() — rejects zero or >4 files but does NOT dedupe by URL. A member can attach the same file 4 times and pass; harmless but noisy for admins.",
+    "backend/geo.py — COUNTRY_SEED has 54 rows, EXTRA_CURRENCIES 30. Meta returns 54 countries / 196 cities — matches.",
+    "frontend/Places.jsx has no confirm() around country-delete; a mis-click will hit the API immediately. The backend blocks deletion when events exist (400) so the blast radius is small, but a native confirm would be safer."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration28_geo_verify_autoreload.py (new — 32 tests)"
+  ],
+  "success_rate": {"backend": "100% (71/71 — 32 iter28 + 22 iter25 + 17 iter27)", "frontend": "100% of the review-request testids present and rendering; hangouts-sort options match; auto-reload widgets render; admin Places + ID checks tabs render; /profile IdVerification renders (form hides when already verified — by design)"},
+  "test_credentials": "admin@buddilio.com/Admin@123, tara.joshi@example.com/User@123 (used for /me/verification submit/approve/reject flow; verified flag reset to False on teardown, id_verification unset), aarav.mehta@example.com/User@123 (saved-card + auto-reload UI + config; auto_reload and saved_card unset on teardown), ananya.kapoor@example.com/User@123 (companion sort seed; rating/completed/hourly_rate restored to 0/0/1500), partner@buddilio.com/Partner@123 (used for admin permission 403s). Cron: WEBHOOK_CRON_SECRET from backend/.env.",
+  "seed_data_creation": "TestCountryCatalogue creates ZZ (Testlandia, USD, 5% TST, cities Testville/Sample City→New Town) then deletes it; TestCountryCatalogue::test_tax_follows_catalogue creates QQ (Qland, KWD, tax 7.5→12.5) then deletes it. TestIdVerification submits Tara's passport (rejected) then aadhaar (approved) and teardown unsets id_verification + verified=False. TestAutoReload saves an autopay=true card for Aarav (last4=1111) and sets auto_reload {enabled:true, threshold:500, amount:1000} — both unset on teardown. TestCompanionSort promoted ishita.bansal to an approved companion when only Ananya existed, then reverted (companion field unset, verified=False) — verified from post-run DB check.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Full suite: pytest tests/test_iteration25_hangouts.py tests/test_iteration27_wallet.py tests/test_iteration28_geo_verify_autoreload.py -n 0 (71 tests, ~2 minutes). All greens. Country catalogue is DB-backed with an in-memory refresh — after any admin write refresh_countries() runs, so /api/meta and every currency/tax helper stay current in the same request. Auto-reload UI depends on a saved card in the same session (backend blocks enabling without one). rating-nudge cron only pings bookings in [now-3d, now-20h]; if you need to force a nudge, set companion_bookings.completed_at to ~24h ago and status='completed'.",
+  "rca of the issue": "No bugs found in this iteration."
+}

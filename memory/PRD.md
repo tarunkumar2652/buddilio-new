@@ -521,6 +521,27 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
 - Verified: `backend/tests/test_iteration27_wallet.py` **17/17** and `test_iteration25_hangouts.py` **22/22**
   (testing-agent iteration 27, run with `-n 0`). Wallet nav link added to `DEFAULT_SITE_CONTENT.nav.member`.
 
+## Iteration 28 — Dynamic countries/cities, ID verification, auto reload, nudges & sorting (June 2026)
+- **Dynamic country/city catalogue** (`backend/geo.py`, `db.countries`, `frontend/src/components/Places.jsx`,
+  Admin → Countries & cities): 54 countries and ~196 cities seeded on first boot, each with its own currency,
+  tax percent/label and emergency number. Admins add/edit/hide/delete countries and add or remove cities;
+  `refresh_countries()` reloads the in-memory catalogue after every write so tax, currency and city dropdowns
+  update instantly. Deleting a country with published events is blocked. 32 extra currencies added.
+- **Member ID & address verification** (`/me/verification`, `/admin/id-verifications`,
+  `components/IdVerification.jsx` on the profile, `components/IdVerifications.jsx` in Admin → ID checks):
+  members pick from 11 document types (Passport, Aadhaar, PAN, driving licence, Emirates ID, utility bill,
+  bank statement, rent agreement …), upload 1–4 files and submit; admin approve sets `users.verified = true`
+  (which unlocks hangout hosting), reject returns a note. Verified members can re-submit updated documents.
+- **Wallet auto reload** (`PUT /api/wallet/auto-reload`): when the balance falls to the member's threshold after
+  a wallet-paid hangout, the saved card is charged for the configured amount and the wallet is credited.
+- **Rating nudges**: `POST /api/cron/rating-nudges` (daily 10:00 IST in `.emergent/crons.yml`) reminds guests
+  once about completed, unrated hangouts from the previous day.
+- **Companion sorting**: `GET /api/companions?sort=rating|experience|rate|rate_desc` with a picker on /hangouts;
+  invalid values now 422 via a `Literal` guard.
+- Verified: `backend/tests/test_iteration28_geo_verify_autoreload.py` **32/32**, plus regressions
+  `test_iteration25_hangouts.py` 22/22 and `test_iteration27_wallet.py` 17/17 — **71/71** (testing-agent
+  iteration 28, run with `-n 0`).
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

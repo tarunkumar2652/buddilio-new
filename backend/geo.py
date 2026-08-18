@@ -1,0 +1,127 @@
+"""Seed data for the country/city catalogue and the currencies they charge in.
+
+The live catalogue lives in MongoDB (`db.countries`) so admins can add countries, cities and tax rules
+without a deploy. This module only supplies the first-run seed and the currency table.
+"""
+
+# Approximate units per 1 INR — the same static style the original ten currencies used.
+EXTRA_CURRENCIES = {
+    "NZD": {"rate": 0.020, "symbol": "NZ$", "label": "New Zealand Dollar", "stripe_min": 50},
+    "CHF": {"rate": 0.0105, "symbol": "CHF ", "label": "Swiss Franc", "stripe_min": 50},
+    "SEK": {"rate": 0.125, "symbol": "kr ", "label": "Swedish Krona", "stripe_min": 300},
+    "NOK": {"rate": 0.125, "symbol": "kr ", "label": "Norwegian Krone", "stripe_min": 300},
+    "DKK": {"rate": 0.082, "symbol": "kr ", "label": "Danish Krone", "stripe_min": 250},
+    "PLN": {"rate": 0.047, "symbol": "zł ", "label": "Polish Zloty", "stripe_min": 200},
+    "CZK": {"rate": 0.27, "symbol": "Kč ", "label": "Czech Koruna", "stripe_min": 1500},
+    "TRY": {"rate": 0.47, "symbol": "₺", "label": "Turkish Lira", "stripe_min": 1500},
+    "ZAR": {"rate": 0.21, "symbol": "R ", "label": "South African Rand", "stripe_min": 1000},
+    "BRL": {"rate": 0.065, "symbol": "R$", "label": "Brazilian Real", "stripe_min": 200},
+    "MXN": {"rate": 0.22, "symbol": "MX$", "label": "Mexican Peso", "stripe_min": 1000},
+    "ARS": {"rate": 14.5, "symbol": "AR$", "label": "Argentine Peso", "stripe_min": 5000},
+    "HKD": {"rate": 0.093, "symbol": "HK$", "label": "Hong Kong Dollar", "stripe_min": 400},
+    "CNY": {"rate": 0.086, "symbol": "CN¥", "label": "Chinese Yuan", "stripe_min": 400},
+    "KRW": {"rate": 16.0, "symbol": "₩", "label": "South Korean Won", "stripe_min": 5000},
+    "TWD": {"rate": 0.38, "symbol": "NT$", "label": "New Taiwan Dollar", "stripe_min": 1500},
+    "MYR": {"rate": 0.051, "symbol": "RM ", "label": "Malaysian Ringgit", "stripe_min": 200},
+    "IDR": {"rate": 190.0, "symbol": "Rp ", "label": "Indonesian Rupiah", "stripe_min": 80000},
+    "PHP": {"rate": 0.68, "symbol": "₱", "label": "Philippine Peso", "stripe_min": 3000},
+    "VND": {"rate": 300.0, "symbol": "₫", "label": "Vietnamese Dong", "stripe_min": 150000},
+    "SAR": {"rate": 0.045, "symbol": "SAR ", "label": "Saudi Riyal", "stripe_min": 200},
+    "QAR": {"rate": 0.044, "symbol": "QAR ", "label": "Qatari Riyal", "stripe_min": 200},
+    "KWD": {"rate": 0.0037, "symbol": "KD ", "label": "Kuwaiti Dinar", "stripe_min": 20},
+    "BHD": {"rate": 0.0045, "symbol": "BD ", "label": "Bahraini Dinar", "stripe_min": 20},
+    "OMR": {"rate": 0.0046, "symbol": "OMR ", "label": "Omani Rial", "stripe_min": 20},
+    "EGP": {"rate": 0.58, "symbol": "E£", "label": "Egyptian Pound", "stripe_min": 2500},
+    "KES": {"rate": 1.55, "symbol": "KSh ", "label": "Kenyan Shilling", "stripe_min": 6000},
+    "NGN": {"rate": 18.0, "symbol": "₦", "label": "Nigerian Naira", "stripe_min": 70000},
+    "LKR": {"rate": 3.6, "symbol": "Rs ", "label": "Sri Lankan Rupee", "stripe_min": 15000},
+    "NPR": {"rate": 1.6, "symbol": "NRs ", "label": "Nepalese Rupee", "stripe_min": 7000},
+    "BDT": {"rate": 1.42, "symbol": "৳", "label": "Bangladeshi Taka", "stripe_min": 6000},
+    "ILS": {"rate": 0.044, "symbol": "₪", "label": "Israeli Shekel", "stripe_min": 200},
+}
+
+
+def _c(code, name, currency, tax_percent, tax_label, emergency, cities):
+    return {"code": code, "name": name, "currency": currency, "tax_percent": tax_percent,
+            "tax_label": tax_label, "emergency": emergency, "cities": cities, "active": True}
+
+
+# The first twelve are Buddilio's launch markets and keep their original tax treatment.
+COUNTRY_SEED = [
+    _c("IN", "India", "INR", 18, "GST", "112",
+       ["Delhi NCR", "Gurugram", "Noida", "Mumbai", "Bengaluru", "Hyderabad", "Pune", "Goa",
+        "Chennai", "Kolkata", "Jaipur", "Ahmedabad", "Chandigarh", "Kochi", "Indore", "Lucknow"]),
+    _c("AE", "United Arab Emirates", "AED", 5, "VAT", "999", ["Dubai", "Abu Dhabi", "Sharjah", "Ras Al Khaimah"]),
+    _c("SG", "Singapore", "SGD", 9, "GST", "999", ["Singapore"]),
+    _c("GB", "United Kingdom", "GBP", 20, "VAT", "999",
+       ["London", "Manchester", "Birmingham", "Edinburgh", "Glasgow", "Leeds", "Bristol"]),
+    _c("US", "United States", "USD", 8.875, "Sales tax", "911",
+       ["New York", "Los Angeles", "Miami", "Austin", "Chicago", "San Francisco", "Seattle",
+        "Boston", "Las Vegas", "Dallas", "Atlanta", "Denver"]),
+    _c("CA", "Canada", "CAD", 13, "HST", "911", ["Toronto", "Vancouver", "Montreal", "Calgary", "Ottawa"]),
+    _c("AU", "Australia", "AUD", 10, "GST", "000", ["Sydney", "Melbourne", "Brisbane", "Perth", "Adelaide"]),
+    _c("DE", "Germany", "EUR", 19, "VAT", "112", ["Berlin", "Munich", "Hamburg", "Frankfurt", "Cologne"]),
+    _c("ES", "Spain", "EUR", 21, "VAT", "112", ["Barcelona", "Madrid", "Valencia", "Seville", "Ibiza"]),
+    _c("FR", "France", "EUR", 20, "VAT", "112", ["Paris", "Lyon", "Marseille", "Nice", "Bordeaux"]),
+    _c("TH", "Thailand", "THB", 7, "VAT", "191", ["Bangkok", "Phuket", "Chiang Mai", "Pattaya", "Koh Samui"]),
+    _c("JP", "Japan", "JPY", 10, "Consumption tax", "110", ["Tokyo", "Osaka", "Kyoto", "Fukuoka", "Sapporo"]),
+
+    _c("NZ", "New Zealand", "NZD", 15, "GST", "111", ["Auckland", "Wellington", "Christchurch", "Queenstown"]),
+    _c("IE", "Ireland", "EUR", 23, "VAT", "112", ["Dublin", "Cork", "Galway"]),
+    _c("NL", "Netherlands", "EUR", 21, "VAT", "112", ["Amsterdam", "Rotterdam", "Utrecht", "The Hague"]),
+    _c("BE", "Belgium", "EUR", 21, "VAT", "112", ["Brussels", "Antwerp", "Ghent"]),
+    _c("IT", "Italy", "EUR", 22, "VAT", "112", ["Rome", "Milan", "Florence", "Naples", "Venice"]),
+    _c("PT", "Portugal", "EUR", 23, "VAT", "112", ["Lisbon", "Porto", "Faro"]),
+    _c("GR", "Greece", "EUR", 24, "VAT", "112", ["Athens", "Thessaloniki", "Mykonos", "Santorini"]),
+    _c("AT", "Austria", "EUR", 20, "VAT", "112", ["Vienna", "Salzburg", "Innsbruck"]),
+    _c("CH", "Switzerland", "CHF", 8.1, "VAT", "112", ["Zurich", "Geneva", "Basel", "Lausanne"]),
+    _c("SE", "Sweden", "SEK", 25, "VAT", "112", ["Stockholm", "Gothenburg", "Malmo"]),
+    _c("NO", "Norway", "NOK", 25, "VAT", "112", ["Oslo", "Bergen", "Tromso"]),
+    _c("DK", "Denmark", "DKK", 25, "VAT", "112", ["Copenhagen", "Aarhus"]),
+    _c("FI", "Finland", "EUR", 25.5, "VAT", "112", ["Helsinki", "Tampere"]),
+    _c("PL", "Poland", "PLN", 23, "VAT", "112", ["Warsaw", "Krakow", "Wroclaw", "Gdansk"]),
+    _c("CZ", "Czechia", "CZK", 21, "VAT", "112", ["Prague", "Brno"]),
+    _c("TR", "Turkiye", "TRY", 20, "KDV", "112", ["Istanbul", "Ankara", "Izmir", "Antalya", "Bodrum"]),
+    _c("ZA", "South Africa", "ZAR", 15, "VAT", "10111", ["Cape Town", "Johannesburg", "Durban", "Pretoria"]),
+    _c("EG", "Egypt", "EGP", 14, "VAT", "122", ["Cairo", "Alexandria", "Hurghada"]),
+    _c("KE", "Kenya", "KES", 16, "VAT", "999", ["Nairobi", "Mombasa"]),
+    _c("NG", "Nigeria", "NGN", 7.5, "VAT", "112", ["Lagos", "Abuja"]),
+    _c("MA", "Morocco", "MAD", 20, "VAT", "190", ["Marrakech", "Casablanca", "Tangier"]),
+    _c("SA", "Saudi Arabia", "SAR", 15, "VAT", "999", ["Riyadh", "Jeddah", "Dammam", "AlUla"]),
+    _c("QA", "Qatar", "QAR", 0, "No tax", "999", ["Doha"]),
+    _c("KW", "Kuwait", "KWD", 0, "No tax", "112", ["Kuwait City"]),
+    _c("BH", "Bahrain", "BHD", 10, "VAT", "999", ["Manama"]),
+    _c("OM", "Oman", "OMR", 5, "VAT", "9999", ["Muscat", "Salalah"]),
+    _c("IL", "Israel", "ILS", 18, "VAT", "100", ["Tel Aviv", "Jerusalem", "Haifa"]),
+    _c("HK", "Hong Kong", "HKD", 0, "No tax", "999", ["Hong Kong"]),
+    _c("CN", "China", "CNY", 13, "VAT", "110", ["Shanghai", "Beijing", "Shenzhen", "Chengdu"]),
+    _c("KR", "South Korea", "KRW", 10, "VAT", "112", ["Seoul", "Busan", "Jeju"]),
+    _c("TW", "Taiwan", "TWD", 5, "VAT", "110", ["Taipei", "Kaohsiung"]),
+    _c("MY", "Malaysia", "MYR", 8, "SST", "999", ["Kuala Lumpur", "Penang", "Johor Bahru", "Langkawi"]),
+    _c("ID", "Indonesia", "IDR", 11, "VAT", "112", ["Bali", "Jakarta", "Surabaya", "Yogyakarta"]),
+    _c("PH", "Philippines", "PHP", 12, "VAT", "911", ["Manila", "Cebu", "Boracay"]),
+    _c("VN", "Vietnam", "VND", 8, "VAT", "113", ["Ho Chi Minh City", "Hanoi", "Da Nang"]),
+    _c("LK", "Sri Lanka", "LKR", 18, "VAT", "119", ["Colombo", "Galle", "Kandy"]),
+    _c("NP", "Nepal", "NPR", 13, "VAT", "100", ["Kathmandu", "Pokhara"]),
+    _c("BD", "Bangladesh", "BDT", 15, "VAT", "999", ["Dhaka", "Chittagong"]),
+    _c("MV", "Maldives", "USD", 16, "GST", "119", ["Male"]),
+    _c("MX", "Mexico", "MXN", 16, "IVA", "911", ["Mexico City", "Cancun", "Guadalajara", "Tulum"]),
+    _c("BR", "Brazil", "BRL", 17, "ICMS", "190", ["Sao Paulo", "Rio de Janeiro", "Florianopolis"]),
+    _c("AR", "Argentina", "ARS", 21, "IVA", "911", ["Buenos Aires", "Cordoba"]),
+]
+
+
+# Government IDs and address proofs members can send in for verification.
+ID_DOC_TYPES = [
+    {"key": "passport", "label": "Passport", "proves": "identity"},
+    {"key": "aadhaar", "label": "Aadhaar card (India)", "proves": "identity + address"},
+    {"key": "pan", "label": "PAN card (India)", "proves": "identity"},
+    {"key": "driving_licence", "label": "Driving licence", "proves": "identity + address"},
+    {"key": "national_id", "label": "National ID card", "proves": "identity"},
+    {"key": "emirates_id", "label": "Emirates ID (UAE)", "proves": "identity + address"},
+    {"key": "residence_permit", "label": "Residence permit", "proves": "identity + address"},
+    {"key": "voter_id", "label": "Voter ID", "proves": "identity"},
+    {"key": "utility_bill", "label": "Utility bill (last 3 months)", "proves": "address"},
+    {"key": "bank_statement", "label": "Bank statement (last 3 months)", "proves": "address"},
+    {"key": "rent_agreement", "label": "Rent agreement", "proves": "address"},
+]

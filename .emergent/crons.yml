@@ -13,6 +13,13 @@ crons:
     endpoint: "{{BASE_URL}}/api/cron/payout-reminders"
     method: POST
     enabled: true
+  - name: rating-nudges
+    description: "Nudges guests a day after a hangout to leave their private rating (daily 10:00 IST)"
+    cron: "30 4 * * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/rating-nudges"
+    method: POST
+    enabled: true
   - name: city-openings
     description: "Emails city waitlists once Buddilio goes live in their city"
     cron: "0 9 * * *"
