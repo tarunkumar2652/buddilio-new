@@ -176,7 +176,8 @@ export function Checkout() {
 
   useEffect(() => { if (kind && itemId) create(code, ""); /* eslint-disable-next-line */ }, [kind, itemId]);
 
-  const done = () => nav(kind === "membership" ? "/membership" : kind === "event" ? `/events/${itemId}` : "/orders");
+  const done = () => nav(kind === "membership" ? "/membership" : kind === "event" ? `/events/${itemId}`
+    : kind === "companion" ? "/hangouts/bookings" : "/orders");
 
   const loadRazorpayScript = () => new Promise((resolve) => {
     if (window.Razorpay) return resolve(true);

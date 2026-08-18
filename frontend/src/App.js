@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
@@ -22,6 +23,7 @@ import Concierge from "@/pages/Concierge";
 import LeaderboardPage from "@/pages/Leaderboard";
 import { CityIndex, CityPage } from "@/pages/Cities";
 import { Hosts, HostProfile } from "@/pages/Hosts";
+import { Hangouts, CompanionDetail, MyBookings, HostHangouts } from "@/pages/Hangouts";
 import PartnerDashboard from "@/pages/Partner";
 import Admin from "@/pages/Admin";
 import Console from "@/pages/Console";
@@ -38,6 +40,18 @@ function Protected({ children, roles }) {
   return children;
 }
 
+function ScrollToTop() {
+  const { pathname, hash } = useLocation();
+  useEffect(() => {
+    if (hash) {
+      const el = document.getElementById(hash.slice(1));
+      if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [pathname, hash]);
+  return null;
+}
+
 function Shell() {
   const loc = useLocation();
   // Emergent OAuth returns to {origin}/dashboard#session_id=... — exchange it before any route renders.
@@ -46,6 +60,7 @@ function Shell() {
   if (loc.pathname.startsWith("/console")) return <Console />;
   return (
     <div className="min-h-screen flex flex-col">
+      <ScrollToTop />
       <Navbar />
       <main className="flex-1">
         <Routes>
@@ -80,6 +95,10 @@ function Shell() {
           <Route path="/profile" element={<Protected><MyProfile /></Protected>} />
           <Route path="/referrals" element={<Protected><Referrals /></Protected>} />
           <Route path="/ai" element={<Protected><Concierge /></Protected>} />
+          <Route path="/hangouts" element={<Protected><Hangouts /></Protected>} />
+          <Route path="/hangouts/host" element={<Protected><HostHangouts /></Protected>} />
+          <Route path="/hangouts/bookings" element={<Protected><MyBookings /></Protected>} />
+          <Route path="/hangouts/:id" element={<Protected><CompanionDetail /></Protected>} />
           <Route path="/checkout" element={<Protected><Checkout /></Protected>} />
           <Route path="/partner" element={<Protected roles={["partner", "admin"]}><PartnerDashboard /></Protected>} />
           <Route path="/admin" element={<Protected roles={["admin"]}><Admin /></Protected>} />

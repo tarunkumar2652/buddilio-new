@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 26 — retested the fee-first companion hangouts flow. Rewrote /app/backend/tests/test_iteration25_hangouts.py from scratch for the new statuses (pending_request_fee, awaiting_acceptance, payment_due, counter_offered) and hidden-rate/wallet-auto-debit model. 22 pytest cases: 20 PASS / 2 FAIL. Both failures are the SAME real spec deviation — the request fee is stored pre-tax (fee_paid=100) but paid_total is post-tax (₹118 with 18% GST), so booking_refundable = paid_total - fee_paid leaks the tax back to the member as credit. Consequence: (a) declining right after paying just the fee gives 18.0 credit instead of 0 as the review-request explicitly says; (b) no-show on a fully-paid confirmed hangout returns 3558.0 instead of 3000. Two previously reported blockers are FIXED and verified: (i) three consecutive companion confirmations in the same DB now all get their payout row (partial unique index on payouts.event_id works), (ii) suspend then approve leaves Ananya visible in GET /api/companions with companion.enabled=True. Also verified: PUT /api/admin/settings {hangout_request_fee:250} changes the fee for the next booking (partner 403), acceptance names the price with a 3x listed cap (member 403, no body uses listed, >3x rejected 400), counter-offer sets due_amount=full counter (not diff), wallet auto-debit path (agreed <= credit balance instantly confirms + payout still 75/25). Frontend spot-check via UI (admin@buddilio.com/Admin@123, tara.joshi@example.com/User@123 with a temp Basic membership): /hangouts shows rate-hidden-<id> badge (‘Rate shared once they accept’), /hangouts/<id> shows companion-rate copy with NO number and booking-total ‘Request fee now: ₹100’, booking-submit is clickable, /hangouts/bookings renders my-bookings-page + Credit widget, Admin -> Companions panel exposes request-fee-input (value 100) and request-fee-save. All artefacts cleaned up (Tara membership rows, credits, companion bookings/orders/payouts, hangout_request_fee reset to 100, Ananya companion untouched — it was already at its seeded shape).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/bookings/{bid}/decline right after fee, and POST /api/bookings/{bid}/no-show after full payment", "issue": "Request fee is stored pre-tax as fee_paid but the guest actually paid tax on top (order.total = fee * 1.18 = 118). booking_refundable() = paid_total (118) - fee_paid (100) = 18, so declining right after the fee credits ₹18 (the GST on the fee) instead of ₹0 as the review-request states. Fix options: (a) store fee_paid as the ACTUAL charged amount (order.total) not the pre-tax nominal, or (b) do not charge GST on the request fee at checkout (price_for('companion') is 18% for now), or (c) subtract the pre-tax fee amount from the pre-tax paid subtotal instead of using paid_total (which is post-tax). Same bug produces ₹3558 credit on a genuine no-show for a 3000-agreed booking instead of ₹3000."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/hangouts card grid", "issues": ["Cards on /hangouts do not carry a data-testid=\"companion-card\" wrapper — the rate-hidden-<id> badge exists inside each card, but the card itself has no testid. Only cosmetic — reviewers can select by rate-hidden anchor."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration25_hangouts.py",
+    "/app/test_reports/pytest/iteration26.xml"
+  ],
+  "action_items": [
+    "Stop taxing the ₹100 request fee (or store fee_paid as the actual charged amount) so decline-after-fee gives ₹0 credit and no-show gives exactly the agreed amount back, as the review-request specifies. Suggested change in server.py: in fulfil_companion() branch where status=='pending_request_fee', set fee_paid = paid (post-tax) rather than the pre-tax `request_fee`; alternatively change price_for('companion') to skip tax on the fee row.",
+    "Optional: add data-testid=\"companion-card\" on each hangout list tile in Hangouts.jsx for parity with the review-request wording."
+  ],
+  "critical_code_review_comments": [
+    "server.py:5476-5480 fulfil_companion() — writes fee_paid = b['request_fee'] (pre-tax) even though order.total was charged post-tax; this is the source of the credit-leakage bug.",
+    "server.py:1381 price_for('companion') — companion services are taxed at 18% including the request fee. Confirm with finance whether the non-refundable fee should carry GST at all; it changes the split maths for every decline/no-show.",
+    "server.py:5661 complete_booking() — either party can mark complete; still no bilateral confirmation, so a dishonest companion can bump completed count solo.",
+    "server.py:5567 try_auto_debit() — inserts a negative credit and calls confirm_booking with paid_total += agreed even though nothing new hit the payment gateway; makes paid_total ambiguous (real cash + wallet spend). Consider a separate wallet_paid field for the ledger.",
+    "server.py:5726 moderate_companion() — the review-request text mentions target_id but this codebase uses entity_id in audit_logs (already noted in iteration_25). Consistent, not a bug.",
+    "server.py:5225 HANGOUT_FEE_DEFAULT — hard-coded to 100 in code and re-derived on every request via db.settings; not cached. Cheap enough today but worth memoising if hangouts scale."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration25_hangouts.py (rewritten for fee-first flow, 22 tests, 9 test classes; module purges Tara memberships/bookings/credits, resets fee to 100, restores Ananya seed shape on teardown)"
+  ],
+  "success_rate": {"backend": "91% (20/22 — 2 fails, both the same credit-leakage bug)", "frontend": "100% of the fee-first testids resolve on desktop (rate-hidden, companion-rate, booking-total, booking-submit, my-bookings-page, request-fee-input, request-fee-save)."},
+  "test_credentials": "admin@buddilio.com/Admin@123, tara.joshi@example.com/User@123 (fixture creates a Basic membership with test_marker=iter25_fee_flow and deletes it on teardown), ananya.kapoor@example.com/User@123 (approved companion), arjun.sethi@example.com/User@123 (no membership — kept as the premium-gate 403 subject), partner@buddilio.com/Partner@123, ops.manager@buddilio.com/Console@123",
+  "seed_data_creation": "None persistent. Fixture module_scope creates one Tara membership (test_marker='iter25_fee_flow') and deletes it on teardown. All bookings, orders, credits, payouts created during the run are deleted. Ananya's companion profile is reset to its seeded shape. settings.hangout_request_fee is reset to 100 and settings.companions_min_plan is unset. Verified by post-run mongo query: 0 bookings involving Tara or Ananya, hangout_request_fee=100, 0 active Tara memberships.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Two failures in the new test module — both stem from the same root cause: the request fee is stored pre-tax as fee_paid=100 but the guest is actually charged 118 (GST 18% on the fee). Once E1 either (a) stops taxing the fee or (b) stores fee_paid = order.total (post-tax), both tests should pass unchanged. The three-consecutive-payouts test PASSED — the partialFilterExpression fix on payouts.event_id is confirmed. The suspend-then-approve visibility fix is also confirmed. Frontend testids required by the review are all present. Do not re-run the stale iteration25 suite from before — it's been fully rewritten in place.",
+  "rca_of_the_issue": "In backend/server.py, fulfil_companion() line 5477 sets fee_paid = float(b['request_fee']) = 100 (the pre-tax nominal). But the actual payment captured through /api/payments/verify uses order.total, which price_for('companion') builds as subtotal * 1.18 = 118. So paid_total after the fee step is 118, not 100. booking_refundable() then returns 118-100=18, and this 18 becomes the credit issued on decline. Same math on the second (agreed-amount) payment: paid_total = 118 + 3540 = 3658; fee_paid stays 100; refundable = 3558 instead of 3000. Fix: either strip GST on the request fee row in price_for(), or bump fee_paid to order.total in fulfil_companion() when the fee step completes."
+}

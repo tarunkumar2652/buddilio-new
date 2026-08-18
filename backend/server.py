@@ -18,7 +18,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Any, Literal
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -1378,6 +1378,12 @@ async def my_membership(user: dict = Depends(get_current_user)):
 
 
 async def price_for(kind: str, item_id: str):
+    if kind == "companion":
+        b = await db.companion_bookings.find_one({"_id": ObjectId(item_id)})
+        if not b or float(b.get("due_amount") or 0) <= 0:
+            return None, 0, "", 0
+        # Person-to-person time, not a taxed product — the guest pays exactly the agreed amount.
+        return b, float(b["due_amount"]), b.get("item_name", "Hangout booking"), 0
     if kind == "membership":
         d = await db.membership_plans.find_one({"_id": ObjectId(item_id)})
         return (d, d["price"], d["name"], 0) if d else (None, 0, "", 0)
@@ -1426,6 +1432,9 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
     if currency not in rates:
         raise HTTPException(status_code=400, detail="We don't support that currency yet.")
     tax_pct, tax_label = tax_for(currency, tax_pct, user.get("country_code", ""))
+    if payload.kind == "companion":
+        # Hangouts are person-to-person time; the guest pays exactly the agreed amount.
+        tax_pct, tax_label = 0.0, "No tax"
     taxable = subtotal - discount
     tax = round(taxable * tax_pct / 100, 2)
     total = round(taxable + tax, 2)
@@ -1526,6 +1535,8 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
                 "plan_name": plan["name"], "receipt": receipt,
                 "valid_until": ends.strftime("%d %b %Y"),
                 "membership_url": f"{FRONTEND_URL}/membership"})
+    elif order["kind"] == "companion":
+        await fulfil_companion(order, uid)
     elif order["kind"] == "event":
         ev = await db.events.find_one({"_id": ObjectId(order["ref_id"])})
         part = await db.event_participants.find_one({"event_id": order["ref_id"], "user_id": uid})
@@ -4914,6 +4925,7 @@ DEFAULT_SITE_CONTENT: dict[str, dict] = {
                        {"label": "Safety", "to": "/safety"}],
             "member": [{"label": "Dashboard", "to": "/dashboard"}, {"label": "Discover", "to": "/discover"},
                        {"label": "Events", "to": "/events"}, {"label": "Organisers", "to": "/hosts"},
+                       {"label": "Hangouts", "to": "/hangouts"},
                        {"label": "Messages", "to": "/messages"}, {"label": "Membership", "to": "/membership"},
                        {"label": "Orders", "to": "/orders"}]},
     "footer": {"groups": [
@@ -5207,6 +5219,566 @@ async def city_guide(city: str) -> dict:
     return (saved or {}).get("data") or guide_for(city)
 
 
+# ---------------- paid companion hangouts (premium only) ----------------
+# Time and company only. Rates are per hour, Buddilio keeps COMPANION_CUT%, the rest is the companion's.
+COMPANION_CUT = float(os.environ.get("COMPANION_CUT_PERCENT", "25"))
+HANGOUT_TERMS = ("Hangouts are for company and conversation only — a meal, an event, a walk around town. "
+                 "Anything else is off-limits and gets both accounts removed. Meet in public venues. "
+                 "Payments are final and non-refundable; if your companion declines or doesn't show, "
+                 "you get Buddilio credit instead.")
+HANGOUT_FEE_DEFAULT = float(os.environ.get("HANGOUT_REQUEST_FEE", "100"))
+BOOKING_OPEN = ("pending_request_fee", "pending_payment", "awaiting_acceptance",
+                "payment_due", "counter_offered", "confirmed")
+BOOKING_IN_FLIGHT = ("pending_request_fee", "pending_payment", "awaiting_acceptance",
+                     "payment_due", "counter_offered")
+
+
+async def request_fee() -> float:
+    """Small non-refundable fee charged on every request so companions aren't spammed."""
+    s = await db.settings.find_one({}, {"hangout_request_fee": 1}) or {}
+    try:
+        fee = float(s.get("hangout_request_fee"))
+    except (TypeError, ValueError):
+        fee = HANGOUT_FEE_DEFAULT
+    return round(max(fee, 0), 2)
+
+
+def booking_refundable(b: dict) -> float:
+    """Everything the guest paid apart from the request fee, which is never returned."""
+    return round(float(b.get("paid_total") or 0) - float(b.get("fee_paid") or 0), 2)
+
+
+async def premium_member(user: dict = Depends(get_current_user)) -> dict:
+    """Hangouts are invisible to everyone but paying members."""
+    member = await membership_active(user["id"])
+    if not member:
+        raise HTTPException(status_code=403, detail="Hangouts are a premium member feature.")
+    s = await db.settings.find_one({}, {"companions_min_plan": 1}) or {}
+    required = (s.get("companions_min_plan") or "").strip()
+    if required and member.get("plan_name") != required:
+        raise HTTPException(status_code=403, detail=f"Hangouts are for {required} members.")
+    user["membership"] = member
+    return user
+
+
+class CompanionIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    hourly_rate: float = Field(gt=0)
+    min_hours: int = Field(default=1, ge=1, le=6)
+    max_hours: int = Field(default=4, ge=1, le=6)
+    headline: str = ""
+    about: str = ""
+    city: str = ""
+    languages: List[str] = []
+    packages: List[dict] = []          # [{label, hours, price}]
+    enabled: bool = True
+    accept_terms: bool = False
+
+
+def companion_card(u: dict, mine: bool = False) -> dict:
+    c = u.get("companion") or {}
+    out = {"id": str(u["_id"]), "name": short_name(u.get("full_name", "Member")),
+           "photo": u.get("photo", ""), "city": c.get("city") or u.get("city", ""),
+           "age": u.get("age", 0), "headline": c.get("headline", ""), "about": c.get("about", ""),
+           "languages": c.get("languages", []), "hourly_rate": c.get("hourly_rate", 0),
+           "min_hours": c.get("min_hours", 1), "max_hours": c.get("max_hours", 4),
+           "packages": c.get("packages", []), "currency": BASE_CURRENCY,
+           "status": c.get("status", "none"), "enabled": bool(c.get("enabled")),
+           "hangouts": c.get("completed", 0), "rating": c.get("rating", 0)}
+    if mine:
+        out |= {"full_name": u.get("full_name", ""), "rejected_reason": c.get("rejected_reason", ""),
+                "cut_percent": COMPANION_CUT, "terms": HANGOUT_TERMS}
+    else:
+        # Rates stay private until the companion accepts the request.
+        out |= {"hourly_rate": 0, "rate_hidden": True,
+                "packages": [{"label": p.get("label", ""), "hours": p.get("hours", 0)}
+                             for p in (c.get("packages") or [])]}
+    return out
+
+
+def clean_packages(rows: list) -> list:
+    out = []
+    for r in rows[:6]:
+        hours = int(r.get("hours") or 0)
+        price = round(float(r.get("price") or 0), 2)
+        if hours < 1 or hours > 6 or price <= 0:
+            raise HTTPException(status_code=400, detail="Each package needs 1-6 hours and a price above zero.")
+        out.append({"label": str(r.get("label", ""))[:60] or f"{hours} hours", "hours": hours, "price": price})
+    return out
+
+
+@api.get("/me/companion")
+async def my_companion_profile(user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])})
+    return {"profile": companion_card(doc, mine=True), "terms": HANGOUT_TERMS,
+            "cut_percent": COMPANION_CUT, "can_apply": bool(doc.get("verified"))}
+
+
+@api.post("/me/companion")
+async def apply_as_companion(payload: CompanionIn, user: dict = Depends(get_current_user)):
+    """Anyone verified can switch this on and name their rate — an admin approves before they're listed."""
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if doc.get("role") != "user":
+        raise HTTPException(status_code=403, detail="Only members can offer hangouts.")
+    if not doc.get("verified"):
+        raise HTTPException(status_code=403, detail="Get your profile verified first, then you can offer hangouts.")
+    if not payload.accept_terms:
+        raise HTTPException(status_code=400, detail="Please accept the hangout terms to continue.")
+    if payload.max_hours < payload.min_hours:
+        raise HTTPException(status_code=400, detail="Maximum hours can't be less than the minimum.")
+    existing = doc.get("companion") or {}
+    status = existing.get("status") if existing.get("status") == "approved" else "pending"
+    c = {"hourly_rate": round(payload.hourly_rate, 2), "min_hours": payload.min_hours,
+         "max_hours": payload.max_hours, "headline": payload.headline[:120],
+         "about": payload.about[:1200], "city": payload.city or doc.get("city", ""),
+         "languages": [l[:30] for l in payload.languages][:6],
+         "packages": clean_packages(payload.packages), "enabled": payload.enabled,
+         "status": status, "completed": existing.get("completed", 0),
+         "accepted_terms_at": iso(now_utc()),
+         "applied_at": existing.get("applied_at") or iso(now_utc())}
+    await db.users.update_one({"_id": doc["_id"]}, {"$set": {"companion": c}})
+    if status == "pending":
+        await notify(user["id"], "Hangout profile submitted",
+                     "Our team reviews new hangout hosts within a business day. We'll tell you the moment "
+                     "you're live.", "system", "/hangouts/host", email=False)
+    return companion_card(await db.users.find_one({"_id": doc["_id"]}), mine=True)
+
+
+@api.get("/companions")
+async def list_companions(q: str = "", city: str = "", max_rate: float = -1, page: int = 1, limit: int = 12,
+                          user: dict = Depends(premium_member)):
+    flt: dict[str, Any] = {"role": "user", "status": "active", "verified": True,
+                           "companion.status": "approved", "companion.enabled": True,
+                           "_id": {"$ne": ObjectId(user["id"])}}
+    if city:
+        flt["companion.city"] = city
+    if max_rate >= 0:
+        flt["companion.hourly_rate"] = {"$lte": max_rate}
+    if q:
+        flt["$or"] = [{"full_name": {"$regex": q, "$options": "i"}},
+                      {"companion.headline": {"$regex": q, "$options": "i"}}]
+    total = await db.users.count_documents(flt)
+    docs = await db.users.find(flt).sort("companion.hourly_rate", 1) \
+        .skip((page - 1) * limit).limit(limit).to_list(limit)
+    return {"items": [companion_card(d) for d in docs], "total": total, "page": page,
+            "terms": HANGOUT_TERMS, "currency": BASE_CURRENCY, "request_fee": await request_fee()}
+
+
+@api.get("/companions/{cid}")
+async def get_companion(cid: str, user: dict = Depends(premium_member)):
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(cid), "companion.status": "approved",
+                                      "companion.enabled": True})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid companion id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="This companion isn't available right now.")
+    return companion_card(doc) | {"terms": HANGOUT_TERMS, "request_fee": await request_fee()}
+
+
+class BookingIn(BaseModel):
+    hours: int = Field(default=0, ge=0, le=6)
+    package_index: int = -1
+    offer_amount: float = 0            # member can offer above the listed rate
+    starts_at: str
+    place: str = ""
+    note: str = ""
+    accept_terms: bool = False
+
+
+def booking_view(b: dict, me: str, names: dict) -> dict:
+    other = b["companion_id"] if b["member_id"] == me else b["member_id"]
+    hidden = b["member_id"] == me and b["status"] in ("pending_request_fee", "awaiting_acceptance")
+    return {"id": str(b["_id"]), "role": "member" if b["member_id"] == me else "companion",
+            "member_id": b["member_id"], "companion_id": b["companion_id"],
+            "with_name": names.get(other, "Member"), "with_photo": (names.get(other + ":photo") or ""),
+            "rate_hidden": hidden, "request_fee": b.get("request_fee", 0),
+            "fee_paid": b.get("fee_paid", 0),
+            "hours": b["hours"], "amount": 0 if hidden else b["amount"], "paid_total": b.get("paid_total", 0),
+            "due_amount": b.get("due_amount", 0), "counter_amount": b.get("counter_amount", 0),
+            "counter_note": b.get("counter_note", ""), "currency": b.get("currency", BASE_CURRENCY),
+            "cut_percent": b.get("cut_percent", COMPANION_CUT),
+            "companion_net": b.get("companion_net", 0), "status": b["status"],
+            "starts_at": b["starts_at"], "place": b.get("place", ""), "note": b.get("note", ""),
+            "package": b.get("package", ""), "order_id": b.get("order_id", ""),
+            "created_at": b.get("created_at", "")}
+
+
+async def booking_names(rows: list) -> dict:
+    ids = {r["member_id"] for r in rows} | {r["companion_id"] for r in rows}
+    docs = await load_many(db.users, list(ids), {"full_name": 1, "photo": 1})
+    out = {}
+    for uid, d in docs.items():
+        out[uid] = short_name(d.get("full_name", "Member"))
+        out[uid + ":photo"] = d.get("photo", "")
+    return out
+
+
+@api.post("/companions/{cid}/bookings")
+async def create_booking(cid: str, payload: BookingIn, user: dict = Depends(premium_member)):
+    if not payload.accept_terms:
+        raise HTTPException(status_code=400, detail="Please accept the hangout terms to book.")
+    if cid == user["id"]:
+        raise HTTPException(status_code=400, detail="You can't book yourself.")
+    doc = await db.users.find_one({"_id": ObjectId(cid), "companion.status": "approved",
+                                  "companion.enabled": True})
+    if not doc:
+        raise HTTPException(status_code=404, detail="This companion isn't available right now.")
+    c = doc["companion"]
+    try:
+        starts = datetime.fromisoformat(payload.starts_at.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Pick a valid date and time.")
+    if starts <= now_utc() + timedelta(hours=2):
+        raise HTTPException(status_code=400, detail="Book at least two hours ahead.")
+    label = ""
+    if payload.package_index >= 0:
+        packs = c.get("packages") or []
+        if payload.package_index >= len(packs):
+            raise HTTPException(status_code=400, detail="That package is no longer offered.")
+        pack = packs[payload.package_index]
+        hours, listed, label = pack["hours"], round(float(pack["price"]), 2), pack.get("label", "")
+    else:
+        hours = payload.hours or c.get("min_hours", 1)
+        if hours < c.get("min_hours", 1) or hours > c.get("max_hours", 4):
+            raise HTTPException(status_code=400,
+                                detail=f"This companion takes bookings of {c.get('min_hours', 1)}-"
+                                       f"{c.get('max_hours', 4)} hours.")
+        listed = round(float(c["hourly_rate"]) * hours, 2)
+    offer = round(float(payload.offer_amount or 0), 2)
+    if offer > listed * 3:
+        raise HTTPException(status_code=400,
+                            detail="An offer can't be more than three times the listed price.")
+    amount = max(listed, offer)
+    if await db.companion_bookings.count_documents(
+            {"member_id": user["id"], "companion_id": cid, "status": {"$in": list(BOOKING_IN_FLIGHT)}}):
+        raise HTTPException(status_code=400,
+                            detail="You already have a request waiting with this companion — "
+                                   "finish that one first.")
+    fee = await request_fee()
+    doc_b = {"member_id": user["id"], "companion_id": cid, "hours": hours, "package": label,
+             "listed_amount": listed, "amount": amount, "due_amount": fee, "paid_total": 0.0,
+             "request_fee": fee, "fee_paid": 0.0,
+             "cut_percent": COMPANION_CUT, "currency": BASE_CURRENCY, "status": "pending_request_fee",
+             "starts_at": iso(starts), "place": payload.place[:160], "note": payload.note[:500],
+             "item_name": f"Hangout request fee · {short_name(doc.get('full_name', 'a companion'))}",
+             "created_at": iso(now_utc())}
+    res = await db.companion_bookings.insert_one(doc_b)
+    b = await db.companion_bookings.find_one({"_id": res.inserted_id})
+    names = await booking_names([b])
+    return {"booking": booking_view(b, user["id"], names), "next": "checkout",
+            "request_fee": fee,
+            "checkout": {"kind": "companion", "item_id": str(res.inserted_id), "amount": fee}}
+
+
+async def fulfil_companion(order: dict, uid: str):
+    """Money is in. Either it's the request fee, or the agreed price after the companion said yes."""
+    b = await db.companion_bookings.find_one({"_id": ObjectId(order["ref_id"])})
+    if not b or b["member_id"] != uid:
+        return
+    paid = round(float(b.get("paid_total") or 0) + float(order["total"]), 2)
+    if b["status"] == "pending_request_fee":
+        # Store what the guest was actually charged (fee + tax) — none of it comes back.
+        await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {
+            "status": "awaiting_acceptance", "paid_total": paid, "fee_paid": paid, "due_amount": 0,
+            "fee_order_id": str(order["_id"]), "requested_at": iso(now_utc())}})
+        member = await db.users.find_one({"_id": ObjectId(uid)}, {"full_name": 1})
+        await notify(b["companion_id"], "New paid hangout request",
+                     f"{short_name((member or {}).get('full_name', 'A member'))} requested "
+                     f"{b['hours']}h on {b['starts_at'][:10]}. Accept with your price, counter or decline.",
+                     "order", "/hangouts/host")
+        return
+    # The agreed price drives the split; any Buddilio credit the guest spent is our marketing cost.
+    agreed = round(float(b.get("counter_amount") or b["amount"]), 2)
+    await confirm_booking(b, agreed, paid, str(order["_id"]))
+
+
+async def confirm_booking(b: dict, agreed: float, paid: float, order_id: str):
+    cut = round(agreed * b.get("cut_percent", COMPANION_CUT) / 100, 2)
+    await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {
+        "status": "confirmed", "paid_total": paid, "due_amount": 0,
+        "amount": agreed, "companion_net": round(agreed - cut, 2), "platform_fee": cut,
+        "order_id": order_id, "confirmed_at": iso(now_utc())}})
+    await companion_payout(await db.companion_bookings.find_one({"_id": b["_id"]}))
+    await notify(b["companion_id"], "Hangout confirmed",
+                 "Your guest paid the agreed amount. The booking is locked in.",
+                 "order", "/hangouts/host")
+    await notify(b["member_id"], "Your hangout is confirmed",
+                 f"You're set for {b['hours']}h on {b['starts_at'][:10]}. Meet in a public venue.",
+                 "order", "/hangouts/bookings")
+
+
+async def companion_payout(b: dict):
+    """75% (or whatever the cut leaves) goes to the companion's payout ledger, same place organisers are paid."""
+    if await db.payouts.find_one({"booking_id": str(b["_id"])}):
+        return
+    await db.payouts.insert_one({
+        "partner_id": b["companion_id"], "booking_id": str(b["_id"]), "kind": "companion",
+        "event_id": "", "event_title": f"Hangout · {b['hours']}h on {b['starts_at'][:10]}",
+        "orders": 1, "gross": b["amount"],
+        "fee_percent": b.get("cut_percent", COMPANION_CUT), "fee": b.get("platform_fee", 0),
+        "net": b.get("companion_net", 0), "currency": b.get("currency", BASE_CURRENCY),
+        "status": "pending", "created_at": iso(now_utc())})
+
+
+async def grant_credit(user_id: str, amount: float, reason: str, booking_id: str = "") -> float:
+    if amount <= 0:
+        return 0.0
+    await db.credits.insert_one({"user_id": user_id, "amount": round(amount, 2), "type": "grant",
+                                 "reason": reason, "booking_id": booking_id,
+                                 "created_at": iso(now_utc())})
+    await notify(user_id, f"{fmt_money(amount)} Buddilio credit added", reason, "refund", "/orders")
+    return round(amount, 2)
+
+
+class CounterIn(BaseModel):
+    amount: float = Field(gt=0)
+    note: str = ""
+
+
+async def load_booking(bid: str, uid: str, side: str) -> dict:
+    try:
+        b = await db.companion_bookings.find_one({"_id": ObjectId(bid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid booking id")
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    owner = b["companion_id"] if side == "companion" else b["member_id"]
+    if owner != uid:
+        raise HTTPException(status_code=403, detail="This isn't your booking.")
+    return b
+
+
+@api.get("/me/bookings")
+async def my_bookings(user: dict = Depends(get_current_user)):
+    rows = await db.companion_bookings.find(
+        {"$or": [{"member_id": user["id"]}, {"companion_id": user["id"]}]}) \
+        .sort("created_at", -1).limit(100).to_list(100)
+    names = await booking_names(rows)
+    return {"items": [booking_view(b, user["id"], names) for b in rows],
+            "credit_balance": await credit_balance(user["id"]),
+            "request_fee": await request_fee()}
+
+
+class AcceptIn(BaseModel):
+    amount: float = 0          # 0 = the companion's listed price for these hours
+    note: str = ""
+
+
+async def try_auto_debit(b: dict, agreed: float) -> bool:
+    """Wallet first: if the guest's Buddilio balance covers the price, take it there and then."""
+    if await credit_balance(b["member_id"]) + 0.01 < agreed:
+        return False
+    await db.credits.insert_one({"user_id": b["member_id"], "amount": -round(agreed, 2), "type": "spent",
+                                 "reason": "Hangout paid from your Buddilio wallet",
+                                 "booking_id": str(b["_id"]), "created_at": iso(now_utc())})
+    await confirm_booking(b, agreed, round(float(b.get("paid_total") or 0) + agreed, 2), "wallet")
+    return True
+
+
+@api.post("/bookings/{bid}/accept")
+async def accept_booking(bid: str, payload: AcceptIn = Body(default=AcceptIn()),
+                         user: dict = Depends(get_current_user)):
+    """The companion says yes and names the price — hourly or for the whole outing."""
+    b = await load_booking(bid, user["id"], "companion")
+    if b["status"] != "awaiting_acceptance":
+        raise HTTPException(status_code=400, detail="This booking isn't waiting on you.")
+    listed = round(float(b.get("listed_amount") or b["amount"]), 2)
+    agreed = round(float(payload.amount or 0), 2) or listed
+    if agreed > listed * 3:
+        raise HTTPException(status_code=400, detail="Keep your price within three times your listed rate.")
+    await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {
+        "status": "payment_due", "amount": agreed, "due_amount": agreed,
+        "counter_note": payload.note[:300], "accepted_at": iso(now_utc()),
+        "item_name": f"{b['hours']}h hangout with {short_name(user.get('full_name', 'a companion'))}"}})
+    b = await db.companion_bookings.find_one({"_id": b["_id"]})
+    if await try_auto_debit(b, agreed):
+        return {"ok": True, "status": "confirmed", "amount": agreed, "paid_from": "wallet"}
+    await notify(b["member_id"], "Your request was accepted",
+                 f"Your companion accepted at {fmt_money(agreed)}. Pay now to lock the hangout in.",
+                 "order", "/hangouts/bookings")
+    return {"ok": True, "status": "payment_due", "amount": agreed, "due_amount": agreed}
+
+
+@api.post("/bookings/{bid}/counter")
+async def counter_booking(bid: str, payload: CounterIn, user: dict = Depends(get_current_user)):
+    """The companion can ask for more than their listed rate; the guest pays the agreed price or walks away."""
+    b = await load_booking(bid, user["id"], "companion")
+    if b["status"] != "awaiting_acceptance":
+        raise HTTPException(status_code=400, detail="This booking isn't waiting on you.")
+    amount = round(float(payload.amount), 2)
+    listed = round(float(b.get("listed_amount") or b["amount"]), 2)
+    if amount <= listed:
+        raise HTTPException(status_code=400,
+                            detail=f"A counter-offer has to be more than your listed {fmt_money(listed)}.")
+    if amount > listed * 3:
+        raise HTTPException(status_code=400, detail="Keep counter-offers within three times the listed price.")
+    await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {
+        "status": "counter_offered", "counter_amount": amount, "counter_note": payload.note[:300],
+        "due_amount": amount, "countered_at": iso(now_utc()),
+        "item_name": f"{b['hours']}h hangout with {short_name(user.get('full_name', 'a companion'))}"}})
+    await notify(b["member_id"], "Your companion sent a counter-offer",
+                 f"They've asked for {fmt_money(amount)}. Pay it to confirm, or turn the offer down.",
+                 "order", "/hangouts/bookings")
+    return {"ok": True, "status": "counter_offered", "due_amount": amount}
+
+
+@api.post("/bookings/{bid}/decline")
+async def decline_booking(bid: str, user: dict = Depends(get_current_user)):
+    b = await load_booking(bid, user["id"], "companion")
+    if b["status"] not in ("awaiting_acceptance", "payment_due", "counter_offered"):
+        raise HTTPException(status_code=400, detail="This booking can't be declined now.")
+    credit = await grant_credit(b["member_id"], booking_refundable(b),
+                               "Your companion couldn't make it, so what you paid is back as Buddilio credit.",
+                               str(b["_id"]))
+    await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {
+        "status": "declined", "due_amount": 0, "credit_issued": credit, "closed_at": iso(now_utc())}})
+    await notify(b["member_id"], "Hangout request declined",
+                 "Your companion turned the request down. The request fee isn't refundable.",
+                 "order", "/hangouts/bookings")
+    return {"ok": True, "status": "declined", "credit_issued": credit}
+
+
+@api.post("/bookings/{bid}/reject-counter")
+async def reject_counter(bid: str, user: dict = Depends(get_current_user)):
+    b = await load_booking(bid, user["id"], "member")
+    if b["status"] not in ("payment_due", "counter_offered"):
+        raise HTTPException(status_code=400, detail="There's no offer to turn down.")
+    credit = await grant_credit(user["id"], booking_refundable(b),
+                               "You turned the price down, so your payment is back as Buddilio credit.",
+                               str(b["_id"]))
+    await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {
+        "status": "cancelled", "due_amount": 0, "credit_issued": credit, "closed_at": iso(now_utc())}})
+    await notify(b["companion_id"], "Counter-offer turned down",
+                 "Your guest didn't take the higher price, so the booking is closed.", "order", "/hangouts/host")
+    return {"ok": True, "status": "cancelled", "credit_issued": credit}
+
+
+@api.post("/bookings/{bid}/complete")
+async def complete_booking(bid: str, user: dict = Depends(get_current_user)):
+    b = await db.companion_bookings.find_one({"_id": ObjectId(bid)})
+    if not b or user["id"] not in (b["member_id"], b["companion_id"]):
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if b["status"] != "confirmed":
+        raise HTTPException(status_code=400, detail="Only a confirmed hangout can be marked done.")
+    if b["starts_at"] > iso(now_utc()):
+        raise HTTPException(status_code=400, detail="You can mark it done once the hangout has started.")
+    await db.companion_bookings.update_one({"_id": b["_id"]},
+                                          {"$set": {"status": "completed", "completed_at": iso(now_utc())}})
+    await db.users.update_one({"_id": ObjectId(b["companion_id"])}, {"$inc": {"companion.completed": 1}})
+    return {"ok": True, "status": "completed"}
+
+
+class NoShowIn(BaseModel):
+    note: str = ""
+
+
+@api.post("/bookings/{bid}/no-show")
+async def report_no_show(bid: str, payload: NoShowIn, user: dict = Depends(get_current_user)):
+    """Money is never refunded, but a no-show turns it into credit and flags the companion for review."""
+    b = await load_booking(bid, user["id"], "member")
+    if b["status"] != "confirmed":
+        raise HTTPException(status_code=400, detail="Only a confirmed hangout can be reported.")
+    if b["starts_at"] > iso(now_utc()):
+        raise HTTPException(status_code=400, detail="Report this after the start time.")
+    credit = await grant_credit(user["id"], booking_refundable(b),
+                               "Your companion didn't show, so what you paid is back as Buddilio credit.",
+                               str(b["_id"]))
+    await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {
+        "status": "no_show", "credit_issued": credit, "no_show_note": payload.note[:300],
+        "closed_at": iso(now_utc())}})
+    await db.payouts.update_many({"booking_id": str(b["_id"]), "status": "pending"},
+                                 {"$set": {"status": "held", "hold_reason": "Guest reported a no-show"}})
+    await db.reports.insert_one({"reporter_id": user["id"], "reporter_email": user["email"],
+                                 "target_type": "user", "target_id": b["companion_id"],
+                                 "reason": "Hangout no-show", "details": payload.note[:300],
+                                 "status": "open", "created_at": iso(now_utc())})
+    return {"ok": True, "status": "no_show", "credit_issued": credit}
+
+
+# ---- admin side ----
+class CompanionModIn(BaseModel):
+    action: str
+    reason: str = ""
+
+
+@api.get("/admin/companions")
+async def admin_companions(status: str = "pending", user: dict = Depends(require_perm("members:manage"))):
+    flt: dict[str, Any] = {"companion": {"$exists": True}}
+    if status != "all":
+        flt["companion.status"] = status
+    docs = await db.users.find(flt).sort("companion.applied_at", -1).limit(200).to_list(200)
+    counts = {s: await db.users.count_documents({"companion.status": s})
+              for s in ("pending", "approved", "rejected", "suspended")}
+    return {"items": [companion_card(d) | {"email": d.get("email", ""), "full_name": d.get("full_name", ""),
+                                           "applied_at": (d.get("companion") or {}).get("applied_at", "")}
+                      for d in docs],
+            "counts": counts, "cut_percent": COMPANION_CUT}
+
+
+@api.post("/admin/companions/{cid}")
+async def moderate_companion(cid: str, payload: CompanionModIn,
+                             user: dict = Depends(require_perm("members:manage"))):
+    if payload.action not in ("approve", "reject", "suspend"):
+        raise HTTPException(status_code=400, detail="Unknown action")
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(cid), "companion": {"$exists": True}})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid member id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="No hangout profile for that member.")
+    state = {"approve": "approved", "reject": "rejected", "suspend": "suspended"}[payload.action]
+    await db.users.update_one({"_id": doc["_id"]}, {"$set": {
+        "companion.status": state, "companion.rejected_reason": payload.reason[:300] if state != "approved" else "",
+        "companion.enabled": state == "approved",
+        "companion.reviewed_at": iso(now_utc())}})
+    await audit(user, f"companion.{payload.action}", "user", cid, {"reason": payload.reason[:120]})
+    msg = {"approved": "You're live — premium members can now book time with you.",
+           "rejected": payload.reason or "We can't list your hangout profile right now.",
+           "suspended": payload.reason or "Your hangout profile has been paused by our team."}[state]
+    await notify(cid, f"Hangout profile {state}", msg, "system", "/hangouts/host")
+    return {"ok": True, "status": state}
+
+
+@api.get("/admin/companion-bookings")
+async def admin_bookings(status: str = "", user: dict = Depends(require_perm("finance:view",
+                                                                            "members:manage"))):
+    flt = {"status": status} if status else {}
+    rows = await db.companion_bookings.find(flt).sort("created_at", -1).limit(200).to_list(200)
+    names = await booking_names(rows)
+    gross = round(sum(float(r.get("paid_total") or 0) for r in rows), 2)
+    return {"items": [booking_view(b, "", names) | {"member_name": names.get(b["member_id"], ""),
+                                                    "companion_name": names.get(b["companion_id"], "")}
+                      for b in rows],
+            "totals": {"bookings": len(rows), "gross": gross,
+                       "platform": round(sum(float(r.get("platform_fee") or 0) for r in rows), 2),
+                       "companions": round(sum(float(r.get("companion_net") or 0) for r in rows), 2)},
+            "cut_percent": COMPANION_CUT}
+
+
+class CreditIn(BaseModel):
+    amount: float = Field(gt=0)
+    reason: str = ""
+
+
+@api.post("/admin/companion-bookings/{bid}/credit")
+async def admin_grant_credit(bid: str, payload: CreditIn,
+                             user: dict = Depends(require_perm("finance:manage"))):
+    """Payments are non-refundable — this is the goodwill lever when a guest deserves something back."""
+    try:
+        b = await db.companion_bookings.find_one({"_id": ObjectId(bid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid booking id")
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if payload.amount > float(b["amount"]):
+        raise HTTPException(status_code=400, detail="Credit can't be more than the booking price.")
+    credit = await grant_credit(b["member_id"], payload.amount,
+                               payload.reason or "Buddilio credit added by our team.", bid)
+    await audit(user, "companion.credit", "booking", bid, {"amount": credit, "reason": payload.reason[:120]})
+    return {"ok": True, "credit_issued": credit}
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
@@ -5227,7 +5799,12 @@ async def startup():
     await db.messages.create_index([("conversation_id", 1), ("created_at", 1)])
     await db.notifications.create_index([("user_id", 1), ("read", 1)])
     await db.orders.create_index([("user_id", 1), ("created_at", -1)])
-    await db.payouts.create_index("event_id", unique=True)
+    try:
+        await db.payouts.drop_index("event_id_1")
+    except Exception:
+        pass
+    await db.payouts.create_index("event_id", unique=True,
+                                  partialFilterExpression={"event_id": {"$gt": ""}})
     await db.reviews.create_index([("event_id", 1), ("user_id", 1)], unique=True)
     await db.push_subscriptions.create_index("endpoint", unique=True)
     await db.city_waitlist.create_index([("city", 1), ("email", 1)], unique=True)
@@ -5256,6 +5833,9 @@ async def startup():
     await db.site_content.create_index("key", unique=True)
     await db.city_guides.create_index("slug", unique=True)
     await db.email_templates.create_index("key", unique=True)
+    await db.companion_bookings.create_index([("member_id", 1), ("created_at", -1)])
+    await db.companion_bookings.create_index([("companion_id", 1), ("status", 1)])
+    await db.users.create_index("companion.status")
     await db.upload_parts.create_index([("upload_id", 1), ("index", 1)], unique=True)
     await db.upload_sessions.create_index("upload_id", unique=True)
     await db.upload_sessions.create_index("created_at", expireAfterSeconds=3600)

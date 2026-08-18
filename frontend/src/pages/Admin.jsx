@@ -8,6 +8,7 @@ import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 import { Verifications } from "@/components/Verifications";
 import { PhotoModeration } from "@/components/PhotoModeration";
+import { Companions } from "@/components/Companions";
 import { Team } from "@/components/Team";
 import { Pages, SiteContent, CityGuides } from "@/components/ContentStudio";
 import { EmailTemplates } from "@/components/EmailTemplates";
@@ -22,7 +23,7 @@ const NAV = [
   ["orders", "Orders", "finance:view"], ["payments", "Payments", "finance:view"],
   ["payouts", "Payouts", "payouts:view"], ["coupons", "Coupons", "finance:manage"],
   ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
-  ["photos", "Photo wall", "moderation:manage"], ["content", "Content", "content:manage"],
+  ["photos", "Photo wall", "moderation:manage"], ["companions", "Hangouts", "members:manage"], ["content", "Content", "content:manage"],
   ["pages", "Pages", "content:manage"], ["sections", "Site sections", "content:manage"],
   ["guides", "City guides", "content:manage"], ["emails", "Emails", "content:manage"],
   ["settings", "Settings", "content:manage"], ["audit", "Audit logs", "audit:view"],
@@ -168,6 +169,7 @@ export default function Admin() {
         {active === "reports" && <Reports />}
         {active === "reviews" && <ReviewsMod />}
         {active === "photos" && <PhotoModeration />}
+        {active === "companions" && <Companions />}
         {active === "content" && <Content />}
         {active === "settings" && <Settings />}
         {active === "audit" && <Audit />}

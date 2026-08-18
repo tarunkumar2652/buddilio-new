@@ -480,6 +480,30 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   (`/app/test_reports/iteration_24.json`) — no bugs; overrides proven to apply on real sends; templates reset,
   nothing left in `db.email_templates`.
 
+## Iteration 25–26 — Paid hangouts, request fee & hidden rates (June 2026)
+- **Premium-only paid hangouts** (`backend/server.py`, `frontend/src/pages/Hangouts.jsx`,
+  `frontend/src/components/Companions.jsx`): any *verified* member can offer hangouts (admin approves),
+  only members with an active membership can browse/book, nothing is publicly visible. Buddilio keeps **25%**
+  of the agreed price, the companion gets **75%** via the existing payout ledger (no real bank settlement yet).
+- **Non-refundable request fee** (default **₹100**, editable in Admin → Companions → “Request fee”, stored as
+  `settings.hangout_request_fee`): charged on *every* request to stop spam. Booking starts at
+  `pending_request_fee`, paying the fee moves it to `awaiting_acceptance`. The fee is never refunded and is
+  excluded from the 75/25 split (`booking_refundable()` = paid_total − fee_paid).
+- **Rates hidden until acceptance**: browsing and detail responses return `hourly_rate: 0`, `rate_hidden: true`
+  and packages without prices; the member's own booking hides the amount until the companion accepts.
+- **Acceptance names the price**: `POST /api/bookings/{id}/accept` (optional `{amount}`) or `…/counter`
+  (must exceed the listed price), both capped at 3× listed. Booking goes to `payment_due` / `counter_offered`
+  with `due_amount` = full agreed price.
+- **Wallet auto-debit**: if the member's Buddilio credit balance covers the agreed price, acceptance confirms
+  the booking instantly (`paid_from: "wallet"`); otherwise they're sent to the card checkout.
+- Hangout orders are **tax-free** (person-to-person time), so the guest pays exactly the agreed amount.
+- Bugs fixed from iteration 25: `payouts.event_id` unique index made partial (was 500-ing every 2nd companion
+  payout), approve-after-suspend now restores `companion.enabled`, member offers capped at 3× listed.
+- **Site-wide fix**: every route change now scrolls to the top (or to the `#hash` section) — `ScrollToTop`
+  in `frontend/src/App.js`.
+- Verified: `backend/tests/test_iteration25_hangouts.py` **22/22 passing** (run with `-n 0`) plus testing-agent
+  iterations 25 & 26. Test data cleaned (0 companion bookings/payouts, fee reset to 100).
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only
