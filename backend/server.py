@@ -7,6 +7,7 @@ load_dotenv(ROOT_DIR / '.env')
 import os
 import asyncio
 import json
+import re
 import jwt
 import bcrypt
 import uuid
@@ -120,6 +121,15 @@ def require_role(*roles):
 
 admin_only = require_role("admin")
 partner_only = require_role("partner", "admin")
+manager_only = require_role("manager", "admin")
+
+
+async def active_manager(user: dict = Depends(manager_only)) -> dict:
+    """Managers can sign up freely but stay read-only until Buddilio approves them."""
+    if user.get("role") == "manager" and user.get("status") != "active":
+        raise HTTPException(status_code=403,
+                            detail="Your console account is still awaiting approval from Buddilio.")
+    return user
 
 
 async def audit(actor: dict, action: str, entity: str, entity_id: str = "", meta: dict | None = None):
@@ -3217,6 +3227,258 @@ async def ai_guest(payload: AiGuestIn, request: Request):
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                                       "Connection": "keep-alive"})
+
+
+# ---------------- vendor management console ----------------
+class ManagerRegisterIn(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    org_name: str = ""
+    mobile: str = ""
+    country: str = ""
+
+
+class VendorIn(BaseModel):
+    full_name: str
+    email: str
+    org_name: str
+    city: str
+    mobile: str = ""
+    country: str = ""
+    bio: str = ""
+    photo: str = ""
+
+
+class VendorPatch(BaseModel):
+    full_name: str = ""
+    org_name: str = ""
+    city: str = ""
+    mobile: str = ""
+    bio: str = ""
+    photo: str = ""
+    status: str = ""
+    verified: Optional[bool] = None
+
+
+VENDOR_FIELDS = {"full_name": 1, "email": 1, "org_name": 1, "city": 1, "country": 1, "mobile": 1,
+                 "status": 1, "verified": 1, "photo": 1, "bio": 1, "rating": 1, "created_at": 1,
+                 "managed_by": 1}
+
+
+async def vendor_invite(vendor: dict, manager_name: str) -> None:
+    token = secrets.token_urlsafe(32)
+    await db.password_reset_tokens.insert_one({"token": token, "user_id": str(vendor["_id"]),
+                                               "used": False, "expires_at": now_utc() + timedelta(days=7)})
+    await send_email(vendor["email"], "Your Buddilio organiser account", wrap(
+        f"You're set up on Buddilio, {vendor.get('full_name', 'there').split(' ')[0]}",
+        f"<p>{manager_name} created an organiser account for "
+        f"<b>{vendor.get('org_name') or vendor.get('full_name')}</b> on Buddilio.</p>"
+        "<p>Choose a password to take over the account, then publish your first experience. "
+        "This link works for 7 days.</p>",
+        "Set my password", f"{FRONTEND_URL}/reset-password?token={token}"))
+
+
+async def vendor_stats(ids: List[str]) -> dict:
+    """Events, published count and seats sold per vendor, in two queries."""
+    out = {v: {"events": 0, "published": 0, "participants": 0} for v in ids}
+    if not ids:
+        return out
+    events = await db.events.find({"partner_id": {"$in": ids}},
+                                  {"partner_id": 1, "status": 1}).limit(2000).to_list(2000)
+    by_event = {str(e["_id"]): e["partner_id"] for e in events}
+    for e in events:
+        row = out.setdefault(e["partner_id"], {"events": 0, "published": 0, "participants": 0})
+        row["events"] += 1
+        if e.get("status") == "published":
+            row["published"] += 1
+    if by_event:
+        parts = await db.event_participants.find({"event_id": {"$in": list(by_event)}, "status": "confirmed"},
+                                                {"event_id": 1}).limit(5000).to_list(5000)
+        for p in parts:
+            pid = by_event.get(p["event_id"])
+            if pid in out:
+                out[pid]["participants"] += 1
+    return out
+
+
+@api.post("/console/register")
+async def console_register(payload: ManagerRegisterIn, response: Response):
+    """Anyone can request a console account; it stays pending until an admin approves it."""
+    email = payload.email.lower().strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}", email):
+        raise HTTPException(status_code=400, detail="Please enter a valid work email address.")
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Use at least 8 characters for your password.")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+    doc = {"full_name": payload.full_name.strip(), "email": email, "mobile": payload.mobile.strip(),
+           "password_hash": hash_password(payload.password), "role": "manager", "status": "pending",
+           "org_name": payload.org_name.strip(), "country": payload.country, "city": "",
+           "photo": "", "bio": "", "verified": False, "email_verified": False,
+           "notification_prefs": {"email": True, "in_app": True, "sms": False, "push": False},
+           "blocked": [], "connections": [], "saved_events": [], "created_at": iso(now_utc())}
+    res = await db.users.insert_one(doc)
+    mid = str(res.inserted_id)
+    for a in await db.users.find({"role": "admin"}, {"_id": 1}).limit(10).to_list(10):
+        await notify(str(a["_id"]), "New console account request",
+                     f"{payload.full_name} ({email}) wants vendor management access.",
+                     "console", "/admin", email=False)
+    await send_email(email, "Your Buddilio console request", wrap(
+        "Request received",
+        f"<p>Thanks {payload.full_name.split(' ')[0]} — your Buddilio Vendor Console request is with our team.</p>"
+        "<p>You can sign in now, but adding vendors unlocks as soon as we approve you. "
+        "We usually review within one business day.</p>",
+        "Open the console", f"{FRONTEND_URL}/console"))
+    token = create_access_token(mid, email, "manager")
+    set_cookies(response, token)
+    return {"access_token": token, "user": clean(await db.users.find_one({"_id": res.inserted_id}))}
+
+
+@api.get("/console/summary")
+async def console_summary(user: dict = Depends(manager_only)):
+    q = {"role": "partner"} if user["role"] == "admin" else {"role": "partner", "managed_by": user["id"]}
+    vendors = await db.users.find(q, {"status": 1}).limit(500).to_list(500)
+    ids = [str(v["_id"]) for v in vendors]
+    stats = await vendor_stats(ids)
+    return {"approved": user["role"] == "admin" or user.get("status") == "active",
+            "vendors": len(vendors),
+            "active_vendors": sum(1 for v in vendors if v.get("status") == "active"),
+            "events": sum(s["events"] for s in stats.values()),
+            "published": sum(s["published"] for s in stats.values()),
+            "seats_sold": sum(s["participants"] for s in stats.values())}
+
+
+@api.get("/console/vendors")
+async def console_vendors(q: str = "", user: dict = Depends(manager_only)):
+    query = {"role": "partner"} if user["role"] == "admin" else {"role": "partner", "managed_by": user["id"]}
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        query["$or"] = [{"full_name": rx}, {"email": rx}, {"org_name": rx}, {"city": rx}]
+    docs = await db.users.find(query, VENDOR_FIELDS).sort("created_at", -1).limit(200).to_list(200)
+    stats = await vendor_stats([str(d["_id"]) for d in docs])
+    items = []
+    for d in docs:
+        v = clean(d)
+        v.update(stats.get(v["id"], {"events": 0, "published": 0, "participants": 0}))
+        items.append(v)
+    return {"items": items}
+
+
+async def owned_vendor(vid: str, user: dict) -> dict:
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(vid), "role": "partner"}, VENDOR_FIELDS)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    if not doc or (user["role"] != "admin" and doc.get("managed_by") != user["id"]):
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return doc
+
+
+@api.get("/console/vendors/{vid}")
+async def console_vendor(vid: str, user: dict = Depends(manager_only)):
+    doc = await owned_vendor(vid, user)
+    v = clean(doc)
+    v.update((await vendor_stats([vid])).get(vid, {}))
+    events = await db.events.find({"partner_id": vid}, {"title": 1, "status": 1, "city": 1, "starts_at": 1}) \
+        .sort("starts_at", -1).limit(20).to_list(20)
+    v["recent_events"] = [clean(e) for e in events]
+    return v
+
+
+@api.post("/console/vendors")
+async def console_create_vendor(payload: VendorIn, user: dict = Depends(active_manager)):
+    email = payload.email.lower().strip()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+    if not payload.org_name.strip() or not payload.full_name.strip():
+        raise HTTPException(status_code=400, detail="Vendor name and organisation are both required.")
+    if not payload.city.strip():
+        raise HTTPException(status_code=400, detail="Please choose the vendor's city.")
+    c = country_for_city(payload.city) or {}
+    doc = {"full_name": payload.full_name.strip(), "email": email, "mobile": payload.mobile.strip(),
+           "password_hash": hash_password(secrets.token_urlsafe(24)), "role": "partner", "status": "active",
+           "org_name": payload.org_name.strip(), "city": payload.city.strip(),
+           "country": payload.country or c.get("name", ""), "country_code": c.get("code", ""),
+           "bio": payload.bio, "photo": payload.photo, "verified": False, "email_verified": False,
+           "managed_by": user["id"], "created_by_name": user["full_name"],
+           "privacy": {"profile_visibility": "public", "who_can_message": "everyone"},
+           "notification_prefs": {"email": True, "in_app": True, "sms": False, "push": True},
+           "blocked": [], "connections": [], "saved_events": [], "created_at": iso(now_utc())}
+    res = await db.users.insert_one(doc)
+    vendor = await db.users.find_one({"_id": res.inserted_id})
+    try:
+        await vendor_invite(vendor, user["full_name"])
+    except Exception as e:  # an email hiccup must not lose the vendor account
+        logger.error(f"vendor invite email failed: {e}")
+    await audit(user, "vendor.create", "user", str(res.inserted_id), {"email": email})
+    v = clean({k: vendor.get(k) for k in list(VENDOR_FIELDS) + ["_id"] if k in vendor})
+    v.update({"events": 0, "published": 0, "participants": 0})
+    return v
+
+
+@api.patch("/console/vendors/{vid}")
+async def console_update_vendor(vid: str, payload: VendorPatch, user: dict = Depends(active_manager)):
+    await owned_vendor(vid, user)
+    upd = {k: v for k, v in payload.dict().items() if k not in ("status", "verified") and v not in ("", None)}
+    if payload.status:
+        if payload.status not in ("active", "suspended"):
+            raise HTTPException(status_code=400, detail="Status must be either active or suspended.")
+        upd["status"] = payload.status
+    if payload.verified is not None:
+        upd["verified"] = payload.verified
+    if upd.get("city"):
+        c = country_for_city(upd["city"]) or {}
+        upd["country"], upd["country_code"] = c.get("name", ""), c.get("code", "")
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to update.")
+    await db.users.update_one({"_id": ObjectId(vid)}, {"$set": upd})
+    await audit(user, "vendor.update", "user", vid, upd)
+    v = clean(await db.users.find_one({"_id": ObjectId(vid)}, VENDOR_FIELDS))
+    v.update((await vendor_stats([vid])).get(vid, {}))
+    return v
+
+
+@api.post("/console/vendors/{vid}/invite")
+async def console_resend_invite(vid: str, user: dict = Depends(active_manager)):
+    doc = await owned_vendor(vid, user)
+    await vendor_invite(await db.users.find_one({"_id": doc["_id"]}), user["full_name"])
+    return {"ok": True, "message": f"Set-password link sent to {doc['email']}."}
+
+
+@api.get("/admin/managers")
+async def admin_managers(user: dict = Depends(admin_only)):
+    docs = await db.users.find({"role": "manager"},
+                               {"full_name": 1, "email": 1, "org_name": 1, "status": 1, "mobile": 1,
+                                "country": 1, "created_at": 1}).sort("created_at", -1).limit(200).to_list(200)
+    items = []
+    for d in docs:
+        m = clean(d)
+        m["vendors"] = await db.users.count_documents({"role": "partner", "managed_by": m["id"]})
+        items.append(m)
+    return {"items": items}
+
+
+@api.patch("/admin/managers/{mid}")
+async def admin_update_manager(mid: str, body: dict, user: dict = Depends(admin_only)):
+    action = body.get("action")
+    if action not in ("approve", "reject", "suspend"):
+        raise HTTPException(status_code=400, detail="Unknown action")
+    status = {"approve": "active", "reject": "rejected", "suspend": "suspended"}[action]
+    doc = await db.users.find_one({"_id": ObjectId(mid), "role": "manager"})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Manager not found")
+    await db.users.update_one({"_id": doc["_id"]}, {"$set": {"status": status}})
+    await audit(user, f"manager.{action}", "user", mid)
+    if action == "approve":
+        await notify(mid, "Console access approved",
+                     "You can now add and manage vendors from the Buddilio console.", "console", "/console")
+        await send_email(doc["email"], "Your Buddilio console is ready", wrap(
+            "You're approved",
+            f"<p>Hi {doc.get('full_name','there').split(' ')[0]}, your Buddilio Vendor Console is open. "
+            "You can add organisers, manage their accounts and follow their events.</p>",
+            "Open the console", f"{FRONTEND_URL}/console"))
+    return {"ok": True, "status": status}
 
 
 app.include_router(api)

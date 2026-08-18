@@ -8,11 +8,62 @@ import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 
 const NAV = [
-  ["dashboard", "Dashboard"], ["users", "Users"], ["partners", "Partners"], ["events", "Events"],
+  ["dashboard", "Dashboard"], ["users", "Users"], ["partners", "Partners"], ["managers", "Console access"], ["events", "Events"],
   ["memberships", "Memberships"], ["products", "Products"], ["orders", "Orders"], ["payments", "Payments"],
   ["payouts", "Payouts"], ["coupons", "Coupons"], ["reports", "Reports"], ["reviews", "Reviews"],
   ["content", "Content"], ["settings", "Settings"], ["audit", "Audit logs"],
 ];
+
+const Managers = () => {
+  const [items, setItems] = useState(null);
+  const load = () => api.get("/admin/managers").then(({ data }) => setItems(data.items)).catch((e) => toast.error(errMsg(e)));
+  useEffect(() => { load(); }, []);
+
+  const act = async (id, action) => {
+    try { await api.patch(`/admin/managers/${id}`, { action }); toast.success(`Console account ${action}d`); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+
+  if (!items) return <Spinner />;
+  if (!items.length) return <p className="text-sm text-slate-500" data-testid="managers-empty">No console accounts requested yet.</p>;
+
+  return (
+    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white" data-testid="managers-table">
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>{["Name", "Email", "Company", "Vendors", "Status", ""].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}</tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {items.map((m) => (
+            <tr key={m.id} data-testid={`manager-row-${m.id}`}>
+              <td className="px-4 py-3 font-semibold">{m.full_name}</td>
+              <td className="px-4 py-3 text-slate-500">{m.email}</td>
+              <td className="px-4 py-3 text-slate-500">{m.org_name || "—"}</td>
+              <td className="px-4 py-3">{m.vendors}</td>
+              <td className="px-4 py-3"><Badge tone={m.status === "active" ? "green" : m.status === "pending" ? "amber" : "red"}>{m.status}</Badge></td>
+              <td className="px-4 py-3">
+                <div className="flex gap-2">
+                  {m.status !== "active" && (
+                    <button onClick={() => act(m.id, "approve")} data-testid={`manager-approve-${m.id}`}
+                      className="rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white">Approve</button>
+                  )}
+                  {m.status === "active" && (
+                    <button onClick={() => act(m.id, "suspend")} data-testid={`manager-suspend-${m.id}`}
+                      className="rounded-full border border-slate-200 px-3.5 py-1.5 text-xs font-bold">Suspend</button>
+                  )}
+                  {m.status === "pending" && (
+                    <button onClick={() => act(m.id, "reject")} data-testid={`manager-reject-${m.id}`}
+                      className="rounded-full border border-slate-200 px-3.5 py-1.5 text-xs font-bold text-rose-600">Reject</button>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
 const Input = ({ label, ...p }) => (
   <label className="block"><span className="text-xs font-bold text-slate-600">{label}</span>
@@ -41,6 +92,7 @@ export default function Admin() {
         {tab === "dashboard" && <Overview />}
         {tab === "users" && <Users key="u" role="user" />}
         {tab === "partners" && <Users key="p" role="partner" />}
+        {tab === "managers" && <Managers />}
         {tab === "events" && <Events />}
         {tab === "memberships" && <Crud path="plans" title="Membership plans"
           fields={[["name", "text"], ["price", "number"], ["duration_days", "number"], ["description", "text"], ["discount_percent", "number"], ["benefits", "list"], ["price_overrides", "json"], ["active", "bool"]]}

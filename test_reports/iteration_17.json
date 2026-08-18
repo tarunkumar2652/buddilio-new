@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 17 — Vendor Console (managers + vendors). Wrote /app/backend/tests/test_iteration17_console.py (30 pytest cases, 8 classes) covering the entire console surface E1 asked for: pending-manager registration + immediate token, approval-gate 403 on write endpoints (POST/PATCH/invite) but 200 on reads (summary/vendors), admin approve/suspend/reject via /api/admin/managers with non-admin guard, vendor create by approved manager (managed_by, dup email 400, missing city/org 400), full vendor takeover path (password_reset_tokens row → POST /auth/reset-password → login as partner → POST /partner/events succeeds), suspend-manager-loses-write (403 on POST /console/vendors while suspended; also blocks reads because get_current_user rejects any suspended account), vendor management (detail with stats+recent_events, PATCH edits persist, toggle-status active↔suspended, toggle-verified, resend-invite), search by name/email/org/city (positive + negative), isolation (member 403 everywhere, second manager 404 on someone else's vendor & empty list, admin sees ALL vendors incl. legacy no-managed_by), and member-app regression (auth/me, events, conversations, notifications, admin users/events still 200). 30/30 pass in serial. In parallel (pytest-xdist default in this repo) 27-28/30 pass; 2 flaky failures traced to a real intermittent 500 in POST /api/console/vendors (see backend_issues). Also did Playwright smoke on the console UI at desktop (1440x900) and mobile (390x844): no member navbar/footer/AI widget, no horizontal overflow at either width, Main site + Sign out links present, toggle-mode reveals register form, and a member (diya.sharma) trying to sign in is rejected before entering the console (`console-page` is not rendered; a toast — 'That account isn't a console account.' — surfaces from Console.jsx L36).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/console/vendors", "issue": "Intermittent 500 under concurrent load. server.py L3410 does `v = clean(await db.users.find_one({\"_id\": res.inserted_id}, VENDOR_FIELDS))` and then `v.update({...})`. When find_one races (or when the preceding `send_email` inside `vendor_invite` throws — see 'email rate limit exceeded' in logs), the doc read can come back as None and `.update()` raises AttributeError → 500. Fix: (a) reuse the doc already fetched on L3407 (`v = clean({k: vendor.get(k) for k in VENDOR_FIELDS})`), or (b) wrap send_email in try/except so a provider hiccup doesn't propagate, or (c) at minimum guard: `if not v: raise HTTPException(500, ...)`. Reproduced twice in a 30-test parallel run; not seen in serial runs."},
+      {"endpoint": "POST /api/console/register", "issue": "email is only .lower().strip() — no format validation. A bare string like 'not-an-email' is accepted and stored. Consider `EmailStr` in the Pydantic model (already used elsewhere)."},
+      {"endpoint": "PATCH /api/console/vendors/{vid}", "issue": "VendorPatch.status accepts only ('active','suspended') — anything else is silently ignored (not a 400). A caller sending status='banned' or a typo gets a 200 with no change. Consider validating explicitly or using an Enum."},
+      {"endpoint": "PATCH /api/admin/managers/{mid}", "issue": "There is no reverse transition from 'rejected'/'suspended' → 'active' surfaced in the UI (only Approve after pending). The endpoint itself supports it via action='approve', but a rejected manager listed in Admin → Console access can be approved back; confirm this is intentional."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/console (Add a vendor form)", "issues": ["City picker uses a native <select> (`<select>Choose a city…</select>`). The rest of the app uses shadcn Select components; this feels inconsistent, especially on mobile where the native picker takes the full screen while the app's own selects don't."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration17_console.py",
+    "/app/test_reports/pytest/iteration17.xml"
+  ],
+  "action_items": [
+    "Harden POST /api/console/vendors: don't re-read after insert, or guard against clean()->None, or catch send_email exceptions so email provider rate limits don't blow up vendor creation.",
+    "Add EmailStr validation on ManagerRegisterIn.email (and consider re-using RegisterIn's validator).",
+    "Consider validating VendorPatch.status against a fixed set rather than silently ignoring unknowns.",
+    "(Cosmetic) Replace the native <select> city picker in Console.jsx VendorForm with the shadcn Select used elsewhere so mobile UX matches the rest of the app."
+  ],
+  "critical_code_review_comments": [
+    "server.py L3410: clean() returns None for a missing doc and the next line calls `.update()` on it — always a NPE risk. Prefer building the response from the already-fetched `vendor` local (L3407).",
+    "server.py L3418: VendorPatch dict-filter drops empty strings but silently ignores unknown status values ('banned', 'foo' → treated as no-op). At least log or 400 on unknown status.",
+    "server.py L3324: notify(...) fires an `email=False` alert to every admin on manager registration but no admin sees the count in Console access tab live — consider a lightweight WS/pubsub or just marking the notification as clickable.",
+    "server.py L3305: console_register issues a JWT immediately for a pending user; that's fine for read-only screens but note the token lifespan is the normal access token TTL — if approval takes days, the user may need to re-login before ever using write endpoints. Acceptable trade-off, worth documenting.",
+    "server.py L101: get_current_user rejects any 'suspended' user with 403. That means a suspended manager cannot even read /console/summary — which is what my test observed. Fine functionally, but the spec text 'CAN read GET /api/console/summary' only holds while status='pending'. Suspend/reject removes all reads (401/403). If E1 wants a suspended manager to see a friendly 'suspended' page they'd need a status-aware carve-out in get_current_user (like the 'suspended' toast on login).",
+    "Console.jsx L20-22 (VendorForm): City list is hard-coded via a native <select>. Use the shadcn Select + city catalog to stay consistent with the member/partner event form.",
+    "Console.jsx L36: When a member tries to sign in on /console the code shows a toast but the token IS still stored (react-hot-toast is fire-and-forget). Consider explicitly `logout()` if the returned user's role isn't manager/admin so we don't leave a stale member JWT sitting in localStorage for the wrong app.",
+    "Admin.jsx: NAV 'Console access' entry pulls counts via GET /admin/managers on every tab-switch — fine at this scale (≤200 rows) but could benefit from React Query invalidation on approve/suspend/reject so the row disappears/updates without an extra roundtrip."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration17_console.py"
+  ],
+  "success_rate": {"backend": "100% serial, ~93% parallel (2 flaky 500s on POST /console/vendors under load)", "frontend": "100% smoke-check"},
+  "test_credentials": "admin@buddilio.com / Admin@123; ops.manager@buddilio.com / Console@123 (approved manager); diya.sharma@example.com / User@123 (member). Test also registers/deletes ephemeral test_* managers and test_* vendors.",
+  "seed_data_creation": "None persisted. Every manager, vendor, event and password_reset_tokens row created by the suite is cleaned up in the fixture teardown + conftest session teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iteration17_console.py is the single-file regression for the vendor console. Run serially (`-n 0`) to avoid the intermittent 500 on POST /console/vendors when the email provider is rate-limited; that's a real backend robustness issue but doesn't block feature verification. Frontend smoke covered: /console layout (no member chrome), toggle-mode → register form, approved manager lands on console-page with 0 horizontal overflow at 1920/390px, member trying to sign in stays on the auth screen (toast surfaces via Console.jsx L36). Not covered here (already vetted in iterations 11-16): Google auth, Buddy AI, guest AI, picks, companion matches, media storage — smoke-check only. Preview URL: https://lifestyle-connect-17.preview.emergentagent.com.",
+  "rca of the issue": "Intermittent POST /api/console/vendors 500 — server.py L3410 does `v = clean(await db.users.find_one({\"_id\": res.inserted_id}, VENDOR_FIELDS))` then `v.update(...)`. Under parallel load two things can go wrong: (1) the preceding `await vendor_invite(vendor, ...)` calls `send_email` which propagates a Resend 429 as an exception in some paths (see backend.err.log 'Email send error:'); if that raises, the endpoint returns 500 before reaching L3410 (but the vendor IS created — audit already ran). (2) even without the email error, if `clean()` receives None the AttributeError on L3410 raises 500. Concrete stack captured: `File .../server.py line 3411, in console_create_vendor: v.update({...}) AttributeError: 'NoneType' object has no attribute 'update'`. Repro: run test_iteration17 with pytest-xdist (2 workers) so vendor invites fire back-to-back → Resend rate-limits. Mitigation: (a) wrap send_email in try/except inside vendor_invite so email hiccups don't break vendor creation (the reset token is already persisted); (b) construct v from the already-fetched `vendor` dict on L3407 instead of re-querying; (c) minimal guard `if not v: raise HTTPException(500, 'Vendor created but read-back failed; please refresh.')`."
+}

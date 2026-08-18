@@ -316,6 +316,30 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   (now confirmed adding 3 photos in one dialog), the chunk retry counter, the delete path guard and the 5MB
   helper text.
 
+## Implemented — iteration 17 (June 2026): Vendor Console (separate back-office app)
+- The user asked for native iOS/Android apps **and** a separate back-office app where someone can register and
+  create vendors. Native apps are the platform's own web-to-mobile (Expo) conversion, which **the user triggers
+  from the preview toggle** — nothing in this codebase to do. The back office is built here.
+- **New `manager` role**: anyone can request access at `/console` (`POST /api/console/register`) and is created
+  with `status: "pending"`. They can sign in and look around, but every write is blocked by the
+  `active_manager` dependency until an admin approves them (Admin → **Console access** tab →
+  `PATCH /api/admin/managers/{id}` approve/suspend/reject, with email + in-app notification on approval).
+- **Vendor management** (`/api/console/...`): `summary`, `vendors` (search by name/email/org/city with per-vendor
+  event/published/seats stats in two queries), `vendors/{id}` (detail + recent events), `POST vendors`
+  (creates a `partner` account stamped with `managed_by`, then emails a 7-day set-password link so the vendor
+  owns their own credentials), `PATCH vendors/{id}` (rename, city, suspend/reactivate, verified badge) and
+  `POST vendors/{id}/invite` to resend. Ownership is enforced with a **404** for other managers' vendors;
+  admins see everything, including legacy partners with no `managed_by`.
+- **Its own app surface**: `Shell()` in `App.js` renders `pages/Console.jsx` for any `/console` path — dark
+  layout, own login/registration, no member navbar, footer or Buddy widget, "Main site" link back. A member who
+  signs in there is rejected and logged straight back out.
+- Verified: `backend/tests/test_iteration17_console.py` **30/30 serial** and testing-agent iteration 17
+  (`/app/test_reports/iteration_17.json`) — zero critical issues, zero UI bugs. Their four findings are fixed:
+  the intermittent 500 on vendor create (no re-read after insert + email failure no longer loses the account),
+  email format validation on registration, a 400 for an unknown vendor status, and clearing the stale member
+  token when a member tries the console login.
+- Test manager: `ops.manager@buddilio.com` / `Console@123` (already approved).
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

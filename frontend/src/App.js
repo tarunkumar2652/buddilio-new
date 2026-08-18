@@ -23,6 +23,7 @@ import LeaderboardPage from "@/pages/Leaderboard";
 import { CityIndex, CityPage } from "@/pages/Cities";
 import PartnerDashboard from "@/pages/Partner";
 import Admin from "@/pages/Admin";
+import Console from "@/pages/Console";
 import "@/index.css";
 
 function Protected({ children, roles }) {
@@ -39,6 +40,8 @@ function Shell() {
   const loc = useLocation();
   // Emergent OAuth returns to {origin}/dashboard#session_id=... — exchange it before any route renders.
   if (loc.hash?.includes("session_id=")) return <AuthCallback />;
+  // The vendor console is its own surface — no member navbar, footer or Buddy widget.
+  if (loc.pathname.startsWith("/console")) return <Console />;
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
