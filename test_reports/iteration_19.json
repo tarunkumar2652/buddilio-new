@@ -1,0 +1,25 @@
+{
+  "summary": "Iteration 19 tested Vendor Verification Queue, Weekly Payout Reminders cron, and Event Photo Wall (backend + frontend). Wrote /app/backend/tests/test_iteration19_verify_photos.py — 13/13 pytest cases pass. Frontend Playwright checks confirmed Admin → Verification tab wiring, host-verified-badge on the public event page, guest photo-wall reason, attendee upload UI on the Rooftop Jazz event, mobile 390px render, and regression on all 17 admin tabs plus the vendor console page. No functional bugs found. Demo data restored: Skyline Sessions back to verification_status='pending'/verified=false; all event_photos rows on event 6a7b73e34a13de566dbd110f deleted (E1 seeds + one accidental test row).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration19_verify_photos.py",
+    "/app/test_reports/pytest/iter19.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 4037 lines — well over the 700-line guideline. New verification/payout/photo-wall sections would live better as their own routers/modules for maintainability.",
+    "send_payout_reminders() has no upper bound on rows/vendors per manager and iterates managers serially inside the request-scoped background task; scale-wise fine at 500 managers, but consider batching if the tenant grows.",
+    "add_event_photo() calls public_event() (which raises 404 for non-published events) — good, but does not check for photo url ownership. A member could pass another member's /api/files/... path. Low-risk since /api/files paths are already scoped by user_id in the filename, but worth a note.",
+    "Frontend PhotoWall.pick() runs sequential awaits per file and only calls load() at the end — if multiple images are picked and one POST fails midway, earlier successes aren't reflected until the last iteration finishes. Minor UX polish."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration19_verify_photos.py"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (all data-testids present & wired)"},
+  "test_credentials": "See /app/memory/test_credentials.md — admin@buddilio.com/Admin@123, ops.manager@buddilio.com/Console@123, partner@buddilio.com/Partner@123, tara.joshi@example.com/User@123 (confirmed attendee of finished event 6a7b73e34a13de566dbd110f), diya.sharma@example.com/User@123. WEBHOOK_CRON_SECRET pulled from backend/.env.",
+  "seed_data_creation": "Temporary rows written and torn down inside tests: one pending payout for ops.manager's vendor (idempotency test), one future TEST_iter19 event, up to 10 seeded photos for tara on the finished event (max-10 test), and a photo written via /uploads for auth checks. All cleaned up. Final manual sweep removed lingering photos left by E1 and by an early failed test iteration.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 19 features are stable. Skyline vendor (invited.vendor@example.com) is intentionally kept in verification_status='pending' with 1 document so the queue is never empty for demos. If new tests approve it, restore state at teardown. payout_reminders is idempotent per (manager_id, ISO week); to re-exercise the happy path within the same week, delete the existing row first. Photo wall gates on ev.starts_at > now → 400 before checking participants, so future-event tests don't need a participant record."
+}

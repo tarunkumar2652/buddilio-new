@@ -363,6 +363,25 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   a 400 instead of silently dropping the 11th document, name/mobile length caps, no link for used/revoked
   invites, and the AI draft dedupe.
 
+## Iteration 19 — vendor verification, Monday payout reminders, event photo wall (June 2026)
+- **Vendor Verification Queue** (Admin → Verification): `GET /api/admin/verifications?status=pending|verified|rejected|all`
+  and `POST /api/admin/verifications/{vid}` with `action: approve|reject|reset` + optional note. Approve sets
+  `verified: true` / `verification_status: verified`, notifies + emails the vendor, and writes a
+  `vendor.verify_*` audit entry. Approving a vendor with no documents is a 400; non-admins get 403.
+  `GET /api/events/{id}` now returns `partner_verified`, and the event page shows a
+  `host-verified-badge` next to “Hosted by”. UI: `frontend/src/components/Verifications.jsx`.
+- **Weekly payout reminders**: `POST /api/cron/payout-reminders` (cron-secret guarded, acks immediately) →
+  `send_payout_reminders()` emails each active manager the pending payouts owed to their vendors, with a total.
+  Idempotent per `(manager_id, ISO week)` via `db.payout_reminders`; managers with no vendors or nothing pending
+  are skipped. Registered in `.emergent/crons.yml` as `payout-reminders` `30 3 * * 1` (Monday 09:00 IST).
+- **Event photo wall**: `db.event_photos` + `GET/POST /api/events/{id}/photos` and
+  `DELETE /api/events/{id}/photos/{pid}`. Public read; posting needs a **confirmed** attendee and the event to
+  have **started** (during or after is fine), max **10 photos per member per event**, `/api/files/...` urls only.
+  Uploader, event organiser and admin can delete. UI: `frontend/src/components/PhotoWall.jsx` on the event page.
+- Verified: `backend/tests/test_iteration19_verify_photos.py` **13/13** and testing-agent iteration 19
+  (`/app/test_reports/iteration_19.json`) — no bugs; frontend testids, mobile 390px and all admin tabs re-checked.
+  Demo state restored (Skyline Sessions stays `pending` with 1 document so the queue is never empty).
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

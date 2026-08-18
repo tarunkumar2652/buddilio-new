@@ -7,8 +7,9 @@ import { useCurrency } from "@/context/CurrencyContext";
 import { EventCard, Stars } from "@/components/Cards";
 import { ReviewSection } from "@/components/ReviewSection";
 import { CompanionMatches } from "@/components/CompanionMatches";
+import { PhotoWall } from "@/components/PhotoWall";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
-import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert } from "lucide-react";
+import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert, BadgeCheck } from "lucide-react";
 export function Events() {
   const { fmt } = useCurrency();
   const q0 = new URLSearchParams(window.location.search);
@@ -175,7 +176,15 @@ export function EventDetail() {
             )}
           </div>
           <h1 className="mt-4 text-3xl sm:text-4xl lg:text-5xl font-bold max-w-3xl">{ev.title}</h1>
-          <p className="mt-3 text-slate-300 text-sm">Hosted by {ev.partner_name}</p>
+          <p className="mt-3 text-slate-300 text-sm flex items-center gap-1.5">
+            Hosted by {ev.partner_name}
+            {ev.partner_verified && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 text-emerald-300 px-2 py-0.5 text-[11px] font-bold"
+                data-testid="host-verified-badge">
+                <BadgeCheck className="h-3.5 w-3.5" />Verified
+              </span>
+            )}
+          </p>
         </div>
       </div>
 
@@ -232,6 +241,8 @@ export function EventDetail() {
           )}
 
           {user && !finished && <CompanionMatches ev={ev} />}
+
+          <PhotoWall eventId={ev.id} />
 
           <ReviewSection eventId={ev.id} canReview={!!user && ev.my_status === "confirmed" && finished} />
 

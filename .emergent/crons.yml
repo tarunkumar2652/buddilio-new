@@ -6,6 +6,13 @@ crons:
     endpoint: "{{BASE_URL}}/api/cron/monthly-prize"
     method: POST
     enabled: true
+  - name: payout-reminders
+    description: "Emails each manager every Monday with what their vendors are still owed (09:00 IST)"
+    cron: "30 3 * * 1"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/payout-reminders"
+    method: POST
+    enabled: true
   - name: city-openings
     description: "Emails city waitlists once Buddilio goes live in their city"
     cron: "0 9 * * *"

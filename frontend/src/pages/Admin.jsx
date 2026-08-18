@@ -6,9 +6,11 @@ import { ChevronRight } from "lucide-react";
 import { api, errMsg, money, fmtDate, fileUrl } from "@/lib/api";
 import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
+import { Verifications } from "@/components/Verifications";
 
 const NAV = [
-  ["dashboard", "Dashboard"], ["users", "Users"], ["partners", "Partners"], ["managers", "Console access"], ["events", "Events"],
+  ["dashboard", "Dashboard"], ["users", "Users"], ["partners", "Partners"], ["verification", "Verification"],
+  ["managers", "Console access"], ["events", "Events"],
   ["memberships", "Memberships"], ["products", "Products"], ["orders", "Orders"], ["payments", "Payments"],
   ["payouts", "Payouts"], ["coupons", "Coupons"], ["reports", "Reports"], ["reviews", "Reviews"],
   ["content", "Content"], ["settings", "Settings"], ["audit", "Audit logs"],
@@ -124,6 +126,7 @@ export default function Admin() {
         {tab === "dashboard" && <Overview />}
         {tab === "users" && <Users key="u" role="user" />}
         {tab === "partners" && <Users key="p" role="partner" />}
+        {tab === "verification" && <Verifications />}
         {tab === "managers" && (
           <div className="space-y-8">
             <Managers />

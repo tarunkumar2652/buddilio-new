@@ -945,6 +945,10 @@ async def get_event(event_id: str, user: Optional[dict] = Depends(optional_user)
             {"_id": {"$in": ids}}, {"full_name": 1, "photo": 1, "city": 1}).limit(20).to_list(20)]
     ev["participant_count"] = len(parts)
     ev["seats_left"] = max(ev.get("capacity", 0) - len(parts), 0)
+    ev["partner_verified"] = False
+    if ev.get("partner_id"):
+        host = await db.users.find_one({"_id": ObjectId(ev["partner_id"])}, {"verified": 1})
+        ev["partner_verified"] = bool(host and host.get("verified"))
     if user:
         mine = await db.event_participants.find_one({"event_id": event_id, "user_id": user["id"]})
         ev["my_status"] = mine["status"] if mine else None
@@ -3728,6 +3732,237 @@ async def admin_update_manager(mid: str, body: dict, user: dict = Depends(admin_
     return {"ok": True, "status": status}
 
 
+# ---------------- vendor verification queue ----------------
+VERIFY_STATES = ("pending", "verified", "rejected")
+
+
+def verify_state(u: dict) -> str:
+    if u.get("verification_status") in VERIFY_STATES:
+        return u["verification_status"]
+    return "verified" if u.get("verified") else "pending"
+
+
+@api.get("/admin/verifications")
+async def admin_verifications(status: str = "pending", user: dict = Depends(admin_only)):
+    """Every vendor with documents on file, so one admin can clear the whole queue."""
+    docs = await db.users.find(
+        {"role": "partner"},
+        {"full_name": 1, "org_name": 1, "email": 1, "city": 1, "mobile": 1, "documents": 1,
+         "verified": 1, "verification_status": 1, "verification_note": 1, "verified_at": 1,
+         "managed_by": 1, "created_at": 1}).sort("created_at", -1).limit(500).to_list(500)
+    managers = await load_many(db.users, [d.get("managed_by", "") for d in docs],
+                               {"full_name": 1, "org_name": 1})
+    items = []
+    for d in docs:
+        v = clean(d)
+        v["verification_status"] = verify_state(d)
+        v["documents"] = d.get("documents") or []
+        v["document_count"] = len(v["documents"])
+        mgr = managers.get(d.get("managed_by", ""))
+        v["manager"] = (mgr.get("org_name") or mgr.get("full_name")) if mgr else ""
+        if status and status != "all" and v["verification_status"] != status:
+            continue
+        if status == "pending" and not v["document_count"]:
+            continue
+        items.append(v)
+    counts = {"pending": 0, "verified": 0, "rejected": 0}
+    for d in docs:
+        st = verify_state(d)
+        if st == "pending" and not (d.get("documents") or []):
+            continue
+        counts[st] = counts.get(st, 0) + 1
+    return {"items": items, "counts": counts}
+
+
+class VerifyIn(BaseModel):
+    action: str
+    note: str = ""
+
+
+@api.post("/admin/verifications/{vid}")
+async def admin_verify_vendor(vid: str, payload: VerifyIn, user: dict = Depends(admin_only)):
+    if payload.action not in ("approve", "reject", "reset"):
+        raise HTTPException(status_code=400, detail="Unknown action")
+    try:
+        vendor = await db.users.find_one({"_id": ObjectId(vid), "role": "partner"})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid vendor id")
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    if payload.action == "approve" and not (vendor.get("documents") or []):
+        raise HTTPException(status_code=400, detail="This vendor hasn't uploaded any documents yet.")
+    state = {"approve": "verified", "reject": "rejected", "reset": "pending"}[payload.action]
+    upd = {"verification_status": state, "verified": state == "verified",
+           "verification_note": payload.note[:400],
+           "verified_at": iso(now_utc()) if state == "verified" else ""}
+    await db.users.update_one({"_id": vendor["_id"]}, {"$set": upd})
+    await audit(user, f"vendor.verify_{payload.action}", "user", vid, {"note": payload.note[:200]})
+    name = vendor.get("org_name") or vendor.get("full_name") or "there"
+    if state == "verified":
+        await notify(vid, "You're verified", "Your documents checked out — the verified badge is now on your "
+                     "profile and events.", "vendor", "/partner")
+        await send_email(vendor["email"], "You're verified on Buddilio", wrap(
+            "Verified", f"<p><b>{name}</b> is now a verified Buddilio organiser. Members will see the badge "
+            "on your profile and on every event you host.</p>", "Open your dashboard", f"{FRONTEND_URL}/partner"))
+    elif state == "rejected":
+        reason = payload.note.strip() or "We couldn't read the documents you sent."
+        await notify(vid, "Verification needs attention", reason, "vendor", "/partner")
+        await send_email(vendor["email"], "About your Buddilio verification", wrap(
+            "We need better documents",
+            f"<p>Hi {name}, we couldn't verify your account yet.</p><p><b>{reason}</b></p>"
+            "<p>Please re-upload your documents and we'll take another look.</p>",
+            "Upload documents", f"{FRONTEND_URL}/partner"))
+    return {"ok": True, "verification_status": state, "verified": state == "verified"}
+
+
+# ---------------- weekly payout reminders ----------------
+def week_key(dt: datetime) -> str:
+    y, w, _ = dt.isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+async def send_payout_reminders() -> dict:
+    """Monday nudge: every manager gets the list of what their vendors are still owed."""
+    wk = week_key(now_utc())
+    managers = await db.users.find({"role": "manager", "status": "active"},
+                                   {"full_name": 1, "email": 1}).limit(500).to_list(500)
+    sent = 0
+    for m in managers:
+        mid = str(m["_id"])
+        if await db.payout_reminders.find_one({"manager_id": mid, "week": wk}):
+            continue
+        vendors = await db.users.find({"role": "partner", "managed_by": mid},
+                                      {"org_name": 1, "full_name": 1}).limit(500).to_list(500)
+        names = {str(v["_id"]): v.get("org_name") or v.get("full_name") for v in vendors}
+        if not names:
+            continue
+        rows = await db.payouts.find({"partner_id": {"$in": list(names)}, "status": "pending"}) \
+            .sort("created_at", 1).limit(500).to_list(500)
+        if not rows:
+            continue
+        total = round(sum(float(r.get("net") or 0) for r in rows), 2)
+        lines = "".join(
+            f"<tr><td style='padding:6px 0'><b>{names.get(r['partner_id'], '—')}</b><br>"
+            f"<span style='color:#94A3B8;font-size:13px'>{r.get('event_title', '')}</span></td>"
+            f"<td style='padding:6px 0;text-align:right;white-space:nowrap'>"
+            f"{r.get('currency', BASE_CURRENCY)} {float(r.get('net') or 0):,.2f}</td></tr>"
+            for r in rows[:40])
+        ok = await send_email(m["email"], f"Payouts due this week — {BASE_CURRENCY} {total:,.2f}", wrap(
+            "What your vendors are owed this week",
+            f"<p>Hi {m.get('full_name', 'there').split(' ')[0]}, {len(rows)} payout"
+            f"{'' if len(rows) == 1 else 's'} across {len(set(r['partner_id'] for r in rows))} vendor"
+            f"{'' if len(set(r['partner_id'] for r in rows)) == 1 else 's'} are still pending.</p>"
+            f"<table width='100%' style='font-size:14px'>{lines}</table>"
+            f"<p style='margin-top:14px'><b>Total pending: {BASE_CURRENCY} {total:,.2f}</b></p>",
+            "Open the console", f"{FRONTEND_URL}/console"))
+        await db.payout_reminders.insert_one({
+            "manager_id": mid, "week": wk, "payouts": len(rows), "total": total,
+            "email_sent": ok, "created_at": iso(now_utc())})
+        sent += 1
+    logger.info(f"payout reminders: {sent} managers emailed for {wk}")
+    return {"week": wk, "managers": sent}
+
+
+@api.post("/cron/payout-reminders")
+async def cron_payout_reminders(_: None = Depends(cron_guard)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    asyncio.create_task(send_payout_reminders())
+    return {"ok": True, "queued": "payout-reminders", "week": week_key(now_utc())}
+
+
+# ---------------- event photo wall ----------------
+MAX_EVENT_PHOTOS = 10
+
+
+class EventPhotoIn(BaseModel):
+    url: str
+    caption: str = ""
+
+
+async def public_event(event_id: str) -> dict:
+    try:
+        ev = await db.events.find_one({"_id": ObjectId(event_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid event id")
+    if not ev or ev.get("status") not in ("published", "completed"):
+        raise HTTPException(status_code=404, detail="Event not found")
+    return ev
+
+
+@api.get("/events/{event_id}/photos")
+async def event_photos(event_id: str, user: Optional[dict] = Depends(optional_user)):
+    """The photo wall — what the last crowd actually saw."""
+    ev = await public_event(event_id)
+    rows = await db.event_photos.find({"event_id": event_id}).sort("created_at", -1).limit(120).to_list(120)
+    owners = await load_many(db.users, [r["user_id"] for r in rows], {"full_name": 1, "photo": 1})
+    is_host = bool(user) and (user["role"] == "admin" or ev.get("partner_id") == user["id"])
+    items = []
+    for r in rows:
+        o = owners.get(r["user_id"], {})
+        items.append({"id": str(r["_id"]), "url": r["url"], "caption": r.get("caption", ""),
+                      "user_id": r["user_id"], "user_name": short_name(o.get("full_name", "Member")),
+                      "user_photo": o.get("photo", ""), "created_at": r.get("created_at", ""),
+                      "can_delete": is_host or (bool(user) and r["user_id"] == user["id"])})
+    can_post, reason = False, ""
+    if not user:
+        reason = "Log in to add your photos."
+    elif ev["starts_at"] > iso(now_utc()):
+        reason = "The wall opens when the event starts."
+    else:
+        part = await db.event_participants.find_one(
+            {"event_id": event_id, "user_id": user["id"], "status": "confirmed"})
+        mine = await db.event_photos.count_documents({"event_id": event_id, "user_id": user["id"]})
+        if not part:
+            reason = "Only people who went can post here."
+        elif mine >= MAX_EVENT_PHOTOS:
+            reason = f"You've added your {MAX_EVENT_PHOTOS} photos for this event."
+        else:
+            can_post = True
+    return {"items": items, "count": len(items), "can_post": can_post, "reason": reason,
+            "max_per_member": MAX_EVENT_PHOTOS}
+
+
+@api.post("/events/{event_id}/photos")
+async def add_event_photo(event_id: str, payload: EventPhotoIn, user: dict = Depends(get_current_user)):
+    ev = await public_event(event_id)
+    if ev["starts_at"] > iso(now_utc()):
+        raise HTTPException(status_code=400, detail="The photo wall opens once the event starts.")
+    if not await db.event_participants.find_one(
+            {"event_id": event_id, "user_id": user["id"], "status": "confirmed"}):
+        raise HTTPException(status_code=403, detail="Only confirmed attendees can post to this wall.")
+    if not payload.url.startswith("/api/files/"):
+        raise HTTPException(status_code=400, detail="Upload your photo through Buddilio first.")
+    if await db.event_photos.count_documents({"event_id": event_id, "user_id": user["id"]}) >= MAX_EVENT_PHOTOS:
+        raise HTTPException(status_code=400,
+                            detail=f"You can add up to {MAX_EVENT_PHOTOS} photos per event.")
+    doc = {"event_id": event_id, "user_id": user["id"], "url": payload.url,
+           "caption": payload.caption.strip()[:200], "created_at": iso(now_utc())}
+    res = await db.event_photos.insert_one(dict(doc))
+    if ev.get("partner_id") and ev["partner_id"] != user["id"]:
+        await notify(ev["partner_id"], "New photo on your event",
+                     f"{short_name(user['full_name'])} added a photo to {ev['title']}.",
+                     "event", f"/events/{event_id}")
+    return {"ok": True, "id": str(res.inserted_id), **doc}
+
+
+@api.delete("/events/{event_id}/photos/{pid}")
+async def delete_event_photo(event_id: str, pid: str, user: dict = Depends(get_current_user)):
+    try:
+        photo = await db.event_photos.find_one({"_id": ObjectId(pid), "event_id": event_id})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid photo id")
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    ev = await db.events.find_one({"_id": ObjectId(event_id)}, {"partner_id": 1})
+    allowed = (photo["user_id"] == user["id"] or user["role"] == "admin"
+               or (ev or {}).get("partner_id") == user["id"])
+    if not allowed:
+        raise HTTPException(status_code=403, detail="You can only remove your own photos.")
+    await db.event_photos.delete_one({"_id": photo["_id"]})
+    return {"ok": True}
+
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
@@ -3767,6 +4002,9 @@ async def startup():
     await db.vendor_invites.create_index("token", unique=True)
     await db.vendor_invites.create_index([("manager_id", 1), ("created_at", -1)])
     await db.ai_drafts.create_index([("user_id", 1), ("created_at", -1)])
+    await db.event_photos.create_index([("event_id", 1), ("created_at", -1)])
+    await db.event_photos.create_index([("event_id", 1), ("user_id", 1)])
+    await db.payout_reminders.create_index([("manager_id", 1), ("week", 1)], unique=True)
     await db.upload_parts.create_index([("upload_id", 1), ("index", 1)], unique=True)
     await db.upload_sessions.create_index("upload_id", unique=True)
     await db.upload_sessions.create_index("created_at", expireAfterSeconds=3600)
