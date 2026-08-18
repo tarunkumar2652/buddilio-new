@@ -8,13 +8,20 @@ import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 import { Verifications } from "@/components/Verifications";
 import { PhotoModeration } from "@/components/PhotoModeration";
+import { Team } from "@/components/Team";
+import { useAuth } from "@/context/AuthContext";
 
 const NAV = [
-  ["dashboard", "Dashboard"], ["users", "Users"], ["partners", "Partners"], ["verification", "Verification"],
-  ["managers", "Console access"], ["events", "Events"],
-  ["memberships", "Memberships"], ["products", "Products"], ["orders", "Orders"], ["payments", "Payments"],
-  ["payouts", "Payouts"], ["coupons", "Coupons"], ["reports", "Reports"], ["reviews", "Reviews"], ["photos", "Photo wall"],
-  ["content", "Content"], ["settings", "Settings"], ["audit", "Audit logs"],
+  ["dashboard", "Dashboard", "analytics:view"], ["users", "Users", "members:view"],
+  ["partners", "Partners", "vendors:view"], ["verification", "Verification", "verification:manage"],
+  ["managers", "Console access", "team:manage"], ["events", "Events", "events:view"],
+  ["memberships", "Memberships", "finance:manage"], ["products", "Products", "finance:manage"],
+  ["orders", "Orders", "finance:view"], ["payments", "Payments", "finance:view"],
+  ["payouts", "Payouts", "payouts:view"], ["coupons", "Coupons", "finance:manage"],
+  ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
+  ["photos", "Photo wall", "moderation:manage"], ["content", "Content", "content:manage"],
+  ["settings", "Settings", "content:manage"], ["audit", "Audit logs", "audit:view"],
+  ["team", "Team & roles", "team:manage"],
 ];
 
 const VendorActivity = () => {
@@ -106,7 +113,11 @@ const Input = ({ label, ...p }) => (
 );
 
 export default function Admin() {
-  const [tab, setTab] = useState("dashboard");
+  const { user } = useAuth();
+  const perms = user?.permissions;
+  const nav = NAV.filter(([, , p]) => !perms || perms.includes(p));
+  const [tab, setTab] = useState("");
+  const active = tab && nav.some(([v]) => v === tab) ? tab : (nav[0]?.[0] || "dashboard");
   return (
     <div className="mx-auto max-w-[1500px] px-4 sm:px-6 py-8 pb-28" data-testid="admin-page">
       <SEO title="Admin" />
@@ -114,9 +125,9 @@ export default function Admin() {
       <h1 className="mt-2 text-3xl font-bold">Buddilio control centre</h1>
       <div className="relative mt-6">
         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 pr-10 sm:pr-0">
-          {NAV.map(([v, l]) => (
+          {nav.map(([v, l]) => (
             <button key={v} onClick={() => setTab(v)} data-testid={`admin-tab-${v}`}
-              className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold border ${tab === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
+              className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold border ${active === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
           ))}
         </div>
         <div aria-hidden className="sm:hidden pointer-events-none absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-[#FAFAFA] via-[#FAFAFA]/80 to-transparent flex items-center justify-end">
@@ -124,11 +135,11 @@ export default function Admin() {
         </div>
       </div>
       <div className="mt-8">
-        {tab === "dashboard" && <Overview />}
-        {tab === "users" && <Users key="u" role="user" />}
-        {tab === "partners" && <Users key="p" role="partner" />}
-        {tab === "verification" && <Verifications />}
-        {tab === "managers" && (
+        {active === "dashboard" && <Overview />}
+        {active === "users" && <Users key="u" role="user" />}
+        {active === "partners" && <Users key="p" role="partner" />}
+        {active === "verification" && <Verifications />}
+        {active === "managers" && (
           <div className="space-y-8">
             <Managers />
             <div>
@@ -137,24 +148,25 @@ export default function Admin() {
             </div>
           </div>
         )}
-        {tab === "events" && <Events />}
-        {tab === "memberships" && <Crud path="plans" title="Membership plans"
+        {active === "events" && <Events />}
+        {active === "memberships" && <Crud path="plans" title="Membership plans"
           fields={[["name", "text"], ["price", "number"], ["duration_days", "number"], ["description", "text"], ["discount_percent", "number"], ["benefits", "list"], ["price_overrides", "json"], ["active", "bool"]]}
           blank={{ name: "", price: 0, duration_days: 30, description: "", benefits: [], discount_percent: 0, price_overrides: {}, active: true }} />}
-        {tab === "products" && <Crud path="products" title="Products & passes"
+        {active === "products" && <Crud path="products" title="Products & passes"
           fields={[["name", "text"], ["description", "text"], ["price", "number"], ["discount_percent", "number"], ["tax_percent", "number"], ["image", "image"], ["validity_days", "number"], ["city", "text"], ["inventory", "number"], ["member_discount_percent", "number"], ["price_overrides", "json"], ["active", "bool"]]}
           blank={{ name: "", description: "", price: 0, discount_percent: 0, tax_percent: 18, image: "", validity_days: 30, city: "All India", inventory: 100, member_discount_percent: 10, price_overrides: {}, active: true }} />}
-        {tab === "coupons" && <Crud path="coupons" title="Coupons"
+        {active === "coupons" && <Crud path="coupons" title="Coupons"
           fields={[["code", "text"], ["discount_type", "text"], ["value", "number"], ["min_order", "number"], ["usage_limit", "number"], ["members_only", "bool"], ["expires_at", "text"], ["active", "bool"]]}
           blank={{ code: "", discount_type: "percent", value: 10, min_order: 0, usage_limit: 100, members_only: false, expires_at: "", active: true }} />}
-        {(tab === "orders" || tab === "payments") && <Orders payments={tab === "payments"} />}
-        {tab === "payouts" && <Payouts />}
-        {tab === "reports" && <Reports />}
-        {tab === "reviews" && <ReviewsMod />}
-        {tab === "photos" && <PhotoModeration />}
-        {tab === "content" && <Content />}
-        {tab === "settings" && <Settings />}
-        {tab === "audit" && <Audit />}
+        {(active === "orders" || active === "payments") && <Orders payments={active === "payments"} />}
+        {active === "payouts" && <Payouts />}
+        {active === "reports" && <Reports />}
+        {active === "reviews" && <ReviewsMod />}
+        {active === "photos" && <PhotoModeration />}
+        {active === "content" && <Content />}
+        {active === "settings" && <Settings />}
+        {active === "audit" && <Audit />}
+        {active === "team" && <Team />}
       </div>
     </div>
   );

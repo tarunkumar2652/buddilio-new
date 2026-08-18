@@ -1,0 +1,24 @@
+{
+  "summary": "Full RBAC review for iteration 22 (staff roles & permissions). Wrote /app/backend/tests/test_iteration22_rbac.py (24 tests, all passing) covering /auth/me permission payload, /admin/permissions catalogue + gating, /admin/team CRUD guardrails (self edit, invalid status, empty body, unknown/malformed id, scope mismatch, duplicate email, over-grant), the exact 200/403 matrix for the perm.test moderator + payouts:view account, per-role matrices for finance/support/viewer, moderator lockout from /admin/verifications, console permission split for vendor_viewer (read-only) vs vendor_manager (writes work when active, 403 with pending message when status=pending), and full admin + legacy manager regression across all control-centre and console endpoints. Playwright verified the Admin tabs are filtered for perm.test (dashboard/team/settings hidden, first available tab auto-selected), the admin 'Team & roles' tab exposes team-panel with invite form (team-name/email/scope/role/perm-* checkboxes/invite-btn), team-table renders team-row-<id> with team-edit/team-status/team-perms testids, preset permissions come pre-checked+disabled (moderator preset locks moderation:manage), permissions the caller lacks are disabled (admin caller can enable team:manage), the mobile 390px view renders the panel cleanly with no overflow, and ops.manager sees console-tab-invites (legacy manager still holds invites:manage).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration22_rbac.py",
+    "/app/test_reports/pytest/iteration22.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Team.jsx: editing a team-row's staff_role via the inline select fires save() with extra_permissions=[] on every change event. That is documented as 'preset only' behaviour, but users might accidentally lose extras they had — consider a Confirm/Save button so edits are explicit.",
+    "Admin.jsx NAV filter uses `perms.length === 0 || perms.includes(p)` which means a legacy account whose /auth/me hasn't loaded yet briefly renders ALL tabs (including team) before permissions arrive. Not a security issue (backend enforces), but a fleeting UI flash. Consider hiding until user is resolved.",
+    "server.py suspension guardrail (`Keep at least one active super admin`) counts docs with staff_role in ['super_admin', None, '']; the legacy admin@buddilio.com has no staff_role so it counts correctly today, but the moment a super_admin is explicitly promoted, unrelated legacy admins keep the count above 1 and the guard may pass even when only they remain — worth revisiting once every account is migrated onto a staff_role."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration22_rbac.py (new)"
+  ],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "100% (all tab-filter + Team panel + mobile assertions passed)"},
+  "test_credentials": "admin@buddilio.com / Admin@123, ops.manager@buddilio.com / Console@123, diya.sharma@example.com / User@123. perm.test@buddilio.com was deleted at end of run per brief. Test-scoped staff (test_finance/support/viewer/vviewer/vmgr/vmgr_pending @buddilio.com, all Test@1234) are created and torn down by the module-scoped fixture in the pytest file — no residue.",
+  "seed_data_creation": "None persistent. Test file idempotently upserts six test_*@buddilio.com staff accounts (bcrypt hashed) at start and deletes them plus any test_invite_*@buddilio.com invitees at teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 22 RBAC is green end-to-end. Skyline Sessions is verified still pending with 1 document. perm.test@buddilio.com has been deleted; if the next iteration re-uses it, recreate it (staff_role=moderator, extra_permissions=[payouts:view]). The permission testids on the Team panel follow the pattern team-perm-<key with colon>, e.g. team-perm-moderation:manage — CSS selectors work fine but be mindful of the colon in querySelector calls. Legacy admin accounts (no staff_role) still get all 17 perms; legacy managers get exactly {vendors:view, vendors:manage, invites:manage, payouts:view} — do not migrate them without updating consumers."
+}

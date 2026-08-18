@@ -140,6 +140,87 @@ async def audit(actor: dict, action: str, entity: str, entity_id: str = "", meta
     })
 
 
+# ---------------- staff permissions ----------------
+# One catalogue, one decision helper. Presets are convenience; the effective set is what is enforced.
+PERMISSIONS: list[tuple[str, str, str]] = [
+    ("Vendors", "vendors:view", "See vendor accounts and their stats"),
+    ("Vendors", "vendors:manage", "Create, edit and suspend vendors"),
+    ("Vendors", "invites:manage", "Send and revoke vendor invitations"),
+    ("Vendors", "verification:manage", "Review documents and grant the verified badge"),
+    ("Money", "payouts:view", "See what vendors are owed"),
+    ("Money", "payouts:pay", "Mark payouts as settled"),
+    ("Money", "finance:view", "See orders and payments"),
+    ("Money", "finance:manage", "Refunds, coupons, plans and products"),
+    ("Events", "events:view", "See every event, including drafts"),
+    ("Events", "events:moderate", "Approve or reject submitted events"),
+    ("Members", "members:view", "See member accounts"),
+    ("Members", "members:manage", "Suspend, ban or verify members"),
+    ("Safety", "moderation:manage", "Moderate reviews, reports and the photo wall"),
+    ("Platform", "analytics:view", "See the dashboard and reports"),
+    ("Platform", "content:manage", "Edit CMS pages and platform settings"),
+    ("Platform", "audit:view", "Read the audit and activity logs"),
+    ("Platform", "team:manage", "Invite team members and change their permissions"),
+]
+ALL_PERMISSIONS = [p[1] for p in PERMISSIONS]
+
+STAFF_ROLES: dict[str, dict] = {
+    "super_admin": {"label": "Super admin", "scope": "admin",
+                    "description": "Everything, including the team itself.",
+                    "permissions": ALL_PERMISSIONS},
+    "operations": {"label": "Operations", "scope": "admin",
+                   "description": "Vendors, invitations, verification and the event calendar.",
+                   "permissions": ["vendors:view", "vendors:manage", "invites:manage", "verification:manage",
+                                   "events:view", "events:moderate", "analytics:view", "audit:view"]},
+    "finance": {"label": "Finance", "scope": "admin",
+                "description": "Payouts, orders, refunds and pricing.",
+                "permissions": ["payouts:view", "payouts:pay", "finance:view", "finance:manage",
+                                "vendors:view", "analytics:view"]},
+    "support": {"label": "Support", "scope": "admin",
+                "description": "Members, reports and day-to-day moderation.",
+                "permissions": ["members:view", "members:manage", "moderation:manage", "events:view",
+                                "finance:view", "analytics:view"]},
+    "moderator": {"label": "Moderator", "scope": "admin",
+                  "description": "Reviews, reports and the photo wall only.",
+                  "permissions": ["moderation:manage", "events:view", "members:view"]},
+    "viewer": {"label": "Viewer", "scope": "admin",
+               "description": "Read-only across the control centre.",
+               "permissions": ["vendors:view", "payouts:view", "finance:view", "events:view",
+                               "members:view", "analytics:view"]},
+    "vendor_manager": {"label": "Vendor manager", "scope": "manager",
+                       "description": "Console team who onboard and look after vendors.",
+                       "permissions": ["vendors:view", "vendors:manage", "invites:manage", "payouts:view"]},
+    "vendor_viewer": {"label": "Console viewer", "scope": "manager",
+                      "description": "Console read-only — no vendor changes.",
+                      "permissions": ["vendors:view", "payouts:view"]},
+}
+LEGACY_MANAGER_PERMS = STAFF_ROLES["vendor_manager"]["permissions"]
+
+
+def perms_of(user: dict) -> set[str]:
+    """Effective permissions: the preset for their staff role plus any extras granted to them."""
+    role = user.get("role")
+    if role not in ("admin", "manager"):
+        return set()
+    staff_role = user.get("staff_role")
+    if not staff_role:  # accounts created before permissions existed keep what they always had
+        return set(ALL_PERMISSIONS if role == "admin" else LEGACY_MANAGER_PERMS)
+    preset = STAFF_ROLES.get(staff_role, {}).get("permissions", [])
+    return {p for p in list(preset) + list(user.get("extra_permissions") or []) if p in ALL_PERMISSIONS}
+
+
+def require_perm(*keys: str, active: bool = False):
+    """Deny by default: the caller must hold at least one of the listed permissions."""
+    async def dep(user: dict = Depends(get_current_user)) -> dict:
+        held = perms_of(user)
+        if not held or not any(k in held for k in keys):
+            raise HTTPException(status_code=403, detail="You do not have permission to do this.")
+        if active and user.get("role") == "manager" and user.get("status") != "active":
+            raise HTTPException(status_code=403,
+                                detail="Your console account is still awaiting approval from Buddilio.")
+        return user
+    return dep
+
+
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 
 BASE_CURRENCY = os.environ.get("BASE_CURRENCY", "INR")
@@ -645,6 +726,7 @@ async def logout(response: Response):
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     user["membership"] = await membership_active(user["id"])
+    user["permissions"] = sorted(perms_of(user))
     return user
 
 
@@ -2114,7 +2196,7 @@ async def cms_pages():
 
 # ---------------- admin ----------------
 @api.get("/admin/stats")
-async def admin_stats(days: int = 30, user: dict = Depends(admin_only)):
+async def admin_stats(days: int = 30, user: dict = Depends(require_perm("analytics:view"))):
     since = iso(now_utc() - timedelta(days=days))
     paid = await db.orders.find({"payment_status": "paid", "created_at": {"$gte": since}}).limit(2000).to_list(2000)
     def rev(kind):
@@ -2148,7 +2230,7 @@ async def admin_stats(days: int = 30, user: dict = Depends(admin_only)):
 
 @api.get("/admin/users")
 async def admin_users(q: str = "", role: str = "", status: str = "",
-                      page: int = 1, limit: int = 20, user: dict = Depends(admin_only)):
+                      page: int = 1, limit: int = 20, user: dict = Depends(require_perm("members:view"))):
     flt: dict[str, Any] = {}
     if q:
         flt["$or"] = [{"full_name": {"$regex": q, "$options": "i"}}, {"email": {"$regex": q, "$options": "i"}}]
@@ -2167,7 +2249,7 @@ async def admin_users(q: str = "", role: str = "", status: str = "",
 
 
 @api.patch("/admin/users/{uid}")
-async def admin_update_user(uid: str, body: dict, user: dict = Depends(admin_only)):
+async def admin_update_user(uid: str, body: dict, user: dict = Depends(require_perm("members:manage"))):
     allowed = {k: v for k, v in body.items()
                if k in ("status", "verified", "role", "full_name", "city", "email_verified")}
     if not allowed:
@@ -2178,14 +2260,14 @@ async def admin_update_user(uid: str, body: dict, user: dict = Depends(admin_onl
 
 
 @api.get("/admin/events")
-async def admin_events(status: str = "", user: dict = Depends(admin_only)):
+async def admin_events(status: str = "", user: dict = Depends(require_perm("events:view"))):
     flt = {"status": status} if status else {}
     docs = await db.events.find(flt).sort([("created_at", -1)]).limit(300).to_list(300)
     return {"items": [clean(d) for d in docs]}
 
 
 @api.post("/admin/events/{eid}/moderate")
-async def moderate_event(eid: str, body: dict, user: dict = Depends(admin_only)):
+async def moderate_event(eid: str, body: dict, user: dict = Depends(require_perm("events:moderate"))):
     action = body.get("action")
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="Invalid action")
@@ -2207,13 +2289,13 @@ async def moderate_event(eid: str, body: dict, user: dict = Depends(admin_only))
 
 
 @api.get("/admin/orders")
-async def admin_orders(status: str = "", user: dict = Depends(admin_only)):
+async def admin_orders(status: str = "", user: dict = Depends(require_perm("finance:view"))):
     flt = {"payment_status": status} if status else {}
     return {"items": [clean(d) for d in await db.orders.find(flt).sort([("created_at", -1)]).limit(300).to_list(300)]}
 
 
 @api.post("/admin/orders/{oid}/refund")
-async def refund_order(oid: str, user: dict = Depends(admin_only)):
+async def refund_order(oid: str, user: dict = Depends(require_perm("finance:manage"))):
     order = await db.orders.find_one({"_id": ObjectId(oid)})
     if not order or order["payment_status"] != "paid":
         raise HTTPException(status_code=400, detail="Only paid orders can be refunded.")
@@ -2246,7 +2328,7 @@ async def refund_order(oid: str, user: dict = Depends(admin_only)):
 
 
 @api.get("/admin/reports")
-async def admin_reports(status: str = "", user: dict = Depends(admin_only)):
+async def admin_reports(status: str = "", user: dict = Depends(require_perm("moderation:manage"))):
     flt = {"status": status} if status else {}
     docs = await db.reports.find(flt).sort([("created_at", -1)]).limit(300).to_list(300)
     out = []
@@ -2263,7 +2345,7 @@ async def admin_reports(status: str = "", user: dict = Depends(admin_only)):
 
 
 @api.post("/admin/reports/{rid}/resolve")
-async def resolve_report(rid: str, body: dict, user: dict = Depends(admin_only)):
+async def resolve_report(rid: str, body: dict, user: dict = Depends(require_perm("moderation:manage"))):
     action = body.get("action", "dismiss")  # dismiss | suspend | ban
     rep = await db.reports.find_one({"_id": ObjectId(rid)})
     if not rep:
@@ -2279,13 +2361,13 @@ async def resolve_report(rid: str, body: dict, user: dict = Depends(admin_only))
 
 
 @api.get("/admin/audit-logs")
-async def audit_logs(user: dict = Depends(admin_only)):
+async def audit_logs(user: dict = Depends(require_perm("audit:view"))):
     return {"items": [clean(d) for d in await db.audit_logs.find({}).sort([("created_at", -1)]).limit(200).to_list(200)]}
 
 
 def crud_routes(path: str, coll: str, model):
     @api.post(f"/admin/{path}", name=f"create_{path}")
-    async def create(payload: model, user: dict = Depends(admin_only)):  # type: ignore
+    async def create(payload: model, user: dict = Depends(require_perm("finance:manage"))):  # type: ignore
         doc = payload.model_dump()
         if "code" in doc:
             doc["code"] = doc["code"].upper()
@@ -2295,17 +2377,17 @@ def crud_routes(path: str, coll: str, model):
         return clean(await db[coll].find_one({"_id": res.inserted_id}))
 
     @api.get(f"/admin/{path}", name=f"list_{path}")
-    async def listing(user: dict = Depends(admin_only)):
+    async def listing(user: dict = Depends(require_perm("finance:view", "finance:manage"))):
         return {"items": [clean(d) for d in await db[coll].find({}).limit(200).to_list(200)]}
 
     @api.put(f"/admin/{path}/{{item_id}}", name=f"update_{path}")
-    async def update(item_id: str, payload: model, user: dict = Depends(admin_only)):  # type: ignore
+    async def update(item_id: str, payload: model, user: dict = Depends(require_perm("finance:manage"))):  # type: ignore
         await db[coll].update_one({"_id": ObjectId(item_id)}, {"$set": payload.model_dump()})
         await audit(user, f"{path}.update", path, item_id, {})
         return clean(await db[coll].find_one({"_id": ObjectId(item_id)}))
 
     @api.delete(f"/admin/{path}/{{item_id}}", name=f"delete_{path}")
-    async def delete(item_id: str, user: dict = Depends(admin_only)):
+    async def delete(item_id: str, user: dict = Depends(require_perm("finance:manage"))):
         await db[coll].delete_one({"_id": ObjectId(item_id)})
         await audit(user, f"{path}.delete", path, item_id, {})
         return {"ok": True}
@@ -2317,7 +2399,7 @@ crud_routes("coupons", "coupons", CouponIn)
 
 
 @api.put("/admin/cms/{slug}")
-async def update_cms(slug: str, body: dict, user: dict = Depends(admin_only)):
+async def update_cms(slug: str, body: dict, user: dict = Depends(require_perm("content:manage"))):
     await db.cms_pages.update_one({"slug": slug},
                                   {"$set": {"title": body.get("title", slug), "content": body.get("content", ""),
                                             "seo_title": body.get("seo_title", ""),
@@ -2328,12 +2410,12 @@ async def update_cms(slug: str, body: dict, user: dict = Depends(admin_only)):
 
 
 @api.get("/admin/settings")
-async def get_settings(user: dict = Depends(admin_only)):
+async def get_settings(user: dict = Depends(require_perm("content:manage"))):
     return clean(await db.settings.find_one({}))
 
 
 @api.put("/admin/settings")
-async def update_settings(body: dict, user: dict = Depends(admin_only)):
+async def update_settings(body: dict, user: dict = Depends(require_perm("content:manage"))):
     body.pop("id", None)
     s = await db.settings.find_one({})
     await db.settings.update_one({"_id": s["_id"]}, {"$set": body})
@@ -2652,7 +2734,7 @@ async def partner_reviews(user: dict = Depends(partner_only)):
 
 
 @api.get("/admin/reviews")
-async def admin_reviews(status: str = "", user: dict = Depends(admin_only)):
+async def admin_reviews(status: str = "", user: dict = Depends(require_perm("moderation:manage"))):
     if status == "flagged":
         flt: dict[str, Any] = {"flag_count": {"$gt": 0}, "status": {"$ne": "hidden"}}
     elif status:
@@ -2682,7 +2764,7 @@ async def admin_reviews(status: str = "", user: dict = Depends(admin_only)):
 
 
 @api.post("/admin/reviews/{rid}/moderate")
-async def moderate_review(rid: str, body: dict, user: dict = Depends(admin_only)):
+async def moderate_review(rid: str, body: dict, user: dict = Depends(require_perm("moderation:manage"))):
     action = body.get("action")
     if action not in ("hide", "publish", "delete"):
         raise HTTPException(status_code=400, detail="Invalid action")
@@ -2753,7 +2835,7 @@ async def partner_payouts(user: dict = Depends(partner_only)):
 
 
 @api.get("/admin/payouts")
-async def admin_payouts(status: str = "", user: dict = Depends(admin_only)):
+async def admin_payouts(status: str = "", user: dict = Depends(require_perm("payouts:view"))):
     flt = {"status": status} if status else {}
     docs = await db.payouts.find(flt).sort([("created_at", -1)]).limit(500).to_list(500)
     partners = await load_many(db.users, [d.get("partner_id", "") for d in docs],
@@ -2768,7 +2850,7 @@ async def admin_payouts(status: str = "", user: dict = Depends(admin_only)):
 
 
 @api.post("/admin/payouts/{pid}/pay")
-async def pay_payout(pid: str, body: dict, user: dict = Depends(admin_only)):
+async def pay_payout(pid: str, body: dict, user: dict = Depends(require_perm("payouts:pay"))):
     payout = await db.payouts.find_one({"_id": ObjectId(pid)})
     if not payout:
         raise HTTPException(status_code=404, detail="Payout not found")
@@ -2785,7 +2867,7 @@ async def pay_payout(pid: str, body: dict, user: dict = Depends(admin_only)):
 
 
 @api.post("/admin/payouts/generate")
-async def run_payout_generation(user: dict = Depends(admin_only)):
+async def run_payout_generation(user: dict = Depends(require_perm("payouts:pay"))):
     created = await generate_payouts()
     await audit(user, "payout.generate", "payout", "", {"created": created})
     return {"created": created}
@@ -3221,7 +3303,7 @@ def invite_public(inv: dict) -> dict:
 
 
 @api.post("/console/invites")
-async def console_create_invite(payload: InviteIn, user: dict = Depends(active_manager)):
+async def console_create_invite(payload: InviteIn, user: dict = Depends(require_perm("invites:manage", active=True))):
     """A signup link the vendor fills in themselves — details, photo and documents included."""
     email = payload.email.lower().strip()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}", email):
@@ -3251,14 +3333,14 @@ async def console_create_invite(payload: InviteIn, user: dict = Depends(active_m
 
 
 @api.get("/console/invites")
-async def console_invites(user: dict = Depends(manager_only)):
+async def console_invites(user: dict = Depends(require_perm("invites:manage"))):
     q = {} if user["role"] == "admin" else {"manager_id": user["id"]}
     docs = await db.vendor_invites.find(q).sort("created_at", -1).limit(100).to_list(100)
     return {"items": [invite_public(d) for d in docs]}
 
 
 @api.delete("/console/invites/{iid}")
-async def console_revoke_invite(iid: str, user: dict = Depends(active_manager)):
+async def console_revoke_invite(iid: str, user: dict = Depends(require_perm("invites:manage", active=True))):
     q = {"_id": ObjectId(iid)} if user["role"] == "admin" else {"_id": ObjectId(iid), "manager_id": user["id"]}
     inv = await db.vendor_invites.find_one(q)
     if not inv:
@@ -3337,7 +3419,7 @@ async def partner_documents(payload: DocumentsIn, user: dict = Depends(partner_o
 
 
 @api.get("/console/payouts")
-async def console_payouts(user: dict = Depends(manager_only)):
+async def console_payouts(user: dict = Depends(require_perm("payouts:view"))):
     """What each managed vendor has earned, and what's still owed."""
     q = {"role": "partner"} if user["role"] == "admin" else {"role": "partner", "managed_by": user["id"]}
     vendors = await db.users.find(q, {"org_name": 1, "full_name": 1}).limit(500).to_list(500)
@@ -3368,7 +3450,7 @@ async def console_payouts(user: dict = Depends(manager_only)):
 
 
 @api.get("/admin/vendor-activity")
-async def admin_vendor_activity(user: dict = Depends(admin_only)):
+async def admin_vendor_activity(user: dict = Depends(require_perm("audit:view"))):
     """Who created, edited, suspended or invited which vendor, and when."""
     rows = await db.audit_logs.find({"action": {"$regex": "^(vendor|manager)\\."}}) \
         .sort("created_at", -1).limit(200).to_list(200)
@@ -3596,7 +3678,7 @@ async def console_register(payload: ManagerRegisterIn, response: Response):
 
 
 @api.get("/console/summary")
-async def console_summary(user: dict = Depends(manager_only)):
+async def console_summary(user: dict = Depends(require_perm("vendors:view"))):
     q = {"role": "partner"} if user["role"] == "admin" else {"role": "partner", "managed_by": user["id"]}
     vendors = await db.users.find(q, {"status": 1}).limit(500).to_list(500)
     ids = [str(v["_id"]) for v in vendors]
@@ -3610,7 +3692,7 @@ async def console_summary(user: dict = Depends(manager_only)):
 
 
 @api.get("/console/vendors")
-async def console_vendors(q: str = "", user: dict = Depends(manager_only)):
+async def console_vendors(q: str = "", user: dict = Depends(require_perm("vendors:view"))):
     query = {"role": "partner"} if user["role"] == "admin" else {"role": "partner", "managed_by": user["id"]}
     if q.strip():
         rx = {"$regex": re.escape(q.strip()), "$options": "i"}
@@ -3636,7 +3718,7 @@ async def owned_vendor(vid: str, user: dict) -> dict:
 
 
 @api.get("/console/vendors/{vid}")
-async def console_vendor(vid: str, user: dict = Depends(manager_only)):
+async def console_vendor(vid: str, user: dict = Depends(require_perm("vendors:view"))):
     doc = await owned_vendor(vid, user)
     v = clean(doc)
     v.update((await vendor_stats([vid])).get(vid, {}))
@@ -3647,7 +3729,7 @@ async def console_vendor(vid: str, user: dict = Depends(manager_only)):
 
 
 @api.post("/console/vendors")
-async def console_create_vendor(payload: VendorIn, user: dict = Depends(active_manager)):
+async def console_create_vendor(payload: VendorIn, user: dict = Depends(require_perm("vendors:manage", active=True))):
     email = payload.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
@@ -3678,7 +3760,7 @@ async def console_create_vendor(payload: VendorIn, user: dict = Depends(active_m
 
 
 @api.patch("/console/vendors/{vid}")
-async def console_update_vendor(vid: str, payload: VendorPatch, user: dict = Depends(active_manager)):
+async def console_update_vendor(vid: str, payload: VendorPatch, user: dict = Depends(require_perm("vendors:manage", active=True))):
     await owned_vendor(vid, user)
     upd = {k: v for k, v in payload.dict().items() if k not in ("status", "verified") and v not in ("", None)}
     if payload.status:
@@ -3700,14 +3782,135 @@ async def console_update_vendor(vid: str, payload: VendorPatch, user: dict = Dep
 
 
 @api.post("/console/vendors/{vid}/invite")
-async def console_resend_invite(vid: str, user: dict = Depends(active_manager)):
+async def console_resend_invite(vid: str, user: dict = Depends(require_perm("vendors:manage", active=True))):
     doc = await owned_vendor(vid, user)
     await vendor_invite(await db.users.find_one({"_id": doc["_id"]}), user["full_name"])
     return {"ok": True, "message": f"Set-password link sent to {doc['email']}."}
 
 
+@api.get("/admin/permissions")
+async def list_permissions(user: dict = Depends(require_perm("team:manage"))):
+    """The catalogue plus the presets, so the UI never hardcodes permission keys."""
+    return {"groups": [{"group": g, "key": k, "description": d} for g, k, d in PERMISSIONS],
+            "roles": [{"key": k, **{f: v for f, v in r.items()}} for k, r in STAFF_ROLES.items()],
+            "my_permissions": sorted(perms_of(user))}
+
+
+class TeamIn(BaseModel):
+    full_name: str
+    email: EmailStr
+    staff_role: str
+    scope: str = "admin"          # admin (control centre) | manager (vendor console)
+    extra_permissions: List[str] = []
+
+
+class TeamPatch(BaseModel):
+    staff_role: Optional[str] = None
+    extra_permissions: Optional[List[str]] = None
+    status: Optional[str] = None
+
+
+TEAM_FIELDS = {"full_name": 1, "email": 1, "role": 1, "staff_role": 1, "extra_permissions": 1,
+               "status": 1, "created_at": 1, "org_name": 1}
+
+
+def staff_view(doc: dict) -> dict:
+    s = clean(doc)
+    s["permissions"] = sorted(perms_of(doc | {"role": doc.get("role")}))
+    s["role_label"] = STAFF_ROLES.get(doc.get("staff_role", ""), {}).get(
+        "label", "Full access (legacy)" if doc.get("role") == "admin" else "Vendor manager (default)")
+    return s
+
+
+def check_grant(actor: dict, staff_role: str, extras: list, scope: str) -> list:
+    """Nobody can hand out more than they hold, and the preset must match the surface."""
+    preset = STAFF_ROLES.get(staff_role)
+    if not preset or preset["scope"] != scope:
+        raise HTTPException(status_code=400, detail="Pick a role that matches the chosen access area.")
+    wanted = set(preset["permissions"]) | {e for e in extras if e in ALL_PERMISSIONS}
+    held = perms_of(actor)
+    over = wanted - held
+    if over:
+        raise HTTPException(status_code=403,
+                            detail=f"You can't grant permissions you don't hold yourself: {', '.join(sorted(over))}.")
+    return sorted({e for e in extras if e in ALL_PERMISSIONS} - set(preset["permissions"]))
+
+
+@api.get("/admin/team")
+async def list_team(user: dict = Depends(require_perm("team:manage"))):
+    docs = await db.users.find({"role": {"$in": ["admin", "manager"]}}, TEAM_FIELDS) \
+        .sort("created_at", 1).limit(200).to_list(200)
+    return {"items": [staff_view(d) for d in docs]}
+
+
+@api.post("/admin/team")
+async def invite_team_member(payload: TeamIn, user: dict = Depends(require_perm("team:manage"))):
+    email = payload.email.lower().strip()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="Someone already uses that email on Buddilio.")
+    extras = check_grant(user, payload.staff_role, payload.extra_permissions, payload.scope)
+    doc = {"full_name": payload.full_name.strip()[:80], "email": email,
+           "role": "admin" if payload.scope == "admin" else "manager",
+           "staff_role": payload.staff_role, "extra_permissions": extras,
+           "password_hash": hash_password(secrets.token_urlsafe(18)), "status": "active",
+           "city": "", "photo": "", "verified": True, "email_verified": False,
+           "created_by": user["id"], "created_at": iso(now_utc())}
+    res = await db.users.insert_one(doc)
+    token = secrets.token_urlsafe(32)
+    await db.password_reset_tokens.insert_one({
+        "token": token, "user_id": str(res.inserted_id),
+        "expires_at": now_utc() + timedelta(days=7), "created_at": iso(now_utc())})
+    role_label = STAFF_ROLES[payload.staff_role]["label"]
+    await send_email(email, "You've been added to the Buddilio team", wrap(
+        "Set your password",
+        f"<p>{user['full_name']} added you to the Buddilio team as <b>{role_label}</b>.</p>"
+        "<p>Set a password to sign in. This link works for 7 days.</p>",
+        "Set my password", f"{FRONTEND_URL}/reset-password?token={token}"))
+    await audit(user, "team.invite", "user", str(res.inserted_id),
+                {"email": email, "staff_role": payload.staff_role, "scope": payload.scope})
+    return staff_view(await db.users.find_one({"_id": res.inserted_id}, TEAM_FIELDS))
+
+
+@api.patch("/admin/team/{uid}")
+async def update_team_member(uid: str, payload: TeamPatch, user: dict = Depends(require_perm("team:manage"))):
+    if uid == user["id"]:
+        raise HTTPException(status_code=400, detail="You can't change your own permissions.")
+    try:
+        target = await db.users.find_one({"_id": ObjectId(uid), "role": {"$in": ["admin", "manager"]}})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid team member id")
+    if not target:
+        raise HTTPException(status_code=404, detail="Team member not found")
+    if perms_of(target) - perms_of(user):
+        raise HTTPException(status_code=403, detail="This person has permissions beyond yours, so you can't edit them.")
+    upd: dict[str, Any] = {}
+    if payload.staff_role is not None or payload.extra_permissions is not None:
+        staff_role = payload.staff_role or target.get("staff_role") or ""
+        scope = "admin" if target.get("role") == "admin" else "manager"
+        extras = payload.extra_permissions if payload.extra_permissions is not None else (
+            target.get("extra_permissions") or [])
+        upd["extra_permissions"] = check_grant(user, staff_role, extras, scope)
+        upd["staff_role"] = staff_role
+    if payload.status is not None:
+        if payload.status not in ("active", "suspended"):
+            raise HTTPException(status_code=400, detail="Status must be active or suspended.")
+        if payload.status == "suspended" and "team:manage" in perms_of(target):
+            others = await db.users.count_documents({"role": "admin", "status": "active",
+                                                     "_id": {"$ne": target["_id"]},
+                                                     "$or": [{"staff_role": "super_admin"},
+                                                             {"staff_role": {"$in": [None, ""]}}]})
+            if not others:
+                raise HTTPException(status_code=400, detail="Keep at least one active super admin.")
+        upd["status"] = payload.status
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
+    await db.users.update_one({"_id": target["_id"]}, {"$set": upd})
+    await audit(user, "team.update", "user", uid, upd)
+    return staff_view(await db.users.find_one({"_id": target["_id"]}, TEAM_FIELDS))
+
+
 @api.get("/admin/managers")
-async def admin_managers(user: dict = Depends(admin_only)):
+async def admin_managers(user: dict = Depends(require_perm("team:manage"))):
     docs = await db.users.find({"role": "manager"},
                                {"full_name": 1, "email": 1, "org_name": 1, "status": 1, "mobile": 1,
                                 "country": 1, "created_at": 1}).sort("created_at", -1).limit(200).to_list(200)
@@ -3720,7 +3923,7 @@ async def admin_managers(user: dict = Depends(admin_only)):
 
 
 @api.patch("/admin/managers/{mid}")
-async def admin_update_manager(mid: str, body: dict, user: dict = Depends(admin_only)):
+async def admin_update_manager(mid: str, body: dict, user: dict = Depends(require_perm("team:manage"))):
     action = body.get("action")
     if action not in ("approve", "reject", "suspend"):
         raise HTTPException(status_code=400, detail="Unknown action")
@@ -3752,7 +3955,7 @@ def verify_state(u: dict) -> str:
 
 
 @api.get("/admin/verifications")
-async def admin_verifications(status: str = "pending", user: dict = Depends(admin_only)):
+async def admin_verifications(status: str = "pending", user: dict = Depends(require_perm("verification:manage"))):
     """Every vendor with documents on file, so one admin can clear the whole queue."""
     docs = await db.users.find(
         {"role": "partner"},
@@ -3789,7 +3992,7 @@ class VerifyIn(BaseModel):
 
 
 @api.post("/admin/verifications/{vid}")
-async def admin_verify_vendor(vid: str, payload: VerifyIn, user: dict = Depends(admin_only)):
+async def admin_verify_vendor(vid: str, payload: VerifyIn, user: dict = Depends(require_perm("verification:manage"))):
     if payload.action not in ("approve", "reject", "reset"):
         raise HTTPException(status_code=400, detail="Unknown action")
     try:
@@ -4115,7 +4318,7 @@ async def send_payout_reminders() -> dict:
 
 
 @api.get("/console/payout-reminder")
-async def console_payout_reminder(user: dict = Depends(manager_only)):
+async def console_payout_reminder(user: dict = Depends(require_perm("payouts:view"))):
     """Exactly what Monday's email will say, so managers are never surprised by it."""
     digest = await payout_digest(user)
     last = await db.payout_reminders.find_one({"manager_id": user["id"]}, sort=[("created_at", -1)])
@@ -4261,7 +4464,7 @@ async def report_event_photo(event_id: str, pid: str, payload: PhotoReportIn,
 
 
 @api.get("/admin/photos")
-async def admin_photos(status: str = "reported", user: dict = Depends(admin_only)):
+async def admin_photos(status: str = "reported", user: dict = Depends(require_perm("moderation:manage"))):
     """Reported and hidden photos in one place."""
     flt: dict[str, Any] = {}
     if status == "reported":
@@ -4296,7 +4499,7 @@ class PhotoModerateIn(BaseModel):
 
 
 @api.post("/admin/photos/{pid}")
-async def moderate_photo(pid: str, payload: PhotoModerateIn, user: dict = Depends(admin_only)):
+async def moderate_photo(pid: str, payload: PhotoModerateIn, user: dict = Depends(require_perm("moderation:manage"))):
     if payload.action not in ("hide", "restore", "delete", "dismiss"):
         raise HTTPException(status_code=400, detail="Unknown action")
     try:

@@ -416,6 +416,24 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
 - Verified: `backend/tests/test_iteration21_hosts_recap.py` **14/14** and testing-agent iteration 21
   (`/app/test_reports/iteration_21.json`) — no bugs, desktop + mobile 390px, all demo data restored.
 
+## Iteration 22 — staff roles & permissions (June 2026)
+- **Model**: RBAC — 17 permissions in one catalogue, 8 role presets (6 control-centre: super admin, operations,
+  finance, support, moderator, viewer; 2 console: vendor manager, console viewer) plus per-person
+  `extra_permissions`. Effective set = preset ∪ extras, enforced by a single `require_perm(*keys, active=False)`
+  dependency that replaced every `admin_only` / `manager_only` / `active_manager` gate.
+- Accounts created before this (the seeded admin and manager) have no `staff_role` and deliberately keep their
+  previous access, so nothing broke.
+- **Team management** (Admin → *Team & roles*): `GET /api/admin/permissions`, `GET /api/admin/team`,
+  `POST /api/admin/team` (invites by email with a 7-day set-password link), `PATCH /api/admin/team/{uid}`
+  (role, extras, active/suspended). Guardrails: nobody can grant permissions they don't hold, you can't edit
+  yourself or anyone whose permissions exceed yours, the last active super admin can't be suspended, and every
+  change is audited (`team.invite` / `team.update`).
+- `GET /api/auth/me` now returns `permissions`; Admin and Console tabs render only what the signed-in person may
+  use. UI: `frontend/src/components/Team.jsx`.
+- Verified: `backend/tests/test_iteration22_rbac.py` **24/24** and testing-agent iteration 22
+  (`/app/test_reports/iteration_22.json`) — full per-role 200/403 matrix, console read-only vs write split,
+  tab filtering, mobile 390px. No bugs; test staff accounts torn down.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

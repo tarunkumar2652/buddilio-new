@@ -301,7 +301,10 @@ export default function Console() {
             <p className="mt-2 text-sm text-slate-400">Onboard organisers and keep their accounts in order.</p>
 
             <div className="mt-6 flex gap-2">
-              {[["vendors", "Vendors"], ["invites", "Invites"], ["payouts", "Payouts"]].map(([v, l]) => (
+              {[["vendors", "Vendors", "vendors:view"], ["invites", "Invites", "invites:manage"],
+                ["payouts", "Payouts", "payouts:view"]]
+                .filter(([, , p]) => !user.permissions || user.permissions.includes(p))
+                .map(([v, l]) => (
                 <button key={v} onClick={() => setTab(v)} data-testid={`console-tab-${v}`}
                   className={`rounded-full px-4 py-2 text-xs font-bold border transition-colors ${tab === v
                     ? "bg-white text-slate-900 border-white" : "border-white/15 text-slate-300 hover:bg-white/10"}`}>
