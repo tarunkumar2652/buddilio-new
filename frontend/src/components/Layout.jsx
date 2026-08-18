@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useCurrency } from "@/context/CurrencyContext";
 import { api, fileUrl, citySlug } from "@/lib/api";
+import { useSite } from "@/lib/site";
 import {
   Menu, X, Search, Bell, LayoutGrid, Compass, CalendarDays, MessageCircle, User,
   Facebook, Instagram, Twitter, MapPin, Sparkles,
@@ -27,6 +28,27 @@ const NAV_USER = [
   { to: "/membership", label: "Membership" },
   { to: "/orders", label: "Orders" },
 ];
+
+const navFor = (site, signedIn) => {
+  const base = (signedIn ? site?.nav?.member : site?.nav?.public) || (signedIn ? NAV_USER : NAV_PUBLIC);
+  const extra = (site?.pages || []).filter((p) => p.header)
+    .sort((a, b) => (a.order || 0) - (b.order || 0))
+    .map((p) => ({ to: `/p/${p.slug}`, label: p.label }));
+  return [...base, ...extra];
+};
+
+const footerGroups = (site) => {
+  const groups = (site?.footer?.groups || FOOT_LINKS.map(([title, links]) => ({
+    title, links: links.map(([label, to]) => ({ label, to })),
+  }))).map((g) => ({ ...g, links: [...(g.links || [])] }));
+  (site?.pages || []).filter((p) => p.footer_group).forEach((p) => {
+    const g = groups.find((x) => x.title === p.footer_group);
+    const link = { label: p.label, to: `/p/${p.slug}` };
+    if (g) { if (!g.links.some((l) => l.to === link.to)) g.links.push(link); }
+    else groups.push({ title: p.footer_group, links: [link] });
+  });
+  return groups;
+};
 
 const CITY_STRIP = ["Delhi NCR", "Mumbai", "Bengaluru", "Goa", "Dubai", "Abu Dhabi", "Singapore", "London",
   "Manchester", "New York", "Los Angeles", "Miami", "Austin", "Toronto", "Vancouver", "Sydney", "Melbourne",
@@ -66,6 +88,7 @@ export const Navbar = () => {
   const [q, setQ] = useState("");
   const [res, setRes] = useState(null);
   const [unread, setUnread] = useState(0);
+  const site = useSite();
 
   useEffect(() => { setOpen(false); setRes(null); setQ(""); }, [loc.pathname]);
 
@@ -82,7 +105,7 @@ export const Navbar = () => {
     return () => clearTimeout(t);
   }, [q]);
 
-  const links = user ? NAV_USER : NAV_PUBLIC;
+  const links = navFor(site, !!user);
 
   return (
     <>
@@ -228,7 +251,9 @@ const SOCIALS = [
   [Twitter, "x", "https://x.com/buddilio_"],
 ];
 
-export const Footer = () => (
+export const Footer = () => {
+  const site = useSite();
+  return (
   <footer className="relative mt-28 overflow-hidden bg-brand-ink text-white grain" data-testid="footer">
     <div className="aurora opacity-80" />
     <div className="relative mx-auto max-w-7xl px-4 sm:px-6 pt-16 pb-8">
@@ -253,13 +278,13 @@ export const Footer = () => (
           </div>
         </div>
 
-        {FOOT_LINKS.map(([title, items]) => (
-          <div key={title}>
-            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/45">{title}</p>
+        {footerGroups(site).map((g) => (
+          <div key={g.title}>
+            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/45">{g.title}</p>
             <ul className="mt-5 space-y-3">
-              {items.map(([l, to]) => (
+              {(g.links || []).map(({ label, to }) => (
                 <li key={to}>
-                  <Link to={to} className="text-sm text-white/70 transition-colors hover:text-brand-pink">{l}</Link>
+                  <Link to={to} className="text-sm text-white/70 transition-colors hover:text-brand-pink">{label}</Link>
                 </li>
               ))}
             </ul>
@@ -284,4 +309,5 @@ export const Footer = () => (
       </div>
     </div>
   </footer>
-);
+  );
+};

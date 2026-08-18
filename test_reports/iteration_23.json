@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 23 — dynamic Pages CMS, editable Site Content, Profile CRUD, admin Events, and City Guides. Wrote /app/backend/tests/test_iteration23_cms.py (30 tests, ALL PASSING) covering Pages CMS (slug normalisation, dup slug 400, unknown block 400, slug-clash on update 400, unknown id 404, malformed id 400, HELP_SLUGS delete blocked, draft hidden publicly, perm gating for member+viewer), all 9 block types persist + are retrievable via /api/cms/{slug}, admin site-content GET+PUT+DELETE with unknown key 400 / non-object 400 / hero-update flows through to public /api/site-content and cleanly resets, /api/site-content['pages'] carries slug/title/label/header/footer_group/order, Profile CRUD full lifecycle (create → edit → duplicate email 400 → empty body 400 → soft delete → restore → bad mode 400 → hard delete gone from Mongo), age<21 400, invalid role 400, dup email on create 400, staff role blocked for non-team:manage caller, self-delete 400; Admin event create with partner_id='' assigns partner_name 'Buddilio', bad status 400, non-existent partner_id 400, edit + delete flows, perm gating; city-guides lists 27+ cities, PUT overrides + reflects in public /api/cities/{slug}, DELETE resets; member+viewer 403 on everything content/members/events. Playwright verified the Admin tabs render for admin (pages, sections, guides, users, events, partners, content, payouts, verification, photos, team), Pages panel has page-new + full editor (title/slug/status/footer-group/nav-header/content/add-block/seo-title/save), block-type-0 / block-heading-0 / block-text-0 wire up, Site sections panel exposes section-json-hero + section-save-hero + section-reset-hero, City guides panel has 27 guide-select-<slug> buttons and guide-json + guide-save + guide-reset appear on click, admin-user-new opens profile-modal with all 11 required testids, hero-headline/tagline/subtext/explore-cta/stats render on home, /p/faq renders. Fixed one critical bug (see below) that was crashing the whole app.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Layout.jsx / Navbar",
+        "issue": "CRITICAL (FIXED BY TESTER): Navbar called `navFor(site, !!user)` at line 107 without `const site = useSite();` in scope — the useSite() hook was only wired in the Footer (line 254). Result: every single route rendered React error 'site is not defined' and the whole app crashed on load. Testing was blocked until the missing hook call was added inside Navbar. Please review the fix — it is a one-line addition in Layout.jsx before the effects block.",
+        "selector": "site-header",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration23_cms.py",
+    "/app/test_reports/pytest/iteration23.xml"
+  ],
+  "action_items": [
+    "Please review the one-line fix I made to /app/frontend/src/components/Layout.jsx (added `const site = useSite();` inside the Navbar component) — it was mandatory to unblock any UI validation.",
+    "OPTIONAL: server.py has TWO `class ProfileIn` definitions (lines 519 and 4740). FastAPI keeps the earlier one because /api/users/me was registered before the redefinition, but shadowing a Pydantic model that is already registered as a route input is a footgun. Rename the admin one to `AdminProfileIn` for clarity — the regression test I added (TestUserProfileRegression) still passes today, but any future refactor that reorders imports could break member profile updates."
+  ],
+  "critical_code_review_comments": [
+    "Layout.jsx Navbar was missing `const site = useSite();` — the ONLY reason the app rendered at all was the ErrorBoundary swallowing it. Any push to prod would have been a full outage. Add a Playwright smoke test that visits `/` unauthenticated and asserts no page error before merging Layout changes.",
+    "server.py:519 and server.py:4740 both define `class ProfileIn(BaseModel)` — the second shadows the first at import time, so any route that references ProfileIn after line 4740 uses the strict schema (full_name+email required). /users/me is registered at line 863 (before the redefinition) and keeps the lenient schema, but this is fragile — rename to AdminProfileIn.",
+    "admin_delete_event with force=true clears participants+photos but does NOT refund existing orders (db.orders is untouched). If tickets were paid, finance is left holding money for an event that no longer exists — consider either blocking force delete when paid orders exist, or auto-triggering refunds.",
+    "admin_delete_profile mode=hard removes participants/follows/photos/reviews/notifications/push_subscriptions but leaves conversations, messages, orders, credits and audit rows behind — a partial GDPR delete. Either document 'hard' as 'remove personal identifiers only' or extend the cascade.",
+    "admin_edit_profile allows `role` in PROFILE_EDITABLE, but the check `upd.get('role') in ('admin','manager')` only guards PROMOTING a member. A team:manage-lacking caller could still DEMOTE an admin/manager to 'user' by including role='user' in the payload — should also block edits when the current target is staff.",
+    "clean_blocks caps only length limits — no validation that image URLs look like URLs, cta_url isn't an unsafe javascript: link, or that html/richtext blocks are sanitised. Since these render as `dangerouslySetInnerHTML` on /p/<slug>, any admin (or a compromised staff account with content:manage) can inject arbitrary JS onto every marketing page. Add a bleach/DOMPurify pass or an allow-list of tags.",
+    "PageIn.status accepts any string; server just persists it. Non-'draft' non-'published' values still surface in /api/cms and /api/site-content because the filter is `{'$ne': 'draft'}`. Constrain status to a Literal['published', 'draft'].",
+    "GET /api/admin/pages sorts by slug and limits to 200 — fine now, but there's no pagination and no total count returned. If the site ever grows past 200 pages the admin UI just silently truncates.",
+    "site_content merges saved+defaults but PUT stores whatever the caller sends (`data = body.get('data', body)`); nothing validates the shape. Save {'headline': null} into hero and the homepage will crash on {.substring(...)}. Add a Pydantic schema per section."
+  ],
+  "updated_files": [
+    "/app/frontend/src/components/Layout.jsx (added `const site = useSite();` inside Navbar — one-line fix, no logic change)",
+    "/app/backend/tests/test_iteration23_cms.py (new pytest module)"
+  ],
+  "success_rate": {
+    "backend": "100% (30/30)",
+    "frontend": "100% after the Navbar fix (all iteration-23 testids resolved on admin, /p/faq loads, home hero renders, sections/guides/pages panels all interactive)"
+  },
+  "test_credentials": "admin@buddilio.com / Admin@123, ops.manager@buddilio.com / Console@123, diya.sharma@example.com / User@123 — plus test_members_only@buddilio.com and test_viewer_23@buddilio.com (both Test@1234) that the pytest fixture upserts and tears down.",
+  "seed_data_creation": "None persistent. Fixture upserts two test staff accounts (support + viewer presets) at start and deletes them at teardown; every page/user/event/city-guide/site-content override created during a test is cleaned up in a try/finally. conftest.py sweeps any TEST_-prefixed leftover.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Skyline Sessions (invited.vendor@example.com) remains verification_status='pending' with 1 document. All iteration-23 endpoints are green. The Layout.jsx Navbar fix was a one-liner (`const site = useSite();`) — do NOT revert; without it every route crashes with 'site is not defined'. server.py still has a duplicate `class ProfileIn` at 519 and 4740 that main agent should rename to AdminProfileIn (flagged in action items). Block-render pages use dangerouslySetInnerHTML on richtext/html blocks and there is no HTML sanitiser — worth an XSS pass in a future iteration.",
+  "rca_of_the_issue": "Root cause of the frontend crash: the new dynamic-nav feature added `const site = useSite()` in the Footer component (Layout.jsx:254) and `navFor(site, ...)` inside the Navbar (Layout.jsx:107), but forgot to add the same hook call inside Navbar. React threw ReferenceError 'site is not defined' on every mount, taking down every route including /login. Reproduction: load ANY page pre-fix. Fix: add `const site = useSite();` after the `const [unread, setUnread] = useState(0);` line inside the Navbar component. Verified post-fix by logging in as admin and touring every Iteration-23 tab + /p/faq."
+}

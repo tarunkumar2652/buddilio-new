@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { api } from "@/lib/api";
+import { useParams, Link } from "react-router-dom";
+import { api, fileUrl } from "@/lib/api";
 import { Spinner, Empty, SEO } from "@/components/Shared";
 import { ShieldCheck, MapPin, EyeOff, Flag, Ban, PhoneCall } from "lucide-react";
 
@@ -10,17 +10,87 @@ export function CmsPage() {
   useEffect(() => { setP(null); api.get(`/cms/${slug}`).then(({ data }) => setP(data)).catch(() => setP(false)); }, [slug]);
   if (p === null) return <Spinner />;
   if (p === false) return <div className="py-24"><Empty title="Page not found" sub="This page may have been moved." /></div>;
+  const blocks = p.blocks || [];
   return (
     <div className="mx-auto max-w-3xl px-4 sm:px-6 py-16 pb-28" data-testid={`cms-page-${slug}`}>
-      <SEO title={p.title} description={p.seo_description} />
+      <SEO title={p.seo_title || p.title} description={p.seo_description} />
       <p className="overline">Buddilio</p>
       <h1 className="mt-3 text-3xl sm:text-4xl font-bold">{p.title}</h1>
-      <div className="mt-8 space-y-4 text-slate-600 leading-relaxed">
-        {p.content.split("\n").filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}
-      </div>
+      {p.content && (
+        <div className="mt-8 space-y-4 text-slate-600 leading-relaxed" data-testid="cms-intro">
+          {p.content.split("\n").filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}
+        </div>
+      )}
+      {blocks.length > 0 && (
+        <div className="mt-10 space-y-8" data-testid="cms-blocks">
+          {blocks.map((b, i) => <PageBlock key={i} b={b} i={i} />)}
+        </div>
+      )}
     </div>
   );
 }
+
+const PageBlock = ({ b, i }) => {
+  const key = `cms-block-${i}`;
+  if (b.type === "heading") return <h2 className="text-2xl font-bold" data-testid={key}>{b.heading || b.text}</h2>;
+  if (b.type === "image") return b.image
+    ? <img src={fileUrl(b.image)} alt={b.heading || ""} loading="lazy" className="w-full rounded-2xl object-cover" data-testid={key} />
+    : null;
+  if (b.type === "quote") return (
+    <blockquote className="rounded-2xl border-l-4 border-slate-900 bg-slate-50 p-6 text-lg italic text-slate-700" data-testid={key}>
+      “{b.text}”{b.heading && <span className="mt-2 block text-sm not-italic font-bold text-slate-500">— {b.heading}</span>}
+    </blockquote>
+  );
+  if (b.type === "list") return (
+    <div data-testid={key}>
+      {b.heading && <h2 className="text-2xl font-bold">{b.heading}</h2>}
+      <ul className="mt-3 list-disc space-y-2 pl-5 text-slate-600">
+        {(b.items || []).filter(Boolean).map((it, n) => <li key={n}>{it}</li>)}
+      </ul>
+    </div>
+  );
+  if (b.type === "faq") return (
+    <div data-testid={key}>
+      {b.heading && <h2 className="text-2xl font-bold">{b.heading}</h2>}
+      <div className="mt-3 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white">
+        {(b.items || []).filter(Boolean).map((it, n) => {
+          const [q, ...rest] = String(it).split("|");
+          return (
+            <details key={n} className="px-5 py-4" data-testid={`${key}-faq-${n}`}>
+              <summary className="cursor-pointer text-sm font-bold">{q.trim()}</summary>
+              <p className="mt-2 text-sm text-slate-600">{rest.join("|").trim()}</p>
+            </details>
+          );
+        })}
+      </div>
+    </div>
+  );
+  if (b.type === "cta") return (
+    <div className="rounded-2xl bg-brand-ink p-8 text-white" data-testid={key}>
+      {b.heading && <h2 className="text-2xl font-bold">{b.heading}</h2>}
+      {b.text && <p className="mt-2 text-white/70">{b.text}</p>}
+      {b.cta_label && (
+        <Link to={b.cta_url || "/events"} data-testid={`${key}-cta`}
+          className="mt-5 inline-block rounded-full brand-gradient px-6 py-3 text-sm font-bold">{b.cta_label}</Link>
+      )}
+    </div>
+  );
+  if (b.type === "richtext" || b.type === "html") return (
+    <div data-testid={key}>
+      {b.heading && <h2 className="text-2xl font-bold">{b.heading}</h2>}
+      <div className="prose-sm mt-3 space-y-3 text-slate-600 leading-relaxed"
+        dangerouslySetInnerHTML={{ __html: b.text }} />
+    </div>
+  );
+  return (
+    <div data-testid={key}>
+      {b.heading && <h2 className="text-2xl font-bold">{b.heading}</h2>}
+      <div className="mt-3 space-y-3 text-slate-600 leading-relaxed">
+        {String(b.text || "").split("\n").filter(Boolean).map((line, n) => <p key={n}>{line}</p>)}
+      </div>
+    </div>
+  );
+};
 
 const TIPS = [
   [MapPin, "Always meet in public", "First meetups should be at the listed venue — a bar, cafe, club or event ground. Never a private residence."],

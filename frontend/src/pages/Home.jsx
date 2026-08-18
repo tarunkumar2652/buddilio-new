@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, fileUrl } from "@/lib/api";
+import { useSite } from "@/lib/site";
 import { useCurrency } from "@/context/CurrencyContext";
 import { EventCard } from "@/components/Cards";
 import { SEO } from "@/components/Shared";
@@ -39,45 +40,51 @@ export default function Home() {
     api.get("/plans").then(({ data }) => setPlans(data.items)).catch(() => {});
   }, []);
 
+  const site = useSite();
+  const hero = site.hero || {};
+  const heroStats = (site.stats?.items || []).length ? site.stats.items : null;
+
   return (
     <div data-testid="home-page">
       <SEO title="Find your people for every experience" />
 
       {/* HERO */}
       <section className="relative overflow-hidden bg-slate-900 text-white grain">
-        <img src={HERO} alt="" className="absolute inset-0 h-full w-full object-cover opacity-45" />
+        <img src={hero.image ? fileUrl(hero.image) : HERO} alt="" className="absolute inset-0 h-full w-full object-cover opacity-45" />
         <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/85 to-slate-900/25" />
         <div className="aurora" />
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 py-24 sm:py-32 lg:py-40">
           <div className="max-w-2xl fade-up">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white/85" data-testid="hero-tagline">
-              <img src="/brand/mark.png" alt="" className="h-4 w-4 object-contain" />Your Vibe, Your Buddy
+              <img src="/brand/mark.png" alt="" className="h-4 w-4 object-contain" />{hero.tagline || "Your Vibe, Your Buddy"}
             </span>
-            <h1 className="mt-6 text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.05]">
-              Great nights out shouldn't <span className="text-gradient">depend on who's free.</span>
+            <h1 className="mt-6 text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.05]" data-testid="hero-headline">
+              {hero.headline || "Great nights out shouldn't"}{" "}
+              <span className="text-gradient">{hero.headline_highlight || "depend on who's free."}</span>
             </h1>
-            <p className="mt-6 text-base md:text-lg text-white/75 leading-relaxed max-w-xl">
-              Buddilio is a curated social club for adults, live in 27 cities worldwide. Discover parties, dinners,
-              concerts and getaways — then find verified companions who actually want to go.
+            <p className="mt-6 text-base md:text-lg text-white/75 leading-relaxed max-w-xl" data-testid="hero-subtext">
+              {hero.subtext || `Buddilio is a curated social club for adults, live in 27 cities worldwide. Discover parties, dinners,
+              concerts and getaways — then find verified companions who actually want to go.`}
             </p>
-            <p className="mt-5 text-xs font-bold uppercase tracking-[0.2em] text-white/45">Delhi NCR · Dubai · London · New York · Singapore</p>
+            <p className="mt-5 text-xs font-bold uppercase tracking-[0.2em] text-white/45">{hero.cities_line || "Delhi NCR · Dubai · London · New York · Singapore"}</p>
             <div className="mt-9 flex flex-wrap gap-3">
-              <Link to="/events" data-testid="hero-explore-cta"
+              <Link to={hero.primary_url || "/events"} data-testid="hero-explore-cta"
                 className="brand-gradient rounded-full px-7 py-3.5 text-sm font-bold text-white shadow-glow-lg transition-transform hover:scale-[1.03] active:scale-[.98]">
-                Explore Events
+                {hero.primary_label || "Explore Events"}
               </Link>
-              <Link to="/discover" data-testid="hero-companions-cta"
+              <Link to={hero.secondary_url || "/discover"} data-testid="hero-companions-cta"
                 className="rounded-full border border-white/30 px-6 py-3.5 text-sm font-bold hover:bg-white/10 transition-colors">
-                Find Companions
+                {hero.secondary_label || "Find Companions"}
               </Link>
               <Link to="/register" data-testid="hero-join-cta"
                 className="rounded-full bg-white/10 border border-white/20 px-6 py-3.5 text-sm font-bold hover:bg-white/20 transition-colors">
                 Join Buddilio
               </Link>
             </div>
-            <div className="mt-12 flex flex-wrap gap-8 text-sm">
-              {[["12,400+", "verified members"], ["380+", "curated experiences"], ["27", "cities · 12 countries"]].map(([n, l]) => (
-                <div key={l}><p className="text-2xl font-display font-bold">{n}</p><p className="text-white/50 text-xs">{l}</p></div>
+            <div className="mt-12 flex flex-wrap gap-8 text-sm" data-testid="hero-stats">
+              {(heroStats || [["12,400+", "verified members"], ["380+", "curated experiences"], ["27", "cities · 12 countries"]]
+                .map(([value, label]) => ({ value, label }))).map(({ value, label }) => (
+                <div key={label}><p className="text-2xl font-display font-bold">{value}</p><p className="text-white/50 text-xs">{label}</p></div>
               ))}
             </div>
           </div>

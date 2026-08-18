@@ -9,6 +9,8 @@ import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Share
 import { Verifications } from "@/components/Verifications";
 import { PhotoModeration } from "@/components/PhotoModeration";
 import { Team } from "@/components/Team";
+import { Pages, SiteContent, CityGuides } from "@/components/ContentStudio";
+import { ProfileForm, EventForm } from "@/components/AdminForms";
 import { useAuth } from "@/context/AuthContext";
 
 const NAV = [
@@ -20,6 +22,8 @@ const NAV = [
   ["payouts", "Payouts", "payouts:view"], ["coupons", "Coupons", "finance:manage"],
   ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
   ["photos", "Photo wall", "moderation:manage"], ["content", "Content", "content:manage"],
+  ["pages", "Pages", "content:manage"], ["sections", "Site sections", "content:manage"],
+  ["guides", "City guides", "content:manage"],
   ["settings", "Settings", "content:manage"], ["audit", "Audit logs", "audit:view"],
   ["team", "Team & roles", "team:manage"],
 ];
@@ -167,6 +171,9 @@ export default function Admin() {
         {active === "settings" && <Settings />}
         {active === "audit" && <Audit />}
         {active === "team" && <Team />}
+        {active === "pages" && <Pages />}
+        {active === "sections" && <SiteContent />}
+        {active === "guides" && <CityGuides />}
       </div>
     </div>
   );
@@ -234,6 +241,7 @@ function Users({ role }) {
   const [status, setStatus] = useState("");
   const [data, setData] = useState(null);
   const [page, setPage] = useState(1);
+  const [form, setForm] = useState(null);
   const load = useCallback(() => {
     api.get("/admin/users", { params: { q, role, status, page, limit: 20 } }).then(({ data }) => setData(data)).catch(() => setData({ items: [] }));
   }, [q, role, status, page]);
@@ -244,15 +252,33 @@ function Users({ role }) {
     catch (e) { toast.error(errMsg(e)); }
   };
 
+  const remove = async (u) => {
+    const hard = window.confirm(`Delete ${u.full_name}?\n\nOK = permanent delete (removes everything)\nCancel = choose soft delete next.`);
+    if (!hard && !window.confirm(`Soft delete ${u.full_name}? Their account is disabled but everything is kept and can be restored.`)) return;
+    try {
+      await api.delete(`/admin/users/${u.id}`, { params: { mode: hard ? "hard" : "soft" } });
+      toast.success(hard ? "Profile permanently deleted." : "Profile disabled — you can restore it any time.");
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const restore = async (u) => {
+    try { await api.post(`/admin/users/${u.id}/restore`); toast.success("Profile restored."); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+
   if (!data) return <Spinner />;
   return (
     <div data-testid={`admin-users-${role}`}>
+      {form && <ProfileForm profile={form.id ? form : null} onClose={() => setForm(null)} onSaved={load} />}
       <div className="flex flex-wrap gap-3">
         <input data-testid="admin-user-search" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} placeholder="Search name or email…"
           className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm w-72" />
         <select data-testid="admin-user-status" value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
-          <option value="">All statuses</option>{["active", "suspended", "banned"].map((s) => <option key={s}>{s}</option>)}
+          <option value="">All statuses</option>{["active", "suspended", "banned", "deleted"].map((s) => <option key={s}>{s}</option>)}
         </select>
+        <button onClick={() => setForm({ role: role === "partner" ? "partner" : "user" })} data-testid="admin-user-new"
+          className="rounded-full bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">New profile</button>
       </div>
       <div className="mt-5 rounded-xl border border-slate-200 bg-white overflow-x-auto">
         <table className="w-full text-sm">
@@ -276,6 +302,10 @@ function Users({ role }) {
                     {u.status !== "suspended" && <button onClick={() => act(u, { status: "suspended" }, "Member suspended")} data-testid={`suspend-${u.id}`} className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold">Suspend</button>}
                     {u.status !== "banned" && <button onClick={() => act(u, { status: "banned" }, "Member banned")} data-testid={`ban-${u.id}`} className="rounded-full border border-red-200 text-red-600 px-3 py-1.5 text-[11px] font-bold">Ban</button>}
                     {!u.verified && <button onClick={() => act(u, { verified: true }, "Member verified")} data-testid={`verify-${u.id}`} className="rounded-full bg-slate-900 text-white px-3 py-1.5 text-[11px] font-bold">Verify</button>}
+                    <button onClick={() => setForm(u)} data-testid={`edit-profile-${u.id}`} className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold">Edit</button>
+                    {u.status === "deleted"
+                      ? <button onClick={() => restore(u)} data-testid={`restore-${u.id}`} className="rounded-full border border-emerald-200 text-emerald-700 px-3 py-1.5 text-[11px] font-bold">Restore</button>
+                      : <button onClick={() => remove(u)} data-testid={`delete-profile-${u.id}`} className="rounded-full border border-red-200 text-red-600 px-3 py-1.5 text-[11px] font-bold">Delete</button>}
                   </div>
                 </td>
               </tr>
@@ -298,6 +328,7 @@ function Users({ role }) {
 function Events() {
   const [status, setStatus] = useState("submitted");
   const [items, setItems] = useState(null);
+  const [form, setForm] = useState(null);
   const load = useCallback(() => {
     api.get("/admin/events", { params: { status } }).then(({ data }) => setItems(data.items)).catch(() => setItems([]));
   }, [status]);
@@ -308,14 +339,23 @@ function Events() {
     catch (e) { toast.error(errMsg(e)); }
   };
 
+  const remove = async (ev) => {
+    if (!window.confirm(`Delete “${ev.title}”? Bookings and photos for it are removed too.`)) return;
+    try { await api.delete(`/admin/events/${ev.id}`, { params: { force: true } }); toast.success("Event deleted."); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+
   if (!items) return <Spinner />;
   return (
     <div data-testid="admin-events">
+      {form && <EventForm event={form.id ? form : null} onClose={() => setForm(null)} onSaved={load} />}
       <div className="flex gap-2 flex-wrap">
         {["submitted", "published", "draft", "rejected", ""].map((s) => (
           <button key={s || "all"} onClick={() => setStatus(s)} data-testid={`admin-event-filter-${s || "all"}`}
             className={`rounded-full px-4 py-2 text-xs font-bold border ${status === s ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{s || "All"}</button>
         ))}
+        <button onClick={() => setForm({})} data-testid="admin-event-new"
+          className="rounded-full bg-slate-900 px-5 py-2 text-xs font-bold text-white">New event</button>
       </div>
       <div className="mt-5 space-y-3">
         {items.length ? items.map((ev) => (
@@ -330,6 +370,8 @@ function Events() {
               {ev.status !== "published" && <button onClick={() => moderate(ev.id, "approve")} data-testid={`approve-event-${ev.id}`} className="rounded-full bg-slate-900 text-white px-4 py-2 text-xs font-bold">Approve</button>}
               {ev.status !== "rejected" && <button onClick={() => moderate(ev.id, "reject")} data-testid={`reject-event-${ev.id}`} className="rounded-full border border-red-200 text-red-600 px-4 py-2 text-xs font-bold">Reject</button>}
               {ev.status === "published" && <Link to={`/events/${ev.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">View</Link>}
+              <button onClick={() => setForm(ev)} data-testid={`edit-event-${ev.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Edit</button>
+              <button onClick={() => remove(ev)} data-testid={`delete-event-${ev.id}`} className="rounded-full border border-red-200 px-4 py-2 text-xs font-bold text-red-600">Delete</button>
             </div>
           </div>
         )) : <Empty title="Nothing here" sub="No events with this status." />}

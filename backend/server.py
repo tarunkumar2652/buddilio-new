@@ -10,12 +10,13 @@ import json
 import re
 import jwt
 import bcrypt
+import bleach
 import uuid
 import io
 import secrets
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Annotated, Any
+from typing import List, Optional, Annotated, Any, Literal
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -2135,7 +2136,7 @@ async def city_page(slug: str):
         "members": await db.users.count_documents({"city": city, "role": "user", "status": "active"}),
         "organisers": await db.users.count_documents({"city": city, "role": "partner"}),
         "categories": sorted({e.get("category", "") for e in published if e.get("category")}),
-        "guide": guide_for(city),
+        "guide": await city_guide(city),
         "faces": faces, "quotes": quotes,
         "waiting": await db.city_waitlist.count_documents({"city": city}),
         "nearby": [{"name": n, "slug": city_slug(n)} for n in country["cities"] if n != city][:6],
@@ -2183,15 +2184,18 @@ async def meta():
 
 @api.get("/cms/{slug}")
 async def cms_page(slug: str):
-    doc = await db.cms_pages.find_one({"slug": slug})
+    doc = await db.cms_pages.find_one({"slug": slug, "status": {"$ne": "draft"}})
     if not doc:
         raise HTTPException(status_code=404, detail="Page not found")
-    return clean(doc)
+    out = clean(doc)
+    out["blocks"] = out.get("blocks") or []
+    return out
 
 
 @api.get("/cms")
 async def cms_pages():
-    return {"items": [clean(d) for d in await db.cms_pages.find({}).limit(50).to_list(50)]}
+    docs = await db.cms_pages.find({"status": {"$ne": "draft"}}).limit(100).to_list(100)
+    return {"items": [clean(d) for d in docs]}
 
 
 # ---------------- admin ----------------
@@ -4551,6 +4555,441 @@ async def moderate_photo(pid: str, payload: PhotoModerateIn, user: dict = Depend
 
 
 
+# ---------------- dynamic pages, site content, profiles & events ----------------
+class PageIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    slug: str
+    title: str
+    content: str = ""                     # rich text / markdown fallback
+    blocks: List[dict] = []               # [{type, heading, text, image, items, cta_label, cta_url}]
+    seo_title: str = ""
+    seo_description: str = ""
+    status: Literal["published", "draft"] = "published"
+    nav_header: bool = False
+    nav_footer_group: str = ""            # Explore | Company | Trust & Safety | ""
+    nav_label: str = ""
+    order: int = 0
+
+
+BLOCK_TYPES = ("heading", "text", "richtext", "image", "quote", "list", "faq", "cta", "html")
+SAFE_TAGS = ["p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li", "a", "h2", "h3", "h4",
+             "blockquote", "span", "small", "hr", "table", "thead", "tbody", "tr", "td", "th", "img"]
+SAFE_ATTRS = {"a": ["href", "title", "target", "rel"], "img": ["src", "alt", "loading"], "span": ["class"]}
+
+
+def safe_html(raw: str) -> str:
+    return bleach.clean(raw, tags=SAFE_TAGS, attributes=SAFE_ATTRS, protocols=["http", "https", "mailto"],
+                        strip=True)
+
+
+def safe_url(raw: str) -> str:
+    url = (raw or "").strip()
+    if url and not (url.startswith("/") or url.startswith("http://") or url.startswith("https://")
+                    or url.startswith("mailto:")):
+        raise HTTPException(status_code=400, detail=f"'{url[:40]}' isn't a safe link. Use /path or https://…")
+    return url[:300]
+
+
+def page_slug(raw: str) -> str:
+    out = "".join(c if c.isalnum() else "-" for c in (raw or "").lower())
+    while "--" in out:
+        out = out.replace("--", "-")
+    out = out.strip("-")
+    if not out:
+        raise HTTPException(status_code=400, detail="Give the page a slug, like about-us.")
+    return out
+
+
+def clean_blocks(blocks: list) -> list:
+    out = []
+    for b in blocks[:60]:
+        kind = str(b.get("type", "text"))
+        if kind not in BLOCK_TYPES:
+            raise HTTPException(status_code=400,
+                                detail=f"Unknown block type '{kind}'. Allowed: {', '.join(BLOCK_TYPES)}.")
+        text = str(b.get("text", ""))[:8000]
+        if kind in ("richtext", "html"):
+            text = safe_html(text)
+        out.append({"type": kind, "heading": str(b.get("heading", ""))[:200],
+                    "text": text, "image": safe_url(str(b.get("image", ""))),
+                    "items": [str(i)[:500] for i in (b.get("items") or [])][:30],
+                    "cta_label": str(b.get("cta_label", ""))[:80],
+                    "cta_url": safe_url(str(b.get("cta_url", "")))})
+    return out
+
+
+@api.get("/admin/pages")
+async def admin_pages(user: dict = Depends(require_perm("content:manage"))):
+    docs = await db.cms_pages.find({}).sort("slug", 1).limit(200).to_list(200)
+    return {"items": [clean(d) for d in docs], "block_types": list(BLOCK_TYPES)}
+
+
+@api.post("/admin/pages")
+async def create_page(payload: PageIn, user: dict = Depends(require_perm("content:manage"))):
+    slug = page_slug(payload.slug)
+    if await db.cms_pages.find_one({"slug": slug}):
+        raise HTTPException(status_code=400, detail="A page already uses that slug.")
+    doc = payload.model_dump() | {"slug": slug, "blocks": clean_blocks(payload.blocks),
+                                 "created_at": iso(now_utc()), "updated_at": iso(now_utc())}
+    res = await db.cms_pages.insert_one(doc)
+    await audit(user, "page.create", "cms_page", slug, {"title": payload.title})
+    return clean(await db.cms_pages.find_one({"_id": res.inserted_id}))
+
+
+@api.put("/admin/pages/{pid}")
+async def update_page(pid: str, payload: PageIn, user: dict = Depends(require_perm("content:manage"))):
+    try:
+        page = await db.cms_pages.find_one({"_id": ObjectId(pid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid page id")
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    slug = page_slug(payload.slug)
+    clash = await db.cms_pages.find_one({"slug": slug, "_id": {"$ne": page["_id"]}})
+    if clash:
+        raise HTTPException(status_code=400, detail="Another page already uses that slug.")
+    upd = payload.model_dump() | {"slug": slug, "blocks": clean_blocks(payload.blocks),
+                                 "updated_at": iso(now_utc())}
+    await db.cms_pages.update_one({"_id": page["_id"]}, {"$set": upd})
+    await audit(user, "page.update", "cms_page", slug, {"title": payload.title})
+    return clean(await db.cms_pages.find_one({"_id": page["_id"]}))
+
+
+@api.delete("/admin/pages/{pid}")
+async def delete_page(pid: str, user: dict = Depends(require_perm("content:manage"))):
+    try:
+        page = await db.cms_pages.find_one({"_id": ObjectId(pid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid page id")
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    if page["slug"] in HELP_SLUGS:
+        raise HTTPException(status_code=400,
+                            detail="This page is linked from the app — set it to draft instead of deleting it.")
+    await db.cms_pages.delete_one({"_id": page["_id"]})
+    await audit(user, "page.delete", "cms_page", page["slug"], {})
+    return {"ok": True}
+
+
+DEFAULT_SITE_CONTENT: dict[str, dict] = {
+    "hero": {"tagline": "Your Vibe, Your Buddy",
+             "headline": "Great nights out shouldn't",
+             "headline_highlight": "depend on who's free.",
+             "subtext": "Buddilio is a curated social club for adults, live in 27 cities worldwide. Discover "
+                        "parties, dinners, concerts and getaways — then find verified companions who actually "
+                        "want to go.",
+             "cities_line": "Delhi NCR · Dubai · London · New York · Singapore",
+             "image": "", "primary_label": "Explore Events", "primary_url": "/events",
+             "secondary_label": "Find Companions", "secondary_url": "/discover"},
+    "how_it_works": {"heading": "How Buddilio works",
+                     "steps": [{"title": "Pick a night", "text": "Browse curated experiences in your city."},
+                               {"title": "Find your buddy", "text": "Match with verified members going too."},
+                               {"title": "Show up", "text": "Meet at the venue — our hosts do the introductions."}]},
+    "stats": {"heading": "Buddilio in numbers",
+              "items": [{"label": "verified members", "value": "12,400+"},
+                        {"label": "curated experiences", "value": "380+"},
+                        {"label": "cities · 12 countries", "value": "27"}]},
+    "testimonials": {"heading": "What members say", "items": []},
+    "nav": {"public": [{"label": "Events", "to": "/events"}, {"label": "Organisers", "to": "/hosts"},
+                       {"label": "Passes", "to": "/passes"}, {"label": "Membership", "to": "/membership"},
+                       {"label": "Safety", "to": "/safety"}],
+            "member": [{"label": "Dashboard", "to": "/dashboard"}, {"label": "Discover", "to": "/discover"},
+                       {"label": "Events", "to": "/events"}, {"label": "Organisers", "to": "/hosts"},
+                       {"label": "Messages", "to": "/messages"}, {"label": "Membership", "to": "/membership"},
+                       {"label": "Orders", "to": "/orders"}]},
+    "footer": {"groups": [
+        {"title": "Explore", "links": [{"label": "Events", "to": "/events"}, {"label": "Cities", "to": "/cities"},
+                                       {"label": "Organisers", "to": "/hosts"}, {"label": "Passes", "to": "/passes"},
+                                       {"label": "Membership", "to": "/membership"}]},
+        {"title": "Company", "links": [{"label": "About", "to": "/p/about"}, {"label": "Contact", "to": "/p/contact"},
+                                       {"label": "FAQ", "to": "/p/faq"}]},
+        {"title": "Trust & Safety", "links": [{"label": "Safety Center", "to": "/safety"},
+                                              {"label": "Community Guidelines", "to": "/p/guidelines"},
+                                              {"label": "Terms", "to": "/p/terms"},
+                                              {"label": "Privacy", "to": "/p/privacy"}]}]},
+}
+
+
+async def site_content() -> dict:
+    saved = {d["key"]: d.get("data", {}) for d in await db.site_content.find({}).limit(50).to_list(50)}
+    return {k: (saved.get(k) or v) for k, v in DEFAULT_SITE_CONTENT.items()} | {
+        k: v for k, v in saved.items() if k not in DEFAULT_SITE_CONTENT}
+
+
+@api.get("/site-content")
+async def get_site_content():
+    """Everything the marketing surfaces render, editable from the admin."""
+    pages = await db.cms_pages.find({"status": {"$ne": "draft"}},
+                                    {"slug": 1, "title": 1, "nav_header": 1, "nav_footer_group": 1,
+                                     "nav_label": 1, "order": 1}).limit(200).to_list(200)
+    content = await site_content()
+    content["pages"] = [{"slug": p["slug"], "title": p.get("title", p["slug"]),
+                         "label": p.get("nav_label") or p.get("title", p["slug"]),
+                         "header": bool(p.get("nav_header")), "footer_group": p.get("nav_footer_group", ""),
+                         "order": p.get("order", 0)} for p in pages]
+    return content
+
+
+@api.get("/admin/site-content")
+async def admin_site_content(user: dict = Depends(require_perm("content:manage"))):
+    return {"content": await site_content(), "defaults": DEFAULT_SITE_CONTENT}
+
+
+@api.put("/admin/site-content/{key}")
+async def update_site_content(key: str, body: dict, user: dict = Depends(require_perm("content:manage"))):
+    if key not in DEFAULT_SITE_CONTENT:
+        raise HTTPException(status_code=400, detail="Unknown content section.")
+    data = body.get("data", body)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Section content must be an object.")
+    await db.site_content.update_one({"key": key},
+                                     {"$set": {"data": data, "updated_at": iso(now_utc())}}, upsert=True)
+    await audit(user, "site_content.update", "site_content", key, {})
+    return {"ok": True, "key": key, "data": data}
+
+
+@api.delete("/admin/site-content/{key}")
+async def reset_site_content(key: str, user: dict = Depends(require_perm("content:manage"))):
+    if key not in DEFAULT_SITE_CONTENT:
+        raise HTTPException(status_code=400, detail="Unknown content section.")
+    await db.site_content.delete_one({"key": key})
+    await audit(user, "site_content.reset", "site_content", key, {})
+    return {"ok": True, "data": DEFAULT_SITE_CONTENT[key]}
+
+
+# ---- profiles: create, edit, delete ----
+PROFILE_EDITABLE = ("full_name", "email", "city", "country", "age", "bio", "photo", "mobile", "website",
+                    "interests", "event_categories", "lifestyle", "org_name", "role", "status", "verified",
+                    "email_verified", "documents", "staff_role", "extra_permissions")
+
+
+class AdminProfileIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    full_name: str
+    email: EmailStr
+    role: str = "user"                    # user | partner | manager | admin
+    password: str = ""
+    city: str = ""
+    country: str = ""
+    age: int = 25
+    bio: str = ""
+    photo: str = ""
+    mobile: str = ""
+    org_name: str = ""
+    interests: List[str] = []
+    event_categories: List[str] = []
+    status: str = "active"
+    verified: bool = False
+
+
+@api.post("/admin/users")
+async def admin_create_user(payload: AdminProfileIn, user: dict = Depends(require_perm("members:manage"))):
+    if payload.role not in ("user", "partner", "manager", "admin"):
+        raise HTTPException(status_code=400, detail="Role must be user, partner, manager or admin.")
+    if payload.role in ("admin", "manager") and "team:manage" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="Only the team admin can create staff accounts.")
+    email = payload.email.lower().strip()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="Someone already uses that email on Buddilio.")
+    if payload.age < 21:
+        raise HTTPException(status_code=400, detail="Buddilio is 21+.")
+    temp = payload.password or secrets.token_urlsafe(14)
+    doc = {k: v for k, v in payload.model_dump().items() if k != "password"}
+    doc.update({"email": email, "password_hash": hash_password(temp), "blocked": [], "connections": [],
+                "saved_events": [], "email_verified": False, "created_by": user["id"],
+                "created_at": iso(now_utc())})
+    res = await db.users.insert_one(doc)
+    if not payload.password:
+        token = secrets.token_urlsafe(32)
+        await db.password_reset_tokens.insert_one({
+            "token": token, "user_id": str(res.inserted_id),
+            "expires_at": now_utc() + timedelta(days=7), "created_at": iso(now_utc())})
+        await send_email(email, "Your Buddilio account is ready", wrap(
+            "Set your password",
+            f"<p>Hi {payload.full_name.split(' ')[0]}, the Buddilio team created an account for you. "
+            "Set a password to sign in — this link works for 7 days.</p>",
+            "Set my password", f"{FRONTEND_URL}/reset-password?token={token}"))
+    await audit(user, "profile.create", "user", str(res.inserted_id), {"email": email, "role": payload.role})
+    return clean(await db.users.find_one({"_id": res.inserted_id}))
+
+
+@api.put("/admin/users/{uid}")
+async def admin_edit_profile(uid: str, body: dict, user: dict = Depends(require_perm("members:manage"))):
+    """Full profile edit — every field the member could set, plus the staff-only ones."""
+    try:
+        target = await db.users.find_one({"_id": ObjectId(uid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid profile id")
+    if not target:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    upd = {k: v for k, v in body.items() if k in PROFILE_EDITABLE}
+    if not upd:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
+    if ("staff_role" in upd or "extra_permissions" in upd or upd.get("role") in ("admin", "manager")) \
+            and "team:manage" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="Only the team admin can change staff access.")
+    if "role" in upd and target.get("role") in ("admin", "manager") and "team:manage" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="Only the team admin can change a staff member's role.")
+    if target.get("role") in ("admin", "manager") and "team:manage" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="Only the team admin can edit staff accounts.")
+    if "email" in upd:
+        upd["email"] = str(upd["email"]).lower().strip()
+        if await db.users.find_one({"email": upd["email"], "_id": {"$ne": target["_id"]}}):
+            raise HTTPException(status_code=400, detail="Another account already uses that email.")
+    if body.get("password"):
+        upd["password_hash"] = hash_password(str(body["password"]))
+    await db.users.update_one({"_id": target["_id"]}, {"$set": upd})
+    await audit(user, "profile.update", "user", uid, {k: v for k, v in upd.items() if k != "password_hash"})
+    return clean(await db.users.find_one({"_id": target["_id"]}))
+
+
+@api.delete("/admin/users/{uid}")
+async def admin_delete_profile(uid: str, mode: str = "soft", user: dict = Depends(require_perm("members:manage"))):
+    """Soft delete disables the account and keeps the history; hard delete removes the person entirely."""
+    if mode not in ("soft", "hard"):
+        raise HTTPException(status_code=400, detail="Mode must be soft or hard.")
+    if uid == user["id"]:
+        raise HTTPException(status_code=400, detail="You can't delete your own account.")
+    try:
+        target = await db.users.find_one({"_id": ObjectId(uid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid profile id")
+    if not target:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if target.get("role") in ("admin", "manager") and "team:manage" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="Only the team admin can remove staff accounts.")
+    if mode == "soft":
+        await db.users.update_one({"_id": target["_id"]},
+                                  {"$set": {"status": "deleted", "deleted_at": iso(now_utc())}})
+        await audit(user, "profile.soft_delete", "user", uid, {"email": target.get("email")})
+        return {"ok": True, "mode": "soft", "status": "deleted"}
+    if target.get("role") == "partner" and await db.events.count_documents({"partner_id": uid}):
+        raise HTTPException(status_code=400,
+                            detail="This organiser still has events. Move or delete those first, or use soft delete.")
+    await db.event_participants.delete_many({"user_id": uid})
+    await db.host_follows.delete_many({"user_id": uid})
+    await db.event_photos.delete_many({"user_id": uid})
+    await db.reviews.delete_many({"user_id": uid})
+    await db.notifications.delete_many({"user_id": uid})
+    await db.push_subscriptions.delete_many({"user_id": uid})
+    await db.users.delete_one({"_id": target["_id"]})
+    await audit(user, "profile.hard_delete", "user", uid, {"email": target.get("email")})
+    return {"ok": True, "mode": "hard"}
+
+
+@api.post("/admin/users/{uid}/restore")
+async def admin_restore_profile(uid: str, user: dict = Depends(require_perm("members:manage"))):
+    res = await db.users.update_one({"_id": ObjectId(uid), "status": "deleted"},
+                                   {"$set": {"status": "active"}, "$unset": {"deleted_at": ""}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="No deleted profile with that id.")
+    await audit(user, "profile.restore", "user", uid, {})
+    return {"ok": True, "status": "active"}
+
+
+# ---- events: admins can build and remove them too ----
+class AdminEventIn(EventIn):
+    partner_id: str = ""
+    status: str = "published"
+
+
+@api.post("/admin/events")
+async def admin_create_event(payload: AdminEventIn, user: dict = Depends(require_perm("events:moderate"))):
+    if payload.status not in ("draft", "submitted", "published", "rejected", "completed"):
+        raise HTTPException(status_code=400, detail="Unknown event status.")
+    host = None
+    if payload.partner_id:
+        host = await db.users.find_one({"_id": ObjectId(payload.partner_id), "role": "partner"})
+        if not host:
+            raise HTTPException(status_code=400, detail="Pick an existing organiser for this event.")
+    doc = await price_event(with_country(payload.model_dump(exclude={"partner_id", "status"})))
+    doc.update({"partner_id": payload.partner_id or "",
+                "partner_name": (host.get("org_name") or host.get("full_name")) if host else "Buddilio",
+                "status": payload.status, "participant_count": 0, "created_at": iso(now_utc())})
+    res = await db.events.insert_one(doc)
+    await audit(user, "event.admin_create", "event", str(res.inserted_id), {"title": payload.title})
+    return clean(await db.events.find_one({"_id": res.inserted_id}))
+
+
+@api.put("/admin/events/{eid}")
+async def admin_edit_event(eid: str, payload: AdminEventIn, user: dict = Depends(require_perm("events:moderate"))):
+    try:
+        ev = await db.events.find_one({"_id": ObjectId(eid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid event id")
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found")
+    upd = await price_event(with_country(payload.model_dump(exclude={"partner_id"})))
+    if payload.partner_id and payload.partner_id != ev.get("partner_id"):
+        host = await db.users.find_one({"_id": ObjectId(payload.partner_id), "role": "partner"})
+        if not host:
+            raise HTTPException(status_code=400, detail="Pick an existing organiser for this event.")
+        upd["partner_id"] = payload.partner_id
+        upd["partner_name"] = host.get("org_name") or host.get("full_name")
+    await db.events.update_one({"_id": ev["_id"]}, {"$set": upd})
+    await audit(user, "event.admin_update", "event", eid, {"title": payload.title})
+    return clean(await db.events.find_one({"_id": ev["_id"]}))
+
+
+@api.delete("/admin/events/{eid}")
+async def admin_delete_event(eid: str, force: bool = False, user: dict = Depends(require_perm("events:moderate"))):
+    try:
+        ev = await db.events.find_one({"_id": ObjectId(eid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid event id")
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found")
+    going = await db.event_participants.count_documents({"event_id": eid, "status": "confirmed"})
+    paid = await db.orders.count_documents({"event_id": eid, "status": "paid"})
+    if paid:
+        raise HTTPException(status_code=400,
+                            detail=f"{paid} paid order(s) exist for this event. Refund them first, "
+                                   "then delete it.")
+    if going and not force:
+        raise HTTPException(status_code=400,
+                            detail=f"{going} people are confirmed for this event. Cancel it or pass force=true.")
+    await db.event_participants.delete_many({"event_id": eid})
+    await db.event_photos.delete_many({"event_id": eid})
+    await db.events.delete_one({"_id": ev["_id"]})
+    await audit(user, "event.delete", "event", eid, {"title": ev.get("title"), "confirmed": going})
+    return {"ok": True, "removed_participants": going}
+
+
+# ---- editorial city guides ----
+@api.get("/admin/city-guides")
+async def admin_city_guides(user: dict = Depends(require_perm("content:manage"))):
+    saved = {d["slug"]: d.get("data", {}) for d in await db.city_guides.find({}).limit(200).to_list(200)}
+    cities = [c for country in COUNTRIES for c in country["cities"]]
+    return {"items": [{"city": c, "slug": city_slug(c), "guide": saved.get(city_slug(c)) or guide_for(c),
+                       "custom": city_slug(c) in saved} for c in cities]}
+
+
+@api.put("/admin/city-guides/{slug}")
+async def update_city_guide(slug: str, body: dict, user: dict = Depends(require_perm("content:manage"))):
+    city, _ = find_city(slug)
+    data = body.get("guide", body)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Guide content must be an object.")
+    await db.city_guides.update_one({"slug": slug},
+                                   {"$set": {"city": city, "data": data, "updated_at": iso(now_utc())}},
+                                   upsert=True)
+    await audit(user, "city_guide.update", "city", slug, {})
+    return {"ok": True, "slug": slug, "guide": data}
+
+
+@api.delete("/admin/city-guides/{slug}")
+async def reset_city_guide(slug: str, user: dict = Depends(require_perm("content:manage"))):
+    city, _ = find_city(slug)
+    await db.city_guides.delete_one({"slug": slug})
+    await audit(user, "city_guide.reset", "city", slug, {})
+    return {"ok": True, "guide": guide_for(city)}
+
+
+async def city_guide(city: str) -> dict:
+    saved = await db.city_guides.find_one({"slug": city_slug(city)})
+    return (saved or {}).get("data") or guide_for(city)
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
@@ -4596,6 +5035,9 @@ async def startup():
     await db.host_follows.create_index([("user_id", 1), ("host_id", 1)], unique=True)
     await db.host_follows.create_index("host_id")
     await db.event_recaps.create_index("event_id", unique=True)
+    await db.cms_pages.create_index("slug", unique=True)
+    await db.site_content.create_index("key", unique=True)
+    await db.city_guides.create_index("slug", unique=True)
     await db.upload_parts.create_index([("upload_id", 1), ("index", 1)], unique=True)
     await db.upload_sessions.create_index("upload_id", unique=True)
     await db.upload_sessions.create_index("created_at", expireAfterSeconds=3600)

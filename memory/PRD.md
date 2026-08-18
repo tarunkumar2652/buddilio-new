@@ -434,6 +434,35 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   (`/app/test_reports/iteration_22.json`) — full per-role 200/403 matrix, console read-only vs write split,
   tab filtering, mobile 390px. No bugs; test staff accounts torn down.
 
+## Iteration 23 — fully dynamic website (June 2026)
+- **Pages CMS**: `GET/POST /api/admin/pages`, `PUT/DELETE /api/admin/pages/{id}` with slug normalisation,
+  draft/published status (`Literal`), SEO fields, header/footer placement and a **block builder** —
+  heading, text, richtext, image, quote, list, faq (`Question | Answer`), cta, html. Rich text/HTML blocks are
+  sanitised with **bleach**; image and CTA links must be `/path`, `https://` or `mailto:`. Core pages
+  (faq, refund, guidelines, safety, about) can be drafted but not deleted. Public `/p/<slug>` renders the blocks
+  and drafts 404. UI: `frontend/src/components/ContentStudio.jsx` (Pages tab).
+- **Site sections**: `GET /api/site-content` (public), `GET /api/admin/site-content`,
+  `PUT/DELETE /api/admin/site-content/{key}` for hero, how_it_works, stats, testimonials, header nav and footer
+  columns — defaults mirror the shipped copy, and reset restores them. Header/footer come from
+  `frontend/src/lib/site.js` + `Layout.jsx`; the homepage hero/stats come from the `hero`/`stats` sections.
+- **Profiles CRUD**: `POST /api/admin/users` (password or emailed set-password link),
+  `PUT /api/admin/users/{uid}` (every profile field), `DELETE /api/admin/users/{uid}?mode=soft|hard` and
+  `POST /api/admin/users/{uid}/restore`. Soft delete disables and is reversible; hard delete cascades
+  participants, follows, photos, reviews, notifications and push subs. Staff accounts and role changes require
+  `team:manage`; you can't delete yourself; hard-deleting an organiser with events is blocked.
+- **Events CRUD for admins**: `POST /api/admin/events`, `PUT /api/admin/events/{eid}`,
+  `DELETE /api/admin/events/{eid}?force=` (refuses while paid orders exist, and while people are confirmed
+  unless forced). In-house events show as “Buddilio”. UI: `frontend/src/components/AdminForms.jsx`.
+- **City guides**: `GET /api/admin/city-guides`, `PUT/DELETE /api/admin/city-guides/{slug}` override the
+  editorial guides per city and the public city page serves the override.
+- Verified: `backend/tests/test_iteration23_cms.py` **30/30** (54/54 with RBAC) and testing-agent iteration 23
+  (`/app/test_reports/iteration_23.json`).
+- Fixes after review: missing `useSite()` in Navbar (found by tester — would have crashed every route),
+  admin `ProfileIn` renamed `AdminProfileIn`, HTML/link sanitising, page status constrained, staff-role
+  demotion blocked, event delete blocked while paid orders exist, hero/stats defaults restored to the
+  original launch copy.
+- **Not yet editable**: transactional email templates (still in code) — next candidate.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only
