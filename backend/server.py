@@ -3173,6 +3173,253 @@ async def ai_companions(event_id: str, refresh: int = 0, user: dict = Depends(ge
     return {"enabled": True, "items": await hydrate(matches, going), "generated_at": ts}
 
 
+class InviteIn(BaseModel):
+    email: str = ""
+    org_name: str = ""
+    city: str = ""
+    note: str = ""
+
+
+class InviteAcceptIn(BaseModel):
+    full_name: str
+    org_name: str
+    city: str
+    password: str
+    mobile: str = ""
+    bio: str = ""
+    photo: str = ""
+
+
+class DocumentsIn(BaseModel):
+    documents: List[dict] = []
+
+
+INVITE_DAYS = 14
+
+
+def invite_public(inv: dict) -> dict:
+    out = {"id": str(inv["_id"]), "email": inv.get("email", ""), "org_name": inv.get("org_name", ""),
+           "city": inv.get("city", ""), "note": inv.get("note", ""), "status": inv.get("status", "pending"),
+           "manager_name": inv.get("manager_name", ""), "created_at": inv.get("created_at", ""),
+           "expires_at": inv.get("expires_at", ""), "accepted_by": inv.get("accepted_by", "")}
+    if out["status"] == "pending":  # a used or revoked token is never handed back out
+        out["link"] = f"{FRONTEND_URL}/vendor-signup?token={inv['token']}"
+    return out
+
+
+@api.post("/console/invites")
+async def console_create_invite(payload: InviteIn, user: dict = Depends(active_manager)):
+    """A signup link the vendor fills in themselves — details, photo and documents included."""
+    email = payload.email.lower().strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}", email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email address for the vendor.")
+    if email and await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="Someone already has an account with that email.")
+    doc = {"token": secrets.token_urlsafe(32), "manager_id": user["id"], "manager_name": user["full_name"],
+           "email": email, "org_name": payload.org_name.strip(), "city": payload.city.strip(),
+           "note": payload.note.strip()[:400], "status": "pending", "accepted_by": "",
+           "created_at": iso(now_utc()), "expires_at": iso(now_utc() + timedelta(days=INVITE_DAYS))}
+    res = await db.vendor_invites.insert_one(doc)
+    inv = await db.vendor_invites.find_one({"_id": res.inserted_id})
+    if email:
+        try:
+            await send_email(email, "You're invited to host on Buddilio", wrap(
+                "Bring your experiences to Buddilio",
+                f"<p>{user['full_name']} invited "
+                f"{'<b>' + payload.org_name + '</b>' if payload.org_name else 'you'} to host on Buddilio.</p>"
+                + (f"<p>{payload.note}</p>" if payload.note else "")
+                + "<p>Set up your organiser profile, upload your documents and publish your first experience. "
+                  f"This link expires in {INVITE_DAYS} days.</p>",
+                "Start my organiser signup", invite_public(inv)["link"]))
+        except Exception as e:
+            logger.error(f"vendor invite email failed: {e}")
+    await audit(user, "vendor.invite", "invite", str(res.inserted_id), {"email": email})
+    return invite_public(inv)
+
+
+@api.get("/console/invites")
+async def console_invites(user: dict = Depends(manager_only)):
+    q = {} if user["role"] == "admin" else {"manager_id": user["id"]}
+    docs = await db.vendor_invites.find(q).sort("created_at", -1).limit(100).to_list(100)
+    return {"items": [invite_public(d) for d in docs]}
+
+
+@api.delete("/console/invites/{iid}")
+async def console_revoke_invite(iid: str, user: dict = Depends(active_manager)):
+    q = {"_id": ObjectId(iid)} if user["role"] == "admin" else {"_id": ObjectId(iid), "manager_id": user["id"]}
+    inv = await db.vendor_invites.find_one(q)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if inv.get("status") == "accepted":
+        raise HTTPException(status_code=400, detail="That invite has already been used.")
+    await db.vendor_invites.update_one({"_id": inv["_id"]}, {"$set": {"status": "revoked"}})
+    await audit(user, "vendor.invite_revoke", "invite", iid)
+    return {"ok": True}
+
+
+async def live_invite(token: str) -> dict:
+    inv = await db.vendor_invites.find_one({"token": token, "status": "pending"})
+    if not inv or datetime.fromisoformat(inv["expires_at"]) < now_utc():
+        raise HTTPException(status_code=404, detail="This invite link is no longer valid.")
+    return inv
+
+
+@api.get("/vendor-invite/{token}")
+async def get_vendor_invite(token: str):
+    inv = await live_invite(token)
+    return {"email": inv.get("email", ""), "org_name": inv.get("org_name", ""), "city": inv.get("city", ""),
+            "note": inv.get("note", ""), "manager_name": inv.get("manager_name", ""),
+            "expires_at": inv["expires_at"]}
+
+
+@api.post("/vendor-invite/{token}/accept")
+async def accept_vendor_invite(token: str, payload: InviteAcceptIn, response: Response):
+    inv = await live_invite(token)
+    email = (inv.get("email") or "").lower().strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="This invite has no email attached. Ask for a new link.")
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Use at least 8 characters for your password.")
+    if not payload.org_name.strip() or not payload.city.strip():
+        raise HTTPException(status_code=400, detail="Organisation and city are both required.")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+    c = country_for_city(payload.city) or {}
+    doc = {"full_name": payload.full_name.strip()[:120], "email": email,
+           "mobile": payload.mobile.strip()[:24],
+           "password_hash": hash_password(payload.password), "role": "partner", "status": "active",
+           "org_name": payload.org_name.strip(), "city": payload.city.strip(),
+           "country": c.get("name", ""), "country_code": c.get("code", ""),
+           "bio": payload.bio[:600], "photo": payload.photo, "verified": False, "email_verified": True,
+           "documents": [], "managed_by": inv["manager_id"], "created_by_name": inv.get("manager_name", ""),
+           "privacy": {"profile_visibility": "public", "who_can_message": "everyone"},
+           "notification_prefs": {"email": True, "in_app": True, "sms": False, "push": True},
+           "blocked": [], "connections": [], "saved_events": [], "created_at": iso(now_utc())}
+    res = await db.users.insert_one(doc)
+    vid = str(res.inserted_id)
+    await db.vendor_invites.update_one({"_id": inv["_id"]},
+                                       {"$set": {"status": "accepted", "accepted_by": vid,
+                                                 "accepted_at": iso(now_utc())}})
+    await notify(inv["manager_id"], "Vendor signed up",
+                 f"{payload.org_name} completed their organiser signup.", "vendor", "/console")
+    token_jwt = create_access_token(vid, email, "partner")
+    set_cookies(response, token_jwt)
+    return {"access_token": token_jwt, "user": clean(await db.users.find_one({"_id": res.inserted_id}))}
+
+
+@api.put("/partner/documents")
+async def partner_documents(payload: DocumentsIn, user: dict = Depends(partner_only)):
+    """Vendors attach licences, insurance or ID scans to their own account."""
+    docs = []
+    if len(payload.documents) > 10:
+        raise HTTPException(status_code=400, detail="You can keep up to 10 documents on file.")
+    for d in payload.documents:
+        url, name = str(d.get("url", "")), str(d.get("name", "Document"))[:120]
+        if not url.startswith("/api/files/"):
+            raise HTTPException(status_code=400, detail="Upload documents through Buddilio first.")
+        docs.append({"name": name, "url": url, "kind": str(d.get("kind", ""))[:40],
+                     "uploaded_at": iso(now_utc())})
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"documents": docs}})
+    return {"ok": True, "documents": docs}
+
+
+@api.get("/console/payouts")
+async def console_payouts(user: dict = Depends(manager_only)):
+    """What each managed vendor has earned, and what's still owed."""
+    q = {"role": "partner"} if user["role"] == "admin" else {"role": "partner", "managed_by": user["id"]}
+    vendors = await db.users.find(q, {"org_name": 1, "full_name": 1}).limit(500).to_list(500)
+    names = {str(v["_id"]): v.get("org_name") or v.get("full_name") for v in vendors}
+    if not names:
+        return {"items": [], "totals": {"paid": 0, "pending": 0, "gross": 0, "fees": 0, "currency": BASE_CURRENCY}}
+    rows = await db.payouts.find({"partner_id": {"$in": list(names)}}) \
+        .sort("created_at", -1).limit(500).to_list(500)
+    items, paid, pending, gross, fees = [], 0.0, 0.0, 0.0, 0.0
+    for r in rows:
+        net = float(r.get("net") or 0)
+        gross += float(r.get("gross") or 0)
+        fees += float(r.get("fee") or 0)
+        if r.get("status") == "paid":
+            paid += net
+        else:
+            pending += net
+        items.append({"id": str(r["_id"]), "vendor": names.get(r["partner_id"], "—"),
+                      "vendor_id": r["partner_id"], "event_title": r.get("event_title", ""),
+                      "orders": r.get("orders", 0), "gross": float(r.get("gross") or 0),
+                      "fee": float(r.get("fee") or 0), "fee_percent": r.get("fee_percent", 0),
+                      "net": net, "currency": r.get("currency", BASE_CURRENCY),
+                      "status": r.get("status", "pending"), "reference": r.get("reference", ""),
+                      "created_at": r.get("created_at", ""), "paid_at": r.get("paid_at", "")})
+    return {"items": items, "totals": {"paid": round(paid, 2), "pending": round(pending, 2),
+                                       "gross": round(gross, 2), "fees": round(fees, 2),
+                                       "currency": BASE_CURRENCY}}
+
+
+@api.get("/admin/vendor-activity")
+async def admin_vendor_activity(user: dict = Depends(admin_only)):
+    """Who created, edited, suspended or invited which vendor, and when."""
+    rows = await db.audit_logs.find({"action": {"$regex": "^(vendor|manager)\\."}}) \
+        .sort("created_at", -1).limit(200).to_list(200)
+    actor_ids, vendor_ids = set(), set()
+    for r in rows:
+        actor_ids.add(r.get("actor_id", ""))
+        if r.get("entity") == "user" and r.get("entity_id"):
+            vendor_ids.add(r["entity_id"])
+    people = {}
+    ids = [ObjectId(i) for i in (actor_ids | vendor_ids) if i and len(i) == 24]
+    if ids:
+        for u in await db.users.find({"_id": {"$in": ids}},
+                                     {"full_name": 1, "org_name": 1, "role": 1}).limit(400).to_list(400):
+            people[str(u["_id"])] = {"name": u.get("org_name") or u.get("full_name", ""), "role": u.get("role", "")}
+    items = []
+    for r in rows:
+        actor = people.get(r.get("actor_id", ""), {})
+        target = people.get(r.get("entity_id", ""), {})
+        items.append({"id": str(r["_id"]), "action": r["action"],
+                      "actor": actor.get("name") or r.get("actor_email", "—"),
+                      "actor_role": actor.get("role", ""), "actor_email": r.get("actor_email", ""),
+                      "target": target.get("name", ""), "target_id": r.get("entity_id", ""),
+                      "entity": r.get("entity", ""), "meta": r.get("meta", {}),
+                      "created_at": r.get("created_at", "")})
+    return {"items": items}
+
+
+AI_COPY_CAP = 20
+
+
+@api.post("/partner/ai-draft")
+async def partner_ai_draft(body: dict, user: dict = Depends(partner_only)):
+    """Turns an organiser's bullet notes into a title, description, rules and highlights."""
+    if not ai.ai_enabled():
+        raise HTTPException(status_code=503, detail="Buddy AI isn't switched on yet.")
+    notes = str(body.get("notes", "")).strip()
+    if len(notes) < 15:
+        raise HTTPException(status_code=400, detail="Give Buddy a few more details to work with.")
+    if len(notes) > 1500:
+        raise HTTPException(status_code=400, detail="Please keep your notes under 1500 characters.")
+    since = iso(now_utc() - timedelta(days=1))
+    recent = await db.ai_drafts.find_one({"user_id": user["id"], "notes": notes[:500],
+                                          "created_at": {"$gte": iso(now_utc() - timedelta(minutes=5))}})
+    if recent:  # same notes twice in a row shouldn't cost another draft
+        return {**recent["draft"],
+                "used_today": await db.ai_drafts.count_documents(
+                    {"user_id": user["id"], "created_at": {"$gte": since}}),
+                "daily_cap": AI_COPY_CAP}
+    used = await db.ai_drafts.count_documents({"user_id": user["id"], "created_at": {"$gte": since}})
+    if used >= AI_COPY_CAP:
+        raise HTTPException(status_code=429, detail="You've used today's AI drafts. They reset in 24 hours.")
+    brief = "\n".join(filter(None, [
+        f"Category: {body.get('category', '')}", f"City: {body.get('city', '')}",
+        f"Venue: {body.get('venue', '')}", f"Starts: {str(body.get('starts_at', ''))[:16]}",
+        f"Price: {body.get('price', '')} {body.get('price_currency', '')}",
+        f"Capacity: {body.get('capacity', '')}", f"Notes: {notes}"]))
+    draft = await ai.draft_event_copy(f"copy-{user['id']}-{secrets.token_hex(4)}", brief)
+    if not draft.get("title"):
+        raise HTTPException(status_code=502, detail="Buddy couldn't draft that. Try adding a bit more detail.")
+    await db.ai_drafts.insert_one({"user_id": user["id"], "notes": notes[:500], "draft": draft,
+                                   "created_at": iso(now_utc())})
+    return {**draft, "used_today": used + 1, "daily_cap": AI_COPY_CAP}
+
+
 class AiGuestIn(BaseModel):
     message: str
     session_id: str = ""
@@ -3263,7 +3510,7 @@ class VendorPatch(BaseModel):
 
 VENDOR_FIELDS = {"full_name": 1, "email": 1, "org_name": 1, "city": 1, "country": 1, "mobile": 1,
                  "status": 1, "verified": 1, "photo": 1, "bio": 1, "rating": 1, "created_at": 1,
-                 "managed_by": 1}
+                 "managed_by": 1, "documents": 1}
 
 
 async def vendor_invite(vendor: dict, manager_name: str) -> None:
@@ -3517,6 +3764,9 @@ async def startup():
     await db.ai_matches.create_index([("user_id", 1), ("event_id", 1)], unique=True)
     await db.files.create_index("storage_path")
     await db.files.create_index([("owner_id", 1), ("created_at", -1)])
+    await db.vendor_invites.create_index("token", unique=True)
+    await db.vendor_invites.create_index([("manager_id", 1), ("created_at", -1)])
+    await db.ai_drafts.create_index([("user_id", 1), ("created_at", -1)])
     await db.upload_parts.create_index([("upload_id", 1), ("index", 1)], unique=True)
     await db.upload_sessions.create_index("upload_id", unique=True)
     await db.upload_sessions.create_index("created_at", expireAfterSeconds=3600)

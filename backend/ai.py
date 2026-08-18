@@ -170,6 +170,40 @@ Rules:
 - Return ONLY compact JSON, nothing else: {"picks":[{"id":"...","why":"..."}]}"""
 
 
+COPY_SYSTEM = """You write listing copy for Buddilio, a premium social-discovery platform where adults (21+)
+book real-world experiences: parties, dining, nightlife, concerts, festivals, sports, travel.
+
+From the organiser's rough notes, write the listing. Rules:
+- Use ONLY facts in their notes. Never invent a venue, a price, a time, a celebrity, a sponsor or a guarantee.
+- Title: 4-8 words, specific and inviting. No emoji, no ALL CAPS, no "unforgettable"/"epic"/"once in a lifetime".
+- Description: 2 short paragraphs, 90-140 words total, second person ("you"), concrete sensory detail,
+  and a line about who this suits and how easy it is to join alone.
+- Rules: 3-5 short lines an organiser would actually enforce. Always include "21+, valid ID at entry".
+- Highlights: 3 punchy fragments, max 6 words each.
+- Never claim alcohol, dating, adult services or anything unsafe. Nothing about meeting privately.
+- Return ONLY compact JSON:
+  {"title":"...","description":"...","rules":"line\\nline\\nline","highlights":["...","...","..."]}"""
+
+
+async def draft_event_copy(session_id: str, brief: str) -> dict:
+    chat = LlmChat(api_key=LLM_KEY, session_id=session_id, system_message=COPY_SYSTEM) \
+        .with_model(AI_PROVIDER, AI_MODEL)
+    raw = await chat.send_message(UserMessage(text=f"Organiser notes:\n{brief}\n\nJSON:"))
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
+        text = text[4:] if text.lower().startswith("json") else text
+    try:
+        data = json.loads(text[text.find("{"):text.rfind("}") + 1])
+    except Exception as e:
+        logger.error(f"Buddy copy returned unparsable JSON: {e} — {text[:200]}")
+        return {}
+    return {"title": str(data.get("title", ""))[:120],
+            "description": str(data.get("description", ""))[:2000],
+            "rules": str(data.get("rules", ""))[:600],
+            "highlights": [str(h)[:60] for h in (data.get("highlights") or [])][:3]}
+
+
 MATCH_SYSTEM = """You help a Buddilio member decide who to message about one specific event.
 
 From the candidate members, choose up to 3 the member should reach out to, and say why in their words.

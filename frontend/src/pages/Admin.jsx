@@ -14,6 +14,38 @@ const NAV = [
   ["content", "Content"], ["settings", "Settings"], ["audit", "Audit logs"],
 ];
 
+const VendorActivity = () => {
+  const [items, setItems] = useState(null);
+  useEffect(() => {
+    api.get("/admin/vendor-activity").then(({ data }) => setItems(data.items)).catch(() => setItems([]));
+  }, []);
+
+  const label = {
+    "vendor.create": "created vendor", "vendor.update": "updated vendor", "vendor.invite": "invited vendor",
+    "vendor.invite_revoke": "revoked an invite", "manager.approve": "approved console access",
+    "manager.suspend": "suspended console access", "manager.reject": "rejected console access",
+  };
+
+  if (!items) return <Spinner />;
+  if (!items.length) return <p className="text-sm text-slate-500" data-testid="activity-empty">No vendor activity yet.</p>;
+
+  return (
+    <ul className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white" data-testid="activity-list">
+      {items.map((a) => (
+        <li key={a.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-3 text-sm"
+          data-testid={`activity-row-${a.id}`}>
+          <span className="font-semibold">{a.actor}</span>
+          <span className="text-slate-500">{label[a.action] || a.action}</span>
+          {a.target && <span className="font-semibold">{a.target}</span>}
+          {a.meta?.email && !a.target && <span className="text-slate-500">{a.meta.email}</span>}
+          {a.meta?.status && <Badge tone={a.meta.status === "active" ? "green" : "amber"}>{a.meta.status}</Badge>}
+          <span className="ml-auto text-[11px] text-slate-400">{fmtDate(a.created_at)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+};
+
 const Managers = () => {
   const [items, setItems] = useState(null);
   const load = () => api.get("/admin/managers").then(({ data }) => setItems(data.items)).catch((e) => toast.error(errMsg(e)));
@@ -92,7 +124,15 @@ export default function Admin() {
         {tab === "dashboard" && <Overview />}
         {tab === "users" && <Users key="u" role="user" />}
         {tab === "partners" && <Users key="p" role="partner" />}
-        {tab === "managers" && <Managers />}
+        {tab === "managers" && (
+          <div className="space-y-8">
+            <Managers />
+            <div>
+              <h2 className="mb-3 text-sm font-bold uppercase tracking-widest text-slate-500">Vendor activity log</h2>
+              <VendorActivity />
+            </div>
+          </div>
+        )}
         {tab === "events" && <Events />}
         {tab === "memberships" && <Crud path="plans" title="Membership plans"
           fields={[["name", "text"], ["price", "number"], ["duration_days", "number"], ["description", "text"], ["discount_percent", "number"], ["benefits", "list"], ["price_overrides", "json"], ["active", "bool"]]}

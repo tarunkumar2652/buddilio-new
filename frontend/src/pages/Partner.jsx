@@ -5,6 +5,7 @@ import { api, errMsg, money, fmtDate, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { ImageUpload } from "@/components/ImageUpload";
 import { GalleryUpload } from "@/components/GalleryUpload";
+import { CopyHelper } from "@/components/CopyHelper";
 import { Stars } from "@/components/Cards";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 import { Plus, Send } from "lucide-react";
@@ -137,6 +138,7 @@ export default function PartnerDashboard() {
       {tab === "create" && (
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 space-y-4 max-w-3xl" data-testid="partner-event-form">
           <h2 className="text-xl font-bold">{editing ? "Edit event" : "Create event"}</h2>
+          <CopyHelper form={f} onApply={(patch) => setF({ ...f, ...patch })} />
           {[["title", "Event title"], ["venue", "Venue"]].map(([k, l]) => (
             <label key={k} className="block"><span className="text-xs font-bold text-slate-600">{l}</span>
               <input data-testid={`event-${k}`} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })}

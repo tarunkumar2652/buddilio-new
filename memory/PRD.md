@@ -340,6 +340,29 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   token when a member tries the console login.
 - Test manager: `ops.manager@buddilio.com` / `Console@123` (already approved).
 
+## Implemented — iteration 18 (June 2026): invites, payouts view, AI copy helper, activity log
+- **Vendor invite links**: `POST|GET /api/console/invites`, `DELETE /api/console/invites/{id}` — a manager sends
+  an emailed link (14-day token in `db.vendor_invites`, statuses pending/accepted/revoked; the link is only
+  returned while pending). The vendor completes signup themselves at **`/vendor-signup?token=`**
+  (`GET /api/vendor-invite/{token}`, `POST .../accept`): details, photo, password, then a documents step backed
+  by `PUT /api/partner/documents` (max 10, must be `/api/files/...` URLs) and straight into their partner
+  dashboard, already signed in. Documents show in the console vendor detail.
+- **Console payouts** `GET /api/console/payouts`: per-payout rows (vendor, event, orders, gross, fee %, net,
+  status) plus totals for owed / paid / gross / fees, scoped to the manager's own vendors (admins see all).
+  New **Vendors | Invites | Payouts** tabs in the console.
+- **Partner copy helper** `POST /api/partner/ai-draft` + `components/CopyHelper.jsx` at the top of the event
+  form: bullets in, and gpt-5.4 returns a title, 2-paragraph description, enforceable rules (always including
+  "21+, valid ID at entry") and 3 highlights, previewed before "Use this draft" fills the form. 20 drafts per
+  organiser per day, with identical notes inside 5 minutes reusing the last draft for free.
+- **Manager activity log** `GET /api/admin/vendor-activity`: readable audit of who invited, created, updated or
+  suspended which vendor, and every console approval, under Admin → Console access.
+- Verified: `backend/tests/test_iteration18_invites.py` **31/31 serial** and testing-agent iteration 18
+  (`/app/test_reports/iteration_18.json`). Their HIGH finding — the freshly invited vendor landing on `/partner`
+  logged out because `VendorSignup` discarded the returned token — is fixed and the full
+  signup → documents → dashboard → event form flow was re-verified live. Also fixed: invite email validation,
+  a 400 instead of silently dropping the 11th document, name/mobile length caps, no link for used/revoked
+  invites, and the AI draft dedupe.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

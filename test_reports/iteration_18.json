@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 18 — Vendor invite links + self-signup + documents + console payouts + partner AI copy helper + manager activity log. Wrote /app/backend/tests/test_iteration18_invites.py (31 tests, 8 classes): create invite / list / public token lookup / bad token 404 / revoke pending / duplicate email 400 / member 403 on invite create; full accept flow with short-password 400, missing-org 400, success -> partner + token; token reuse 404, revoke-of-accepted 400, managed_by stamped, invitee appears in inviting manager's vendor list; PUT /partner/documents 200 with /api/files/ URL, external URL 400, member 403, remove persists, documents surface on console vendor detail; cross-manager isolation (fresh 2nd manager admin-approved -> can NOT see mgr1's invite, 404 on mgr1's vendor detail, 404 on revoking mgr1's invite); payouts totals + items shape, admin sees Nightfall paid rows, member 403; AI draft (partner) rules include '21+' and 'ID', notes<15 400, notes>1500 400, member 403; admin activity log 200 with actor/target/action/created_at, member+partner 403; regression /auth/me + /events + /console/summary. 31/31 pass serially in 11.3s. Playwright verified end-to-end vendor signup form prefill (org locked, email locked+disabled, personal note), submit -> docs step, click 'Go to my organiser dashboard' -> /partner navigates but user is not authenticated (see critical bug below). Also verified the partner Copy Helper end-to-end: 'Draft it' returns a preview with '21+, valid ID at entry' in rules, 'Use this draft' fills event-title / event-description / event-rules correctly, applied event-title='Rooftop Supper Club with Jazz', event-rules contains 21+. Verified Admin -> Console access shows the managers table and activity-list with 79 readable entries newest first. Manager /console shows Vendors/Invites/Payouts tabs, four payout totals tiles present, payouts-empty for a manager with no completed events. No horizontal overflow at /console, /vendor-signup, /admin at 1920px or 390px.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/console/invites", "issue": "InviteIn model does no email format validation (bare `email: str = ''`). An invite with email='not-an-email' is accepted, and the send_email attempt then just logs 'vendor invite email failed'. Consider EmailStr (with '' allowed) so only well-formed emails are stored."},
+      {"endpoint": "POST /api/vendor-invite/{token}/accept", "issue": "payload.bio and payload.mobile length only bounded by [:600] slice, no server-side sanitisation of HTML; consider stripping/escaping if bio is rendered as HTML anywhere (currently rendered as plain text so low risk)."},
+      {"endpoint": "PUT /api/partner/documents", "issue": "documents list is silently truncated to 10 (`payload.documents[:10]`) with no warning to the caller. Clients uploading 11+ docs get 200 with lost items. Consider 400 or an explicit truncation flag in response."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "VendorSignup.jsx (submit handler L43-52)", "issue": "After POST /vendor-invite/{token}/accept succeeds the code calls `refresh()` but never stores the returned `access_token` in localStorage['bud_token']. AuthContext.load short-circuits when bud_token is missing (`if (!localStorage.getItem('bud_token'))`) even though the backend set httpOnly cookies. Result: the newly-signed-up vendor is treated as logged-out — the docs step still works (because api.js sends cookies via `withCredentials: true`) but the moment they click 'Go to my organiser dashboard' /partner is rendered while unauthenticated and they see the 'Log in' page instead of their partner dashboard. Reproduced live: invite -> /vendor-signup -> submit -> docs step -> Go to dashboard -> /partner shows 'Log in / Log in with Google'.", "selector": "[data-testid=vendor-docs-done]", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Vendor first-run", "issue": "Because of the ui_bug above, the promised first-run flow (signup -> docs -> partner dashboard -> create event) breaks at the last step. The vendor exists in the DB and can log in manually with the email+password they picked, so the account creation itself is fine — but the seamless hand-off promised by the invite is missing.", "affected_selectors": ["[data-testid=vendor-docs-done]", "[data-testid=partner-dashboard]"]}
+    ],
+    "design_issues": [
+      {"screen": "/console Invites tab", "issues": ["invite-city is a native <select> for the city picker (same inconsistency flagged in iteration 17 for the Add-a-vendor form). Rest of the app uses shadcn Select."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration18_invites.py",
+    "/app/test_reports/pytest/iteration18.xml"
+  ],
+  "action_items": [
+    "FIX (HIGH): VendorSignup.jsx L47 — capture the accept response and persist the access_token: `const { data } = await api.post(...); localStorage.setItem('bud_token', data.access_token); await refresh();`. Without this the new vendor lands on /partner logged out.",
+    "Consider EmailStr on InviteIn.email (allow empty) so junk emails don't reach send_email at all.",
+    "Return 400 (or a truncation flag) on PUT /api/partner/documents when >10 docs are posted instead of silently truncating.",
+    "(Cosmetic) Replace native <select> for city in the invite panel with shadcn Select to match the rest of the app."
+  ],
+  "critical_code_review_comments": [
+    "VendorSignup.jsx L47-48: `await api.post(...); await refresh();` — refresh() reads localStorage['bud_token'] which was never set here, so the whole login is thrown away. Either set localStorage.setItem('bud_token', data.access_token) before refresh, or extend AuthContext.load to also try /auth/me via cookie before short-circuiting.",
+    "AuthContext.jsx L12: The cookie-first fallback would be nice — if httpOnly cookies are set (Google + vendor-invite paths), a bud_token miss shouldn't automatically mean 'logged out'. Consider `api.get('/auth/me')` as a fallback probe before setUser(false).",
+    "server.py L3200: invite_public leaks the invite.link (full URL with token) for accepted/revoked invites in the /console/invites list too. That's fine for the manager UI but if the audit/notify email log ever surfaces this list to a lower-privileged surface, the token could be re-used before revoke. Consider omitting `link` for non-pending statuses.",
+    "server.py L3272 accept_vendor_invite: `payload.full_name`, `payload.mobile`, `payload.password` are not length-bounded (only password_min<8). Long full_name/mobile strings will just be stored as-is. Trim + cap.",
+    "server.py L3306 partner_documents: silently drops docs[10:] with no signal. Prefer `if len(payload.documents) > 10: raise 400('At most 10 documents…')`.",
+    "server.py L3383 partner_ai_draft: rate-limit is per-user per rolling 24h from db.ai_drafts count, but no dedupe on identical `notes` — a user could burn all 20 drafts by hitting Draft it 20 times on the same bullets. Cheap fix: reuse the last row when notes hash matches within 5 minutes."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration18_invites.py"
+  ],
+  "success_rate": {"backend": "100% (31/31)", "frontend": "6/7 flows — 1 HIGH bug on vendor first-run auto-login"},
+  "test_credentials": "admin@buddilio.com / Admin@123; ops.manager@buddilio.com / Console@123; partner@buddilio.com / Partner@123; diya.sharma@example.com / User@123. Test suite creates ephemeral test_*@example.com managers/vendors and cleans up in the module teardown.",
+  "seed_data_creation": "None persisted. The pytest module teardown deletes vendor_invites where email starts with 'test_' or org_name starts with 'TEST', and users with email starting 'test_' plus their ai_drafts. Session conftest also purges TEST_ artefacts.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend feature parity for iteration 18 is complete and pytest-verified. The single HIGH-priority frontend regression is in VendorSignup.jsx: the accept response's access_token is discarded before refresh(), so a brand-new invited vendor lands on /partner unauthenticated. A one-line fix (localStorage.setItem('bud_token', data.access_token)) should close this and enable retesting the promised 'signup -> docs -> partner dashboard -> create first event' flow end-to-end. Copy helper, payouts, activity log and cross-manager isolation are all working (both API and UI). Test file: /app/backend/tests/test_iteration18_invites.py — run with `-n 0` per repo convention.",
+  "rca of the issue": "Vendor first-run auto-login regression — POST /api/vendor-invite/{token}/accept returns `{access_token, user}` and also sets httpOnly cookies via set_cookies(response, token_jwt). The frontend axios client (frontend/src/lib/api.js) attaches Authorization from localStorage['bud_token'] and also sends cookies via withCredentials. AuthContext.load() at frontend/src/context/AuthContext.jsx L12 hard-guards on the presence of localStorage['bud_token'] — if missing it setUser(false) without ever calling /auth/me. VendorSignup.jsx L47 does `await api.post(...); await refresh();` and never stores the returned access_token, so refresh() sees no local token and marks the user logged-out. The docs step works because it's local component state (setStep(2)), and PUT /partner/documents still succeeds because api.js sends cookies with credentials — masking the bug. Only when the vendor clicks the CTA `nav('/partner')` does Protected route redirect to /login. Fix (main agent): store the token before refreshing — `const { data } = await api.post('/vendor-invite/'+token+'/accept', f); localStorage.setItem('bud_token', data.access_token); await refresh(); setStep(2);`."
+}

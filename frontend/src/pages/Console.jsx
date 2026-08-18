@@ -4,6 +4,7 @@ import { Building2, Plus, RefreshCw, Search, ShieldCheck, Users, CalendarDays, T
 import { api, errMsg, fmtDate } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Spinner, SEO, Badge } from "@/components/Shared";
+import { VendorInvites, ConsolePayouts } from "@/components/ConsolePanels";
 
 const Field = ({ label, ...p }) => (
   <label className="block">
@@ -207,7 +208,20 @@ const VendorDetail = ({ id, onBack, onChanged, cities }) => {
         </div>
 
         <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6">
-          <h3 className="text-sm font-bold text-white">Recent events</h3>
+          <h3 className="text-sm font-bold text-white">Documents</h3>
+          {v.documents?.length ? (
+            <ul className="mt-3 divide-y divide-white/5" data-testid="vendor-documents">
+              {v.documents.map((d) => (
+                <li key={d.url} className="flex items-center gap-3 py-2.5">
+                  <a href={d.url} target="_blank" rel="noreferrer"
+                    className="min-w-0 flex-1 truncate text-sm font-semibold text-white hover:text-brand-pink">{d.name}</a>
+                  <span className="text-[11px] text-slate-500">{fmtDate(d.uploaded_at)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="mt-3 text-sm text-slate-400">None uploaded yet.</p>}
+
+          <h3 className="mt-6 text-sm font-bold text-white">Recent events</h3>
           {v.recent_events?.length ? (
             <ul className="mt-3 divide-y divide-white/5" data-testid="vendor-events">
               {v.recent_events.map((e) => (
@@ -233,6 +247,7 @@ export default function Console() {
   const [vendors, setVendors] = useState(null);
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState("");
+  const [tab, setTab] = useState("vendors");
   const [cities, setCities] = useState([]);
 
   const isConsoleUser = user && ["manager", "admin"].includes(user.role);
@@ -285,6 +300,16 @@ export default function Console() {
             <h1 className="text-3xl sm:text-4xl font-bold text-white">Vendors</h1>
             <p className="mt-2 text-sm text-slate-400">Onboard organisers and keep their accounts in order.</p>
 
+            <div className="mt-6 flex gap-2">
+              {[["vendors", "Vendors"], ["invites", "Invites"], ["payouts", "Payouts"]].map(([v, l]) => (
+                <button key={v} onClick={() => setTab(v)} data-testid={`console-tab-${v}`}
+                  className={`rounded-full px-4 py-2 text-xs font-bold border transition-colors ${tab === v
+                    ? "bg-white text-slate-900 border-white" : "border-white/15 text-slate-300 hover:bg-white/10"}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+
             <div className="mt-7 grid grid-cols-2 lg:grid-cols-5 gap-4">
               <Tile icon={Building2} label="Vendors" value={summary?.vendors ?? "—"} testid="console-stat-vendors" />
               <Tile icon={ShieldCheck} label="Active" value={summary?.active_vendors ?? "—"} testid="console-stat-active" />
@@ -293,6 +318,9 @@ export default function Console() {
               <Tile icon={Ticket} label="Seats sold" value={summary?.seats_sold ?? "—"} testid="console-stat-seats" />
             </div>
 
+            {tab === "invites" && <div className="mt-8"><VendorInvites locked={!approved} cities={cities} /></div>}
+            {tab === "payouts" && <div className="mt-8"><ConsolePayouts /></div>}
+            {tab === "vendors" && (
             <div className="mt-8 grid lg:grid-cols-[1.4fr_1fr] gap-6 items-start">
               <div className="rounded-3xl border border-white/10 bg-white/[0.03] overflow-hidden">
                 <div className="flex items-center gap-3 border-b border-white/10 p-4">
@@ -342,6 +370,7 @@ export default function Console() {
                 </div>
               )}
             </div>
+            )}
           </>
         )}
       </main>

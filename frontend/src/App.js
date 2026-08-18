@@ -24,6 +24,7 @@ import { CityIndex, CityPage } from "@/pages/Cities";
 import PartnerDashboard from "@/pages/Partner";
 import Admin from "@/pages/Admin";
 import Console from "@/pages/Console";
+import VendorSignup from "@/pages/VendorSignup";
 import "@/index.css";
 
 function Protected({ children, roles }) {
@@ -52,6 +53,7 @@ function Shell() {
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/vendor-signup" element={<VendorSignup />} />
           <Route path="/events" element={<Events />} />
           <Route path="/cities" element={<CityIndex />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
