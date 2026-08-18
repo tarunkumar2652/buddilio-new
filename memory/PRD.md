@@ -382,6 +382,24 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
   (`/app/test_reports/iteration_19.json`) — no bugs; frontend testids, mobile 390px and all admin tabs re-checked.
   Demo state restored (Skyline Sessions stays `pending` with 1 document so the queue is never empty).
 
+## Iteration 20 — photo moderation, verified-host filter, reminder preview (June 2026)
+- **Photo wall moderation**: members flag a photo they don't own via `POST /api/events/{eid}/photos/{pid}/report`
+  (idempotent per reporter, 400 on your own photo, writes a `db.reports` row with `target_type: "photo"`).
+  Admin → **Photo wall** tab (`GET /api/admin/photos?status=reported|hidden|all`,
+  `POST /api/admin/photos/{pid}` `{action: hide|restore|delete|dismiss, note, warn}`): hiding/deleting with
+  `warn: true` increments `users.warnings`, notifies + emails the poster with the reason, and audits `photo.*`.
+  Hidden photos disappear from the public wall for everyone but admins.
+  UI: `frontend/src/components/PhotoModeration.jsx`, report button in `PhotoWall.jsx`.
+- **Verified organisers only filter**: `GET /api/events?verified_only=true` restricts to hosts with
+  `verified: true`, and every event item now carries `partner_verified`. Events page has an
+  `events-verified-only` toggle and cards show a “Verified host” badge.
+- **Payout reminder preview**: `GET /api/console/payout-reminder` (manager/admin) returns the exact subject,
+  intro, per-vendor lines, total, `schedule`, `next_send_at` (next Monday 03:30 UTC) and
+  `already_sent_this_week`. Shared `payout_digest()` now backs both the cron and the preview, so the console
+  can never drift from the email. Rendered at the top of the console Payouts tab.
+- Verified: `backend/tests/test_iteration20_photo_mod_verified_payout.py` **20/20** and testing-agent
+  iteration 20 (`/app/test_reports/iteration_20.json`) — no bugs; demo data restored.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 20 tested Photo Wall Moderation, Verified Organiser Filter, and Payout Reminder Preview (backend + frontend). Wrote /app/backend/tests/test_iteration20_photo_mod_verified_payout.py — 20/20 pytest cases pass. Frontend Playwright confirmed: Admin → Photo wall tab (admin-tab-photos, photo-moderation-panel, photomod-filter-reported|hidden|all with counts, photomod-empty), Events page events-verified-only toggle + event-verified-<id> badges (12 verified in demo — filter effect proven at API level by temporarily unverifying partner2), Console Payouts reminder-preview with reminder-subject/reminder-intro rendering the 'nothing to send' state (will_send=false for ops.manager in baseline), regression payouts table + photo-wall on finished event 6a7b73e34a13de566dbd110f, and mobile 390px admin photo grid. Demo data restored (partner2 verified=true; no leftover payouts/reminders/photos/reports). Idempotency of photo report, own-photo 400, admin hide+warn -> users.warnings++ + audit + email + reports resolved, unknown action -> 400, non-admin -> 403 all verified.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration20_photo_mod_verified_payout.py",
+    "/app/test_reports/pytest/iter20.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 4194 lines — the new photo-moderation + payout-preview blocks would benefit from being split into their own routers (routes/moderation.py, routes/payouts.py). The 700-line guideline is exceeded ~6x and E1 keeps stacking features into the same file.",
+    "admin_photos initialises `flt = {\"reported\": {\"$exists\": False}}` before immediately reassigning it — dead code, harmless but confusing.",
+    "moderate_photo restore branch resets report_count/reported_by but does NOT clear last_report_reason/last_reported_at, so a restored photo still carries stale report metadata visible to admins on the 'all' tab.",
+    "payout_digest.items uses `net` as float and the frontend does `i.net.toLocaleString()` — if a payout ever comes back as int/null it would crash reminder-line rendering. Frontend already does `Number(preview.total)` but not per-line — worth normalising in the backend.",
+    "next_monday() sets hh:mm:ss=03:30:00 but does not zero-out sub-second precision explicitly — fine for isoformat but worth a note; verified in tests (weekday=0, hour=3, minute=30).",
+    "GET /api/console/payout-reminder returns manager_id and email of the caller; low-sensitivity but the frontend never uses manager_id — consider trimming.",
+    "PhotoWall.pick() still calls load() only at the end; on multi-file upload failures partial success isn't shown until the loop finishes. (Carried over from iter19 review.)"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration20_photo_mod_verified_payout.py"
+  ],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% (all data-testids wired, no console errors from app code)"},
+  "test_credentials": "See /app/memory/test_credentials.md. Used admin@buddilio.com/Admin@123, ops.manager@buddilio.com/Console@123, partner@buddilio.com/Partner@123, partner2@buddilio.com/Partner@123, tara.joshi@example.com/User@123, diya.sharma@example.com/User@123. WEBHOOK_CRON_SECRET from backend/.env.",
+  "seed_data_creation": "Temporary rows inserted and torn down inside tests: photos posted by tara on event 6a7b73e34a13de566dbd110f, matching reports rows, audit_logs entries, one TEST_iter20 payout for ops.manager's vendor, one payout_reminders row (only if none existed for this ISO week — original row restored on teardown), and partner2 verified=false was flipped and restored to true. Final cleanup pass in test_zz_final_cleanup wipes any TEST_iter20 leftovers.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 20 features are stable. Photo moderation uses db.event_photos + db.reports + db.audit_logs (action='photo.<action>', entity='photo', entity_id=<pid>) — NOT target_id. verified_only filter on GET /api/events works via partner_id IN {verified partners}; to write a meaningful filter test you MUST temporarily unverify a partner because the demo seeds every organiser as verified. Payout reminder preview: subject formula 'Payouts due this week — INR X'; next_send_at is next Monday 03:30:00 UTC; already_sent_this_week is derived from db.payout_reminders row where week matches ISO 'YYYY-Www'. Console payouts tab in ConsolePanels renders <reminder-preview> only if the API call succeeds and returns something; will_send=false hides reminder-total but keeps intro. Skyline Sessions still pending/verified=false with 1 doc — do not approve it in retests. A pre-existing hydration warning about <span> inside <option> on /events is caused by the emergent x-excluded instrumentation wrapper, not app code — ignore.",
+  "rca of the issue": "N/A — no issues found."
+}

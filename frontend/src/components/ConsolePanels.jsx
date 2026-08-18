@@ -126,9 +126,11 @@ export const VendorInvites = ({ locked, cities }) => {
 
 export const ConsolePayouts = () => {
   const [data, setData] = useState(null);
+  const [preview, setPreview] = useState(null);
 
   useEffect(() => {
     api.get("/console/payouts").then(({ data }) => setData(data)).catch(() => setData({ items: [], totals: {} }));
+    api.get("/console/payout-reminder").then(({ data }) => setPreview(data)).catch(() => setPreview(null));
   }, []);
 
   if (!data) return <Spinner label="Loading payouts" />;
@@ -137,6 +139,44 @@ export const ConsolePayouts = () => {
 
   return (
     <div data-testid="console-payouts">
+      {preview && (
+        <div className="mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-5" data-testid="reminder-preview">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Monday reminder</p>
+              <p className="mt-1 text-sm font-bold text-white" data-testid="reminder-subject">{preview.subject}</p>
+              <p className="mt-1 text-xs text-slate-400">
+                {preview.schedule} · to {preview.recipient} · next on {fmtDate(preview.next_send_at)}
+              </p>
+            </div>
+            <Badge tone={preview.already_sent_this_week ? "green" : preview.will_send ? "amber" : "red"}>
+              {preview.already_sent_this_week ? "sent this week" : preview.will_send ? "queued for Monday" : "nothing to send"}
+            </Badge>
+          </div>
+          <p className="mt-3 text-sm text-slate-300" data-testid="reminder-intro">
+            {preview.will_send ? preview.intro
+              : "Nothing is pending, so no email goes out this Monday."}
+          </p>
+          {preview.items.length > 0 && (
+            <ul className="mt-3 divide-y divide-white/5 text-sm" data-testid="reminder-lines">
+              {preview.items.slice(0, 8).map((i, n) => (
+                <li key={n} className="flex items-center justify-between gap-3 py-2" data-testid={`reminder-line-${n}`}>
+                  <span className="min-w-0 text-slate-300">
+                    <span className="font-semibold text-white">{i.vendor}</span>
+                    <span className="block text-[11px] text-slate-500">{i.event_title}</span>
+                  </span>
+                  <span className="whitespace-nowrap font-bold text-white">{i.currency} {Number(i.net || 0).toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {preview.will_send && (
+            <p className="mt-3 text-sm font-bold text-white" data-testid="reminder-total">
+              Total pending: {preview.currency} {Number(preview.total).toLocaleString()}
+            </p>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[["Owed to vendors", t.pending, "payout-total-pending"], ["Already paid", t.paid, "payout-total-paid"],
           ["Gross sales", t.gross, "payout-total-gross"], ["Platform fees", t.fees, "payout-total-fees"]].map(([l, v, tid]) => (

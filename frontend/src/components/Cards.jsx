@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { CalendarDays, MapPin, Users, Star } from "lucide-react";
+import { CalendarDays, MapPin, Users, Star, BadgeCheck } from "lucide-react";
 import { fmtDate, fileUrl } from "@/lib/api";
 import { useCurrency } from "@/context/CurrencyContext";
 import { Badge } from "@/components/Shared";
@@ -16,6 +16,12 @@ export const EventCard = ({ ev, className = "" }) => {
         <div className="absolute top-3 left-3 flex gap-2">
           <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-bold">{ev.category}</span>
           {ev.featured && <span className="rounded-full bg-slate-900 text-white px-2.5 py-1 text-[11px] font-bold">Featured</span>}
+          {ev.partner_verified && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-600 text-white px-2.5 py-1 text-[11px] font-bold"
+              data-testid={`event-verified-${ev.id}`}>
+              <BadgeCheck className="h-3 w-3" />Verified host
+            </span>
+          )}
         </div>
         {ev.rating > 0 && (
           <span className="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-bold" data-testid={`event-rating-${ev.id}`}>

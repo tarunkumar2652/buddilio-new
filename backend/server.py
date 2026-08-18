@@ -869,8 +869,11 @@ async def create_report(payload: ReportIn, user: dict = Depends(get_current_user
 @api.get("/events")
 async def list_events(q: str = "", city: str = "", country: str = "", category: str = "", max_price: float = -1,
                       featured: Optional[bool] = None, when: str = "", sort: str = "date",
-                      page: int = 1, limit: int = 12):
+                      verified_only: bool = False, page: int = 1, limit: int = 12):
     flt: dict[str, Any] = {"status": "published"}
+    if verified_only:
+        hosts = await db.users.find({"role": "partner", "verified": True}, {"_id": 1}).limit(2000).to_list(2000)
+        flt["partner_id"] = {"$in": [str(h["_id"]) for h in hosts] or ["none"]}
     if q:
         flt["title"] = {"$regex": q, "$options": "i"}
     if city:
@@ -893,6 +896,9 @@ async def list_events(q: str = "", city: str = "", country: str = "", category: 
     sort_key = [("rating", -1)] if sort == "rating" else [("participant_count", -1)] if sort == "popular" else [("starts_at", 1)]
     docs = await db.events.find(flt).sort(sort_key).skip((page - 1) * limit).limit(limit).to_list(limit)
     items = [clean(d) for d in docs]
+    verified_hosts = await load_many(db.users, [e.get("partner_id", "") for e in items], {"verified": 1})
+    for e in items:
+        e["partner_verified"] = bool((verified_hosts.get(e.get("partner_id", "")) or {}).get("verified"))
     rated = [e["id"] for e in items if e.get("rating_count")]
     if rated:
         # One pass for the highlighted review of every rated event, then one for their authors.
@@ -3821,6 +3827,44 @@ def week_key(dt: datetime) -> str:
     return f"{y}-W{w:02d}"
 
 
+def next_monday(dt: datetime) -> str:
+    days = (7 - dt.weekday()) % 7 or 7
+    return iso((dt + timedelta(days=days)).replace(hour=3, minute=30, second=0, microsecond=0))
+
+
+async def payout_digest(manager: dict) -> dict:
+    """What one manager's Monday reminder will say — shared by the cron and the console preview."""
+    mid = manager["id"] if "id" in manager else str(manager["_id"])
+    vendors = await db.users.find({"role": "partner", "managed_by": mid},
+                                  {"org_name": 1, "full_name": 1}).limit(500).to_list(500)
+    names = {str(v["_id"]): v.get("org_name") or v.get("full_name") for v in vendors}
+    rows = []
+    if names:
+        rows = await db.payouts.find({"partner_id": {"$in": list(names)}, "status": "pending"}) \
+            .sort("created_at", 1).limit(500).to_list(500)
+    total = round(sum(float(r.get("net") or 0) for r in rows), 2)
+    items = [{"vendor": names.get(r["partner_id"], "—"), "event_title": r.get("event_title", ""),
+              "net": float(r.get("net") or 0), "currency": r.get("currency", BASE_CURRENCY),
+              "due_since": r.get("created_at", "")} for r in rows]
+    first = manager.get("full_name", "there").split(" ")[0]
+    vendor_count = len({r["partner_id"] for r in rows})
+    subject = f"Payouts due this week — {BASE_CURRENCY} {total:,.2f}"
+    intro = (f"Hi {first}, {len(rows)} payout{'' if len(rows) == 1 else 's'} across {vendor_count} vendor"
+             f"{'' if vendor_count == 1 else 's'} are still pending.")
+    lines = "".join(
+        f"<tr><td style='padding:6px 0'><b>{i['vendor']}</b><br>"
+        f"<span style='color:#94A3B8;font-size:13px'>{i['event_title']}</span></td>"
+        f"<td style='padding:6px 0;text-align:right;white-space:nowrap'>"
+        f"{i['currency']} {i['net']:,.2f}</td></tr>" for i in items[:40])
+    html = wrap("What your vendors are owed this week",
+                f"<p>{intro}</p><table width='100%' style='font-size:14px'>{lines}</table>"
+                f"<p style='margin-top:14px'><b>Total pending: {BASE_CURRENCY} {total:,.2f}</b></p>",
+                "Open the console", f"{FRONTEND_URL}/console")
+    return {"manager_id": mid, "email": manager.get("email", ""), "subject": subject, "intro": intro,
+            "items": items, "total": total, "currency": BASE_CURRENCY, "vendors": vendor_count,
+            "html": html, "will_send": bool(rows)}
+
+
 async def send_payout_reminders() -> dict:
     """Monday nudge: every manager gets the list of what their vendors are still owed."""
     wk = week_key(now_utc())
@@ -3831,36 +3875,28 @@ async def send_payout_reminders() -> dict:
         mid = str(m["_id"])
         if await db.payout_reminders.find_one({"manager_id": mid, "week": wk}):
             continue
-        vendors = await db.users.find({"role": "partner", "managed_by": mid},
-                                      {"org_name": 1, "full_name": 1}).limit(500).to_list(500)
-        names = {str(v["_id"]): v.get("org_name") or v.get("full_name") for v in vendors}
-        if not names:
+        digest = await payout_digest(clean(dict(m)))
+        if not digest["will_send"]:
             continue
-        rows = await db.payouts.find({"partner_id": {"$in": list(names)}, "status": "pending"}) \
-            .sort("created_at", 1).limit(500).to_list(500)
-        if not rows:
-            continue
-        total = round(sum(float(r.get("net") or 0) for r in rows), 2)
-        lines = "".join(
-            f"<tr><td style='padding:6px 0'><b>{names.get(r['partner_id'], '—')}</b><br>"
-            f"<span style='color:#94A3B8;font-size:13px'>{r.get('event_title', '')}</span></td>"
-            f"<td style='padding:6px 0;text-align:right;white-space:nowrap'>"
-            f"{r.get('currency', BASE_CURRENCY)} {float(r.get('net') or 0):,.2f}</td></tr>"
-            for r in rows[:40])
-        ok = await send_email(m["email"], f"Payouts due this week — {BASE_CURRENCY} {total:,.2f}", wrap(
-            "What your vendors are owed this week",
-            f"<p>Hi {m.get('full_name', 'there').split(' ')[0]}, {len(rows)} payout"
-            f"{'' if len(rows) == 1 else 's'} across {len(set(r['partner_id'] for r in rows))} vendor"
-            f"{'' if len(set(r['partner_id'] for r in rows)) == 1 else 's'} are still pending.</p>"
-            f"<table width='100%' style='font-size:14px'>{lines}</table>"
-            f"<p style='margin-top:14px'><b>Total pending: {BASE_CURRENCY} {total:,.2f}</b></p>",
-            "Open the console", f"{FRONTEND_URL}/console"))
+        ok = await send_email(m["email"], digest["subject"], digest["html"])
         await db.payout_reminders.insert_one({
-            "manager_id": mid, "week": wk, "payouts": len(rows), "total": total,
+            "manager_id": mid, "week": wk, "payouts": len(digest["items"]), "total": digest["total"],
             "email_sent": ok, "created_at": iso(now_utc())})
         sent += 1
     logger.info(f"payout reminders: {sent} managers emailed for {wk}")
     return {"week": wk, "managers": sent}
+
+
+@api.get("/console/payout-reminder")
+async def console_payout_reminder(user: dict = Depends(manager_only)):
+    """Exactly what Monday's email will say, so managers are never surprised by it."""
+    digest = await payout_digest(user)
+    last = await db.payout_reminders.find_one({"manager_id": user["id"]}, sort=[("created_at", -1)])
+    return {**{k: v for k, v in digest.items() if k != "html"},
+            "next_send_at": next_monday(now_utc()), "schedule": "Every Monday, 09:00 IST",
+            "already_sent_this_week": bool(last and last.get("week") == week_key(now_utc())),
+            "last_sent_at": (last or {}).get("created_at", ""),
+            "recipient": user.get("email", "")}
 
 
 @api.post("/cron/payout-reminders")
@@ -3893,7 +3929,10 @@ async def public_event(event_id: str) -> dict:
 async def event_photos(event_id: str, user: Optional[dict] = Depends(optional_user)):
     """The photo wall — what the last crowd actually saw."""
     ev = await public_event(event_id)
-    rows = await db.event_photos.find({"event_id": event_id}).sort("created_at", -1).limit(120).to_list(120)
+    flt: dict[str, Any] = {"event_id": event_id}
+    if not (user and user["role"] == "admin"):
+        flt["hidden"] = {"$ne": True}
+    rows = await db.event_photos.find(flt).sort("created_at", -1).limit(120).to_list(120)
     owners = await load_many(db.users, [r["user_id"] for r in rows], {"full_name": 1, "photo": 1})
     is_host = bool(user) and (user["role"] == "admin" or ev.get("partner_id") == user["id"])
     items = []
@@ -3902,6 +3941,8 @@ async def event_photos(event_id: str, user: Optional[dict] = Depends(optional_us
         items.append({"id": str(r["_id"]), "url": r["url"], "caption": r.get("caption", ""),
                       "user_id": r["user_id"], "user_name": short_name(o.get("full_name", "Member")),
                       "user_photo": o.get("photo", ""), "created_at": r.get("created_at", ""),
+                      "hidden": bool(r.get("hidden")), "report_count": r.get("report_count", 0),
+                      "reported_by_me": bool(user) and user["id"] in (r.get("reported_by") or []),
                       "can_delete": is_host or (bool(user) and r["user_id"] == user["id"])})
     can_post, reason = False, ""
     if not user:
@@ -3960,6 +4001,123 @@ async def delete_event_photo(event_id: str, pid: str, user: dict = Depends(get_c
         raise HTTPException(status_code=403, detail="You can only remove your own photos.")
     await db.event_photos.delete_one({"_id": photo["_id"]})
     return {"ok": True}
+
+
+class PhotoReportIn(BaseModel):
+    reason: str = ""
+
+
+@api.post("/events/{event_id}/photos/{pid}/report")
+async def report_event_photo(event_id: str, pid: str, payload: PhotoReportIn,
+                             user: dict = Depends(get_current_user)):
+    """Members flag a photo; it stays up until an admin looks at it."""
+    try:
+        photo = await db.event_photos.find_one({"_id": ObjectId(pid), "event_id": event_id})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid photo id")
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    if photo["user_id"] == user["id"]:
+        raise HTTPException(status_code=400, detail="That's your own photo.")
+    if user["id"] in (photo.get("reported_by") or []):
+        return {"ok": True, "message": "You've already reported this photo."}
+    await db.event_photos.update_one({"_id": photo["_id"]},
+                                     {"$inc": {"report_count": 1},
+                                      "$addToSet": {"reported_by": user["id"]},
+                                      "$set": {"last_reported_at": iso(now_utc()),
+                                               "last_report_reason": payload.reason.strip()[:200]}})
+    await db.reports.insert_one({
+        "reporter_id": user["id"], "reporter_email": user["email"], "target_type": "photo",
+        "target_id": pid, "reason": payload.reason.strip()[:200] or "Inappropriate photo",
+        "details": f"event:{event_id}", "status": "open", "created_at": iso(now_utc())})
+    return {"ok": True, "message": "Thanks — our safety team will review it."}
+
+
+@api.get("/admin/photos")
+async def admin_photos(status: str = "reported", user: dict = Depends(admin_only)):
+    """Reported and hidden photos in one place."""
+    flt: dict[str, Any] = {}
+    if status == "reported":
+        flt = {"report_count": {"$gt": 0}, "hidden": {"$ne": True}}
+    elif status == "hidden":
+        flt = {"hidden": True}
+    else:
+        flt = {}
+    rows = await db.event_photos.find(flt).sort("last_reported_at", -1).limit(200).to_list(200)
+    owners = await load_many(db.users, [r["user_id"] for r in rows], {"full_name": 1, "email": 1, "warnings": 1})
+    events = await load_many(db.events, [r["event_id"] for r in rows], {"title": 1})
+    items = []
+    for r in rows:
+        o = owners.get(r["user_id"], {})
+        items.append({"id": str(r["_id"]), "url": r["url"], "caption": r.get("caption", ""),
+                      "event_id": r["event_id"], "event_title": (events.get(r["event_id"]) or {}).get("title", ""),
+                      "user_id": r["user_id"], "user_name": o.get("full_name", "Member"),
+                      "user_email": o.get("email", ""), "warnings": o.get("warnings", 0),
+                      "report_count": r.get("report_count", 0), "hidden": bool(r.get("hidden")),
+                      "last_report_reason": r.get("last_report_reason", ""),
+                      "created_at": r.get("created_at", ""), "warned": bool(r.get("warned_at"))})
+    return {"items": items,
+            "counts": {"reported": await db.event_photos.count_documents(
+                           {"report_count": {"$gt": 0}, "hidden": {"$ne": True}}),
+                       "hidden": await db.event_photos.count_documents({"hidden": True})}}
+
+
+class PhotoModerateIn(BaseModel):
+    action: str
+    note: str = ""
+    warn: bool = False
+
+
+@api.post("/admin/photos/{pid}")
+async def moderate_photo(pid: str, payload: PhotoModerateIn, user: dict = Depends(admin_only)):
+    if payload.action not in ("hide", "restore", "delete", "dismiss"):
+        raise HTTPException(status_code=400, detail="Unknown action")
+    try:
+        photo = await db.event_photos.find_one({"_id": ObjectId(pid)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid photo id")
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    reason = payload.note.strip()[:300]
+    if payload.action == "delete":
+        await db.event_photos.delete_one({"_id": photo["_id"]})
+    elif payload.action == "hide":
+        await db.event_photos.update_one({"_id": photo["_id"]},
+                                         {"$set": {"hidden": True, "hidden_reason": reason,
+                                                   "hidden_at": iso(now_utc())}})
+    elif payload.action == "restore":
+        await db.event_photos.update_one({"_id": photo["_id"]},
+                                         {"$set": {"hidden": False, "report_count": 0, "reported_by": [],
+                                                   "last_report_reason": "", "last_reported_at": ""}})
+    else:
+        await db.event_photos.update_one({"_id": photo["_id"]},
+                                         {"$set": {"report_count": 0, "reported_by": []}})
+    await db.reports.update_many({"target_type": "photo", "target_id": pid, "status": "open"},
+                                 {"$set": {"status": "resolved", "resolution": payload.action,
+                                           "resolved_at": iso(now_utc())}})
+    warned = False
+    if payload.warn and payload.action in ("hide", "delete"):
+        ev = await db.events.find_one({"_id": ObjectId(photo["event_id"])}, {"title": 1})
+        owner = await db.users.find_one({"_id": ObjectId(photo["user_id"])}, {"email": 1, "full_name": 1})
+        await db.users.update_one({"_id": ObjectId(photo["user_id"])},
+                                  {"$inc": {"warnings": 1},
+                                   "$set": {"last_warned_at": iso(now_utc())}})
+        await db.event_photos.update_one({"_id": photo["_id"]}, {"$set": {"warned_at": iso(now_utc())}})
+        text = reason or "It didn't meet our photo guidelines."
+        await notify(photo["user_id"], "A photo of yours was removed",
+                     f"{text} Please keep the photo wall respectful — repeat issues can suspend your account.",
+                     "warning", f"/events/{photo['event_id']}")
+        if owner:
+            await send_email(owner["email"], "About a photo you posted on Buddilio", wrap(
+                "We removed one of your photos",
+                f"<p>Hi {owner.get('full_name', 'there').split(' ')[0]}, a photo you added to "
+                f"<b>{(ev or {}).get('title', 'an event')}</b> has been taken down.</p>"
+                f"<p><b>{text}</b></p><p>Please keep the photo wall respectful and only post pictures where "
+                "everyone in frame is happy to be seen. Repeat reports can lead to your account being suspended.</p>",
+                "Read the guidelines", f"{FRONTEND_URL}/guidelines"))
+        warned = True
+    await audit(user, f"photo.{payload.action}", "photo", pid, {"warn": warned, "note": reason[:120]})
+    return {"ok": True, "action": payload.action, "warned": warned}
 
 
 

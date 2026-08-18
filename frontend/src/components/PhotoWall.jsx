@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Camera, Loader2, X } from "lucide-react";
+import { Camera, Loader2, X, Flag } from "lucide-react";
 import { api, errMsg, fileUrl } from "@/lib/api";
 import { uploadFile } from "@/lib/uploads";
 
@@ -33,6 +33,13 @@ export const PhotoWall = ({ eventId }) => {
 
   const remove = async (id) => {
     try { await api.delete(`/events/${eventId}/photos/${id}`); load(); toast.success("Photo removed."); }
+    catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const report = async (id) => {
+    const reason = window.prompt("What's wrong with this photo?") || "";
+    if (!reason.trim()) return;
+    try { const { data } = await api.post(`/events/${eventId}/photos/${id}/report`, { reason }); toast.success(data.message); load(); }
     catch (e) { toast.error(errMsg(e)); }
   };
 
@@ -84,6 +91,13 @@ export const PhotoWall = ({ eventId }) => {
                 <button onClick={() => remove(p.id)} data-testid={`photo-wall-remove-${p.id}`}
                   className="absolute top-2 right-2 h-7 w-7 rounded-full bg-slate-900/80 text-white grid place-items-center opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
                   <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+              {!p.can_delete && !p.reported_by_me && (
+                <button onClick={() => report(p.id)} data-testid={`photo-wall-report-${p.id}`}
+                  title="Report this photo"
+                  className="absolute top-2 right-2 h-7 w-7 rounded-full bg-slate-900/80 text-white grid place-items-center opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
+                  <Flag className="h-3.5 w-3.5" />
                 </button>
               )}
             </figure>

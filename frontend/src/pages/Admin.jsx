@@ -7,12 +7,13 @@ import { api, errMsg, money, fmtDate, fileUrl } from "@/lib/api";
 import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 import { Verifications } from "@/components/Verifications";
+import { PhotoModeration } from "@/components/PhotoModeration";
 
 const NAV = [
   ["dashboard", "Dashboard"], ["users", "Users"], ["partners", "Partners"], ["verification", "Verification"],
   ["managers", "Console access"], ["events", "Events"],
   ["memberships", "Memberships"], ["products", "Products"], ["orders", "Orders"], ["payments", "Payments"],
-  ["payouts", "Payouts"], ["coupons", "Coupons"], ["reports", "Reports"], ["reviews", "Reviews"],
+  ["payouts", "Payouts"], ["coupons", "Coupons"], ["reports", "Reports"], ["reviews", "Reviews"], ["photos", "Photo wall"],
   ["content", "Content"], ["settings", "Settings"], ["audit", "Audit logs"],
 ];
 
@@ -150,6 +151,7 @@ export default function Admin() {
         {tab === "payouts" && <Payouts />}
         {tab === "reports" && <Reports />}
         {tab === "reviews" && <ReviewsMod />}
+        {tab === "photos" && <PhotoModeration />}
         {tab === "content" && <Content />}
         {tab === "settings" && <Settings />}
         {tab === "audit" && <Audit />}

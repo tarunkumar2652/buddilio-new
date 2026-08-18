@@ -15,7 +15,7 @@ export function Events() {
   const q0 = new URLSearchParams(window.location.search);
   const [meta, setMeta] = useState({ cities: [], countries: [], categories: [] });
   const [f, setF] = useState({ q: "", country: "", city: q0.get("city") || "",
-    category: q0.get("category") || "", max_price: -1, when: "", sort: "date" });
+    category: q0.get("category") || "", max_price: -1, when: "", sort: "date", verified_only: false });
   const [data, setData] = useState(null);
   const [page, setPage] = useState(1);
 
@@ -71,6 +71,10 @@ export function Events() {
           <button key={l} data-testid={`events-sort-${v}`} onClick={() => { setPage(1); setF({ ...f, sort: v }); }}
             className={`rounded-full px-4 py-2 text-xs font-bold border ${f.sort === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
         ))}
+        <button data-testid="events-verified-only" onClick={() => { setPage(1); setF({ ...f, verified_only: !f.verified_only }); }}
+          className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold border transition-colors ${f.verified_only ? "bg-emerald-600 text-white border-emerald-600" : "bg-white border-slate-200 text-emerald-700"}`}>
+          <BadgeCheck className="h-3.5 w-3.5" />Verified organisers only
+        </button>
       </div>
 
       {!data ? <Spinner /> : data.items.length ? (
