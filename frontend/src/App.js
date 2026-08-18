@@ -21,6 +21,7 @@ import Referrals from "@/pages/Referrals";
 import Concierge from "@/pages/Concierge";
 import LeaderboardPage from "@/pages/Leaderboard";
 import { CityIndex, CityPage } from "@/pages/Cities";
+import { Hosts, HostProfile } from "@/pages/Hosts";
 import PartnerDashboard from "@/pages/Partner";
 import Admin from "@/pages/Admin";
 import Console from "@/pages/Console";
@@ -59,6 +60,8 @@ function Shell() {
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/city/:slug" element={<CityPage />} />
           <Route path="/events/:id" element={<EventDetail />} />
+          <Route path="/hosts" element={<Hosts />} />
+          <Route path="/host/:id" element={<HostProfile />} />
           <Route path="/passes" element={<Passes />} />
           <Route path="/membership" element={<Membership />} />
           <Route path="/safety" element={<Safety />} />

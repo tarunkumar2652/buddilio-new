@@ -8,6 +8,7 @@ import { EventCard, Stars } from "@/components/Cards";
 import { ReviewSection } from "@/components/ReviewSection";
 import { CompanionMatches } from "@/components/CompanionMatches";
 import { PhotoWall } from "@/components/PhotoWall";
+import { RecapCard } from "@/components/RecapCard";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert, BadgeCheck } from "lucide-react";
 export function Events() {
@@ -181,7 +182,12 @@ export function EventDetail() {
           </div>
           <h1 className="mt-4 text-3xl sm:text-4xl lg:text-5xl font-bold max-w-3xl">{ev.title}</h1>
           <p className="mt-3 text-slate-300 text-sm flex items-center gap-1.5">
-            Hosted by {ev.partner_name}
+            Hosted by{" "}
+            {ev.partner_id ? (
+              <Link to={`/host/${ev.partner_id}`} data-testid="event-host-link" className="font-semibold underline decoration-white/30 hover:decoration-white">
+                {ev.partner_name}
+              </Link>
+            ) : ev.partner_name}
             {ev.partner_verified && (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 text-emerald-300 px-2 py-0.5 text-[11px] font-bold"
                 data-testid="host-verified-badge">
@@ -247,6 +253,8 @@ export function EventDetail() {
           {user && !finished && <CompanionMatches ev={ev} />}
 
           <PhotoWall eventId={ev.id} />
+
+          <RecapCard eventId={ev.id} />
 
           <ReviewSection eventId={ev.id} canReview={!!user && ev.my_status === "confirmed" && finished} />
 

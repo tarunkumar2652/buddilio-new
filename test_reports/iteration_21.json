@@ -1,0 +1,24 @@
+{
+  "summary": "Iteration 21 (Verified Host directory + Photo Wall Recap Card) fully verified. All 14 backend pytest cases pass and the frontend flows (host directory search + verified-only, guest profile 400/404, member follow/unfollow toggle updating followers count, event page host link, and recap card generate/share/download after seeding a photo) work end-to-end on both desktop and mobile 390px. Follower notification fires when admin approves a submitted event; hidden photos are excluded from both the recap ingredients and the host photo strip. Recap image is a valid 1080x1350 image/jpeg served by /api/files; second POST returns cached=true, and adding a new photo produces a fresh signature and new card_url as expected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration21_hosts_recap.py",
+    "/app/test_reports/pytest/iteration_21.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py has grown past 4400 lines — consider splitting hosts/recap/photo-moderation into their own router modules for maintainability.",
+    "notify_followers() fans out via a per-user notify() await inside a loop; for very popular partners this could be batched with an insert_many for db.notifications instead of one round-trip per follower."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration21_hosts_recap.py"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100%"},
+  "test_credentials": "Used credentials from /app/memory/test_credentials.md (admin, partner Nightfall, diya.sharma member, tara.joshi attendee).",
+  "seed_data_creation": "Temporary follow row for diya.sharma → Nightfall, one submitted event 'TEST_iter21 follower alert night' under partner (approved then deleted), and one photo on event 6a7b73e34a13de566dbd110f (caption 'TEST_iter21 …') to exercise the recap card. All artefacts (photos, notifications, event, host_follows, event_recaps row + generated recap file) purged in-fixture and re-verified clean at the end. Skyline Sessions remains verification_status='pending' with 1 document.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 21 pytest lives at backend/tests/test_iteration21_hosts_recap.py — run with -n 0 (uses live finished event 6a7b73e34a13de566dbd110f). Data-testids covered: hosts-page, hosts-search, hosts-verified-only, host-card-<id>, host-verified-<id>, host-profile-page, host-verified-badge, host-followers, host-follow-btn, host-upcoming, host-photos, host-reviews, host-past, event-host-link, recap-card, recap-generate-btn, recap-share-btn, recap-image, recap-download. If you touch the recap flow, remember it depends on register_file() so the /api/files GET works.",
+  "rca of the issue": "N/A — no issues found."
+}

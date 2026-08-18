@@ -11,6 +11,7 @@ import re
 import jwt
 import bcrypt
 import uuid
+import io
 import secrets
 import logging
 from datetime import datetime, timezone, timedelta
@@ -2195,6 +2196,8 @@ async def moderate_event(eid: str, body: dict, user: dict = Depends(admin_only))
     await db.events.update_one({"_id": ev["_id"]},
                                {"$set": {"status": new_status, "review_note": body.get("note", "")}})
     await audit(user, f"event.{action}", "event", eid, {"title": ev["title"]})
+    if action == "approve" and ev.get("partner_id"):
+        asyncio.create_task(notify_followers(ev["partner_id"], ev))
     if ev.get("partner_id"):
         await notify(ev["partner_id"], f"Event {new_status}",
                      f"{ev['title']} was {new_status} by the Buddilio team.", "event", "/partner")
@@ -3821,6 +3824,230 @@ async def admin_verify_vendor(vid: str, payload: VerifyIn, user: dict = Depends(
     return {"ok": True, "verification_status": state, "verified": state == "verified"}
 
 
+# ---------------- public host profiles ----------------
+HOST_FIELDS = {"full_name": 1, "org_name": 1, "photo": 1, "city": 1, "country": 1, "bio": 1,
+               "verified": 1, "rating": 1, "rating_count": 1, "created_at": 1, "website": 1}
+
+
+async def host_cards(docs: list) -> list:
+    ids = [str(d["_id"]) for d in docs]
+    stats = await vendor_stats(ids)
+    follows: dict[str, int] = {}
+    for f in await db.host_follows.aggregate([{"$match": {"host_id": {"$in": ids}}},
+                                              {"$group": {"_id": "$host_id", "n": {"$sum": 1}}}]).to_list(500):
+        follows[f["_id"]] = f["n"]
+    out = []
+    for d in docs:
+        h = clean(d)
+        h["name"] = d.get("org_name") or d.get("full_name")
+        s = stats.get(h["id"], {})
+        h["events"] = s.get("published", 0)
+        h["seats_sold"] = s.get("seats_sold", 0)
+        h["followers"] = follows.get(h["id"], 0)
+        out.append(h)
+    return out
+
+
+@api.get("/hosts")
+async def list_hosts(q: str = "", city: str = "", verified_only: bool = False,
+                     page: int = 1, limit: int = 12):
+    """A browsable directory of organisers — verified ones first."""
+    flt: dict[str, Any] = {"role": "partner", "status": {"$ne": "banned"}}
+    if verified_only:
+        flt["verified"] = True
+    if city:
+        flt["city"] = city
+    if q:
+        flt["$or"] = [{"org_name": {"$regex": q, "$options": "i"}},
+                      {"full_name": {"$regex": q, "$options": "i"}}]
+    total = await db.users.count_documents(flt)
+    docs = await db.users.find(flt, HOST_FIELDS).sort([("verified", -1), ("rating", -1)]) \
+        .skip((page - 1) * limit).limit(limit).to_list(limit)
+    return {"items": await host_cards(docs), "total": total, "page": page}
+
+
+@api.get("/hosts/{hid}")
+async def host_profile(hid: str, user: Optional[dict] = Depends(optional_user)):
+    try:
+        doc = await db.users.find_one({"_id": ObjectId(hid), "role": "partner"}, HOST_FIELDS)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid organiser id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Organiser not found")
+    host = (await host_cards([doc]))[0]
+    now = iso(now_utc())
+    upcoming = await db.events.find({"partner_id": hid, "status": "published", "starts_at": {"$gte": now}}) \
+        .sort("starts_at", 1).limit(12).to_list(12)
+    past = await db.events.find({"partner_id": hid, "status": {"$in": ["published", "completed"]},
+                                "starts_at": {"$lt": now}}).sort("starts_at", -1).limit(9).to_list(9)
+    host["upcoming"] = [clean(e) | {"partner_verified": host.get("verified", False)} for e in upcoming]
+    host["past"] = [clean(e) | {"partner_verified": host.get("verified", False)} for e in past]
+    photo_rows = await db.event_photos.find(
+        {"event_id": {"$in": [str(e["_id"]) for e in past + upcoming]}, "hidden": {"$ne": True}}) \
+        .sort("created_at", -1).limit(12).to_list(12)
+    host["photos"] = [{"url": p["url"], "event_id": p["event_id"], "caption": p.get("caption", "")}
+                      for p in photo_rows]
+    revs = await db.reviews.find({"partner_id": hid, **VISIBLE_REVIEW}, {"rating": 1, "comment": 1}) \
+        .sort("rating", -1).limit(3).to_list(3)
+    host["reviews"] = [{"rating": r["rating"], "comment": (r.get("comment") or "")[:180]}
+                       for r in revs if r.get("comment")]
+    host["is_following"] = bool(user) and bool(
+        await db.host_follows.find_one({"user_id": user["id"], "host_id": hid}))
+    return host
+
+
+@api.post("/hosts/{hid}/follow")
+async def follow_host(hid: str, user: dict = Depends(get_current_user)):
+    host = await db.users.find_one({"_id": ObjectId(hid), "role": "partner"}, {"org_name": 1, "full_name": 1})
+    if not host:
+        raise HTTPException(status_code=404, detail="Organiser not found")
+    existing = await db.host_follows.find_one({"user_id": user["id"], "host_id": hid})
+    if existing:
+        await db.host_follows.delete_one({"_id": existing["_id"]})
+        following = False
+    else:
+        await db.host_follows.insert_one({"user_id": user["id"], "host_id": hid,
+                                          "created_at": iso(now_utc())})
+        following = True
+    return {"ok": True, "following": following,
+            "followers": await db.host_follows.count_documents({"host_id": hid})}
+
+
+@api.get("/me/following")
+async def my_following(user: dict = Depends(get_current_user)):
+    rows = await db.host_follows.find({"user_id": user["id"]}).sort("created_at", -1).limit(100).to_list(100)
+    hosts = await db.users.find({"_id": {"$in": [ObjectId(r["host_id"]) for r in rows if len(r["host_id"]) == 24]}},
+                                HOST_FIELDS).limit(100).to_list(100)
+    return {"items": await host_cards(hosts)}
+
+
+async def notify_followers(partner_id: str, ev: dict) -> int:
+    """Following an organiser means hearing about their next night first."""
+    rows = await db.host_follows.find({"host_id": partner_id}, {"user_id": 1}).limit(2000).to_list(2000)
+    host = await db.users.find_one({"_id": ObjectId(partner_id)}, {"org_name": 1, "full_name": 1})
+    name = (host or {}).get("org_name") or (host or {}).get("full_name") or "An organiser you follow"
+    for r in rows:
+        await notify(r["user_id"], f"{name} just announced something",
+                     f"{ev['title']} in {ev.get('city', '')} is now open for bookings.",
+                     "event", f"/events/{str(ev['_id'])}")
+    return len(rows)
+
+
+# ---------------- shareable recap card ----------------
+RECAP_SIZE = (1080, 1350)
+
+
+def draw_recap(photos: list[bytes], title: str, meta: str, footer: str) -> bytes:
+    from PIL import Image, ImageDraw, ImageFont
+    card = Image.new("RGB", RECAP_SIZE, (15, 23, 42))
+    grid_h = 900
+    cells = [(0, 0, 540, 450), (540, 0, 540, 450), (0, 450, 540, 450), (540, 450, 540, 450)]
+    if len(photos) == 1:
+        cells = [(0, 0, 1080, grid_h)]
+    elif len(photos) == 2:
+        cells = [(0, 0, 540, grid_h), (540, 0, 540, grid_h)]
+    elif len(photos) == 3:
+        cells = [(0, 0, 1080, 500), (0, 500, 540, 400), (540, 500, 540, 400)]
+    for raw, (x, y, w, h) in zip(photos[:len(cells)], cells):
+        try:
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
+        except Exception:
+            continue
+        scale = max(w / img.width, h / img.height)
+        img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))))
+        left = (img.width - w) // 2
+        top = (img.height - h) // 2
+        card.paste(img.crop((left, top, left + w, top + h)), (x, y))
+    d = ImageDraw.Draw(card)
+
+    def font(size: int, bold: bool = False):
+        path = "/usr/share/fonts/truetype/liberation/LiberationSans%s.ttf" % ("-Bold" if bold else "-Regular")
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    d.rectangle([0, grid_h, 1080, 1350], fill=(15, 23, 42))
+    words, lines, cur = title.split(), [], ""
+    big = font(60, True)
+    for w in words:
+        trial = f"{cur} {w}".strip()
+        if d.textlength(trial, font=big) > 980 and cur:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = trial
+    lines.append(cur)
+    y = grid_h + 60
+    for line in lines[:2]:
+        d.text((50, y), line, font=big, fill=(255, 255, 255))
+        y += 74
+    d.text((50, y + 10), meta, font=font(36), fill=(148, 163, 184))
+    d.text((50, 1250), footer, font=font(34, True), fill=(236, 72, 153))
+    out = io.BytesIO()
+    card.save(out, format="JPEG", quality=88)
+    return out.getvalue()
+
+
+@api.get("/events/{event_id}/recap")
+async def event_recap(event_id: str, user: Optional[dict] = Depends(optional_user)):
+    """The ingredients of the shareable card, plus the cached image if one exists."""
+    ev = await public_event(event_id)
+    photos = await db.event_photos.find({"event_id": event_id, "hidden": {"$ne": True}}) \
+        .sort("created_at", -1).limit(4).to_list(4)
+    cached = await db.event_recaps.find_one({"event_id": event_id})
+    going = await db.event_participants.count_documents({"event_id": event_id, "status": "confirmed"})
+    return {"event_id": event_id, "title": ev["title"], "city": ev.get("city", ""),
+            "starts_at": ev.get("starts_at", ""), "host": ev.get("partner_name", ""),
+            "going": going, "rating": ev.get("rating", 0),
+            "photos": [p["url"] for p in photos], "photo_count": len(photos),
+            "card_url": (cached or {}).get("card_url", ""),
+            "share_url": f"{FRONTEND_URL}/events/{event_id}",
+            "can_make": bool(photos) and bool(user)}
+
+
+@api.post("/events/{event_id}/recap")
+async def make_event_recap(event_id: str, user: dict = Depends(get_current_user)):
+    ev = await public_event(event_id)
+    photos = await db.event_photos.find({"event_id": event_id, "hidden": {"$ne": True}}) \
+        .sort("created_at", -1).limit(4).to_list(4)
+    if not photos:
+        raise HTTPException(status_code=400, detail="Add a photo to the wall first — the card is built from them.")
+    signature = "|".join(p["url"] for p in photos)
+    cached = await db.event_recaps.find_one({"event_id": event_id})
+    if cached and cached.get("signature") == signature:
+        return {"ok": True, "card_url": cached["card_url"], "cached": True,
+                "share_url": f"{FRONTEND_URL}/events/{event_id}"}
+    blobs = []
+    for p in photos:
+        path = p["url"].split("/api/files/", 1)[-1]
+        try:
+            data, _ = await asyncio.to_thread(get_object, path)
+            blobs.append(data)
+        except Exception as e:
+            logger.error(f"recap fetch failed: {e}")
+    if not blobs:
+        raise HTTPException(status_code=502, detail="Couldn't read those photos. Please try again.")
+    going = await db.event_participants.count_documents({"event_id": event_id, "status": "confirmed"})
+    when = (ev.get("starts_at") or "")[:10]
+    meta = f"{ev.get('city', '')} · {when} · {going} went"
+    try:
+        card = await asyncio.to_thread(draw_recap, blobs, ev["title"], meta, "buddilio.com")
+    except Exception as e:
+        logger.error(f"recap render failed: {e}")
+        raise HTTPException(status_code=502, detail="Couldn't build the card. Please try again.")
+    path = f"{APP_NAME}/recaps/{event_id}/{uuid.uuid4()}.jpg"
+    result = await asyncio.to_thread(put_object, path, card, "image/jpeg")
+    await register_file(user["id"], result, f"{ev['title'][:60]} recap.jpg", "image/jpeg", len(card))
+    card_url = f"/api/files/{result['path']}"
+    await db.event_recaps.update_one(
+        {"event_id": event_id},
+        {"$set": {"card_url": card_url, "signature": signature, "photos": len(blobs),
+                  "created_by": user["id"], "created_at": iso(now_utc())}}, upsert=True)
+    return {"ok": True, "card_url": card_url, "cached": False,
+            "share_url": f"{FRONTEND_URL}/events/{event_id}"}
+
+
 # ---------------- weekly payout reminders ----------------
 def week_key(dt: datetime) -> str:
     y, w, _ = dt.isocalendar()
@@ -4163,6 +4390,9 @@ async def startup():
     await db.event_photos.create_index([("event_id", 1), ("created_at", -1)])
     await db.event_photos.create_index([("event_id", 1), ("user_id", 1)])
     await db.payout_reminders.create_index([("manager_id", 1), ("week", 1)], unique=True)
+    await db.host_follows.create_index([("user_id", 1), ("host_id", 1)], unique=True)
+    await db.host_follows.create_index("host_id")
+    await db.event_recaps.create_index("event_id", unique=True)
     await db.upload_parts.create_index([("upload_id", 1), ("index", 1)], unique=True)
     await db.upload_sessions.create_index("upload_id", unique=True)
     await db.upload_sessions.create_index("created_at", expireAfterSeconds=3600)

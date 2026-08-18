@@ -400,6 +400,22 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
 - Verified: `backend/tests/test_iteration20_photo_mod_verified_payout.py` **20/20** and testing-agent
   iteration 20 (`/app/test_reports/iteration_20.json`) — no bugs; demo data restored.
 
+## Iteration 21 — verified host landing + shareable recap card (June 2026)
+- **Organiser directory & profile**: public `/hosts` (search + “verified only” toggle) and `/host/:id`
+  (`GET /api/hosts`, `GET /api/hosts/{id}`) showing the verified badge, bio, upcoming events, a strip from their
+  photo walls, top reviews, past events and follower count. Event hero links through via `event-host-link`.
+  Nav gained an **Organisers** link. UI: `frontend/src/pages/Hosts.jsx`.
+- **Follow an organiser**: `POST /api/hosts/{id}/follow` (toggle, auth required), `GET /api/me/following`,
+  stored in `db.host_follows`. When an admin approves a submitted event, `notify_followers()` alerts everyone
+  following that organiser.
+- **Shareable recap card**: `GET /api/events/{id}/recap` (public ingredients + cached card) and
+  `POST /api/events/{id}/recap` — Pillow stitches the wall's newest 4 non-hidden photos into a 1080×1350 JPEG
+  with the title, city, date and attendance, stores it in object storage (registered in `db.files` so
+  `/api/files/...` serves it) and caches per photo signature in `db.event_recaps`. Hidden photos are excluded.
+  UI: `frontend/src/components/RecapCard.jsx` under the event photo wall, with share + download.
+- Verified: `backend/tests/test_iteration21_hosts_recap.py` **14/14** and testing-agent iteration 21
+  (`/app/test_reports/iteration_21.json`) — no bugs, desktop + mobile 390px, all demo data restored.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only

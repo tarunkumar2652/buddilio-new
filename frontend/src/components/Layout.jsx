@@ -12,6 +12,7 @@ const MARK = "/brand/mark.png";
 
 const NAV_PUBLIC = [
   { to: "/events", label: "Events" },
+  { to: "/hosts", label: "Organisers" },
   { to: "/passes", label: "Passes" },
   { to: "/membership", label: "Membership" },
   { to: "/safety", label: "Safety" },
@@ -21,6 +22,7 @@ const NAV_USER = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/discover", label: "Discover" },
   { to: "/events", label: "Events" },
+  { to: "/hosts", label: "Organisers" },
   { to: "/messages", label: "Messages" },
   { to: "/membership", label: "Membership" },
   { to: "/orders", label: "Orders" },
