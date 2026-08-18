@@ -771,7 +771,7 @@ class CouponIn(BaseModel):
 
 
 class CheckoutIn(BaseModel):
-    kind: str  # membership | product | event
+    kind: str  # membership | product | event | companion | wallet
     item_id: str
     quantity: int = 1
     coupon_code: str = ""
@@ -1378,6 +1378,11 @@ async def my_membership(user: dict = Depends(get_current_user)):
 
 
 async def price_for(kind: str, item_id: str):
+    if kind == "wallet":
+        d = await db.wallet_topups.find_one({"_id": ObjectId(item_id)})
+        if not d or d.get("status") != "pending":
+            return None, 0, "", 0
+        return d, float(d["amount"]), "Buddilio wallet top-up", 0
     if kind == "companion":
         b = await db.companion_bookings.find_one({"_id": ObjectId(item_id)})
         if not b or float(b.get("due_amount") or 0) <= 0:
@@ -1432,7 +1437,7 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
     if currency not in rates:
         raise HTTPException(status_code=400, detail="We don't support that currency yet.")
     tax_pct, tax_label = tax_for(currency, tax_pct, user.get("country_code", ""))
-    if payload.kind == "companion":
+    if payload.kind in ("companion", "wallet"):
         # Hangouts are person-to-person time; the guest pays exactly the agreed amount.
         tax_pct, tax_label = 0.0, "No tax"
     taxable = subtotal - discount
@@ -1535,6 +1540,8 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
                 "plan_name": plan["name"], "receipt": receipt,
                 "valid_until": ends.strftime("%d %b %Y"),
                 "membership_url": f"{FRONTEND_URL}/membership"})
+    elif order["kind"] == "wallet":
+        await fulfil_topup(order, uid)
     elif order["kind"] == "companion":
         await fulfil_companion(order, uid)
     elif order["kind"] == "event":
@@ -4927,7 +4934,7 @@ DEFAULT_SITE_CONTENT: dict[str, dict] = {
                        {"label": "Events", "to": "/events"}, {"label": "Organisers", "to": "/hosts"},
                        {"label": "Hangouts", "to": "/hangouts"},
                        {"label": "Messages", "to": "/messages"}, {"label": "Membership", "to": "/membership"},
-                       {"label": "Orders", "to": "/orders"}]},
+                       {"label": "Orders", "to": "/orders"}, {"label": "Wallet", "to": "/wallet"}]},
     "footer": {"groups": [
         {"title": "Explore", "links": [{"label": "Events", "to": "/events"}, {"label": "Cities", "to": "/cities"},
                                        {"label": "Organisers", "to": "/hosts"}, {"label": "Passes", "to": "/passes"},
@@ -5284,7 +5291,8 @@ def companion_card(u: dict, mine: bool = False) -> dict:
            "min_hours": c.get("min_hours", 1), "max_hours": c.get("max_hours", 4),
            "packages": c.get("packages", []), "currency": BASE_CURRENCY,
            "status": c.get("status", "none"), "enabled": bool(c.get("enabled")),
-           "hangouts": c.get("completed", 0), "rating": c.get("rating", 0)}
+           "hangouts": c.get("completed", 0), "rating": c.get("rating", 0),
+           "rating_count": c.get("rating_count", 0)}
     if mine:
         out |= {"full_name": u.get("full_name", ""), "rejected_reason": c.get("rejected_reason", ""),
                 "cut_percent": COMPANION_CUT, "terms": HANGOUT_TERMS}
@@ -5361,7 +5369,8 @@ async def list_companions(q: str = "", city: str = "", max_rate: float = -1, pag
     docs = await db.users.find(flt).sort("companion.hourly_rate", 1) \
         .skip((page - 1) * limit).limit(limit).to_list(limit)
     return {"items": [companion_card(d) for d in docs], "total": total, "page": page,
-            "terms": HANGOUT_TERMS, "currency": BASE_CURRENCY, "request_fee": await request_fee()}
+            "terms": HANGOUT_TERMS, "currency": BASE_CURRENCY, "request_fee": await request_fee(),
+            "free_requests_left": await free_requests_left(user["id"], user.get("membership"))}
 
 
 @api.get("/companions/{cid}")
@@ -5373,7 +5382,9 @@ async def get_companion(cid: str, user: dict = Depends(premium_member)):
         raise HTTPException(status_code=400, detail="Invalid companion id")
     if not doc:
         raise HTTPException(status_code=404, detail="This companion isn't available right now.")
-    return companion_card(doc) | {"terms": HANGOUT_TERMS, "request_fee": await request_fee()}
+    return companion_card(doc) | {"terms": HANGOUT_TERMS, "request_fee": await request_fee(),
+                                  "free_requests_left": await free_requests_left(user["id"],
+                                                                                 user.get("membership"))}
 
 
 class BookingIn(BaseModel):
@@ -5401,6 +5412,7 @@ def booking_view(b: dict, me: str, names: dict) -> dict:
             "companion_net": b.get("companion_net", 0), "status": b["status"],
             "starts_at": b["starts_at"], "place": b.get("place", ""), "note": b.get("note", ""),
             "package": b.get("package", ""), "order_id": b.get("order_id", ""),
+            "rated": bool(b.get("rated")), "fee_waived": bool(b.get("fee_waived")),
             "created_at": b.get("created_at", "")}
 
 
@@ -5456,18 +5468,30 @@ async def create_booking(cid: str, payload: BookingIn, user: dict = Depends(prem
                             detail="You already have a request waiting with this companion — "
                                    "finish that one first.")
     fee = await request_fee()
+    waived = False
+    if fee > 0 and await free_requests_left(user["id"], user.get("membership")) > 0:
+        fee, waived = 0.0, True
     doc_b = {"member_id": user["id"], "companion_id": cid, "hours": hours, "package": label,
              "listed_amount": listed, "amount": amount, "due_amount": fee, "paid_total": 0.0,
-             "request_fee": fee, "fee_paid": 0.0,
-             "cut_percent": COMPANION_CUT, "currency": BASE_CURRENCY, "status": "pending_request_fee",
+             "request_fee": fee, "fee_paid": 0.0, "fee_waived": waived,
+             "cut_percent": COMPANION_CUT, "currency": BASE_CURRENCY,
+             "status": "awaiting_acceptance" if waived else "pending_request_fee",
              "starts_at": iso(starts), "place": payload.place[:160], "note": payload.note[:500],
              "item_name": f"Hangout request fee · {short_name(doc.get('full_name', 'a companion'))}",
              "created_at": iso(now_utc())}
     res = await db.companion_bookings.insert_one(doc_b)
     b = await db.companion_bookings.find_one({"_id": res.inserted_id})
     names = await booking_names([b])
+    if waived:
+        await notify(cid, "New hangout request",
+                     f"{short_name(user.get('full_name', 'A member'))} requested {hours}h on "
+                     f"{iso(starts)[:10]}. Accept with your price, counter or decline.",
+                     "order", "/hangouts/host")
+        return {"booking": booking_view(b, user["id"], names), "next": "sent", "request_fee": 0,
+                "fee_waived": True,
+                "free_requests_left": await free_requests_left(user["id"], user.get("membership"))}
     return {"booking": booking_view(b, user["id"], names), "next": "checkout",
-            "request_fee": fee,
+            "request_fee": fee, "fee_waived": False,
             "checkout": {"kind": "companion", "item_id": str(res.inserted_id), "amount": fee}}
 
 
@@ -5531,6 +5555,124 @@ async def grant_credit(user_id: str, amount: float, reason: str, booking_id: str
     return round(amount, 2)
 
 
+# ---------------- wallet: top-ups, saved card, free requests ----------------
+WALLET_MIN, WALLET_MAX = 500.0, 200000.0
+
+
+class TopUpIn(BaseModel):
+    amount: float = Field(gt=0)
+
+
+class CardIn(BaseModel):
+    name: str
+    number: str
+    exp_month: int = Field(ge=1, le=12)
+    exp_year: int = Field(ge=2026, le=2099)
+    autopay: bool = True
+
+
+def card_view(u: dict) -> Optional[dict]:
+    c = u.get("saved_card")
+    return {"brand": c["brand"], "last4": c["last4"], "name": c["name"],
+            "expiry": f"{c['exp_month']:02d}/{str(c['exp_year'])[-2:]}",
+            "autopay": bool(c.get("autopay", True))} if c else None
+
+
+async def free_requests_left(user_id: str, member: Optional[dict]) -> int:
+    """Paying members get a few fee-free hangout requests every calendar month."""
+    if not member:
+        return 0
+    s = await db.settings.find_one({}, {"hangout_free_requests": 1}) or {}
+    try:
+        quota = int(s.get("hangout_free_requests", 3))
+    except (TypeError, ValueError):
+        quota = 3
+    if quota <= 0:
+        return 0
+    month_start = now_utc().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    used = await db.companion_bookings.count_documents(
+        {"member_id": user_id, "fee_waived": True, "created_at": {"$gte": iso(month_start)}})
+    return max(quota - used, 0)
+
+
+@api.get("/wallet")
+async def my_wallet(user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"saved_card": 1})
+    rows = await db.credits.find({"user_id": user["id"]}).sort("created_at", -1).limit(30).to_list(30)
+    member = await membership_active(user["id"])
+    return {"balance": await credit_balance(user["id"]),
+            "entries": [{"amount": r["amount"], "reason": r.get("reason", ""), "type": r.get("type", ""),
+                         "created_at": r.get("created_at", "")} for r in rows],
+            "card": card_view(doc or {}), "min_topup": WALLET_MIN, "max_topup": WALLET_MAX,
+            "free_requests_left": await free_requests_left(user["id"], member)}
+
+
+@api.post("/wallet/topup")
+async def start_topup(payload: TopUpIn, user: dict = Depends(get_current_user)):
+    amount = round(float(payload.amount), 2)
+    if amount < WALLET_MIN or amount > WALLET_MAX:
+        raise HTTPException(status_code=400,
+                            detail=f"Top up between {fmt_money(WALLET_MIN)} and {fmt_money(WALLET_MAX)}.")
+    res = await db.wallet_topups.insert_one({"user_id": user["id"], "amount": amount, "status": "pending",
+                                            "created_at": iso(now_utc())})
+    return {"topup_id": str(res.inserted_id),
+            "checkout": {"kind": "wallet", "item_id": str(res.inserted_id), "amount": amount}}
+
+
+async def fulfil_topup(order: dict, uid: str):
+    t = await db.wallet_topups.find_one({"_id": ObjectId(order["ref_id"])})
+    if not t or t["user_id"] != uid or t.get("status") == "paid":
+        return
+    await db.wallet_topups.update_one({"_id": t["_id"]}, {"$set": {
+        "status": "paid", "order_id": str(order["_id"]), "paid_at": iso(now_utc())}})
+    await grant_credit(uid, float(t["amount"]), "Wallet top-up", "")
+
+
+@api.put("/wallet/card")
+async def save_card(payload: CardIn, user: dict = Depends(get_current_user)):
+    """SIMULATED card vault — we keep the last four digits only, never the full number."""
+    digits = re.sub(r"\D", "", payload.number)
+    if len(digits) < 13 or len(digits) > 19:
+        raise HTTPException(status_code=400, detail="Enter a valid card number.")
+    brand = {"4": "Visa", "5": "Mastercard", "6": "RuPay", "3": "Amex"}.get(digits[0], "Card")
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"saved_card": {
+        "brand": brand, "last4": digits[-4:], "name": payload.name[:60],
+        "exp_month": payload.exp_month, "exp_year": payload.exp_year,
+        "autopay": payload.autopay, "saved_at": iso(now_utc())}}})
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"saved_card": 1})
+    return {"ok": True, "card": card_view(doc)}
+
+
+@api.delete("/wallet/card")
+async def remove_card(user: dict = Depends(get_current_user)):
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$unset": {"saved_card": ""}})
+    return {"ok": True, "card": None}
+
+
+async def charge_saved_card(b: dict, amount: float) -> Optional[dict]:
+    """SIMULATED off-session charge on the guest's saved card, mirroring a gateway capture."""
+    u = await db.users.find_one({"_id": ObjectId(b["member_id"])}, {"saved_card": 1, "email": 1})
+    card = (u or {}).get("saved_card") or {}
+    if not card or not card.get("autopay", True):
+        return None
+    order = {"order_no": "BUD" + uuid.uuid4().hex[:8].upper(), "user_id": b["member_id"],
+             "user_email": (u or {}).get("email", ""), "kind": "companion", "ref_id": str(b["_id"]),
+             "item_name": b.get("item_name", "Hangout booking"), "quantity": 1,
+             "subtotal": amount, "discount": 0.0, "tax": 0.0, "total": amount,
+             "tax_percent": 0, "tax_label": "No tax", "credit_applied": 0.0, "charge_credit": 0.0,
+             "coupon": "", "currency": b.get("currency", BASE_CURRENCY), "fx_rate": 1,
+             "base_currency": BASE_CURRENCY, "charge_subtotal": amount, "charge_discount": 0.0,
+             "charge_tax": 0.0, "charge_total": amount,
+             "payment_status": "paid", "order_status": "completed", "refund_status": "none",
+             "gateway": "saved_card_sim", "transaction_id": "CARD" + uuid.uuid4().hex[:10].upper(),
+             "created_at": iso(now_utc()), "paid_at": iso(now_utc())}
+    res = await db.orders.insert_one(order)
+    await db.payments.insert_one({"order_id": str(res.inserted_id), "user_id": b["member_id"],
+                                  "amount": amount, "status": "captured", "gateway": "saved_card_sim",
+                                  "transaction_id": order["transaction_id"], "created_at": iso(now_utc())})
+    return {"id": str(res.inserted_id), "last4": card["last4"]}
+
+
 class CounterIn(BaseModel):
     amount: float = Field(gt=0)
     note: str = ""
@@ -5557,6 +5699,7 @@ async def my_bookings(user: dict = Depends(get_current_user)):
     names = await booking_names(rows)
     return {"items": [booking_view(b, user["id"], names) for b in rows],
             "credit_balance": await credit_balance(user["id"]),
+            "free_requests_left": await free_requests_left(user["id"], await membership_active(user["id"])),
             "request_fee": await request_fee()}
 
 
@@ -5565,15 +5708,19 @@ class AcceptIn(BaseModel):
     note: str = ""
 
 
-async def try_auto_debit(b: dict, agreed: float) -> bool:
-    """Wallet first: if the guest's Buddilio balance covers the price, take it there and then."""
-    if await credit_balance(b["member_id"]) + 0.01 < agreed:
-        return False
-    await db.credits.insert_one({"user_id": b["member_id"], "amount": -round(agreed, 2), "type": "spent",
-                                 "reason": "Hangout paid from your Buddilio wallet",
-                                 "booking_id": str(b["_id"]), "created_at": iso(now_utc())})
-    await confirm_booking(b, agreed, round(float(b.get("paid_total") or 0) + agreed, 2), "wallet")
-    return True
+async def try_auto_debit(b: dict, agreed: float) -> Optional[str]:
+    """Wallet first, then the saved card — so an accepted hangout confirms without another checkout."""
+    if await credit_balance(b["member_id"]) + 0.01 >= agreed:
+        await db.credits.insert_one({"user_id": b["member_id"], "amount": -round(agreed, 2), "type": "spent",
+                                     "reason": "Hangout paid from your Buddilio wallet",
+                                     "booking_id": str(b["_id"]), "created_at": iso(now_utc())})
+        await confirm_booking(b, agreed, round(float(b.get("paid_total") or 0) + agreed, 2), "wallet")
+        return "wallet"
+    charged = await charge_saved_card(b, agreed)
+    if charged:
+        await confirm_booking(b, agreed, round(float(b.get("paid_total") or 0) + agreed, 2), charged["id"])
+        return "card"
+    return None
 
 
 @api.post("/bookings/{bid}/accept")
@@ -5592,8 +5739,9 @@ async def accept_booking(bid: str, payload: AcceptIn = Body(default=AcceptIn()),
         "counter_note": payload.note[:300], "accepted_at": iso(now_utc()),
         "item_name": f"{b['hours']}h hangout with {short_name(user.get('full_name', 'a companion'))}"}})
     b = await db.companion_bookings.find_one({"_id": b["_id"]})
-    if await try_auto_debit(b, agreed):
-        return {"ok": True, "status": "confirmed", "amount": agreed, "paid_from": "wallet"}
+    paid_from = await try_auto_debit(b, agreed)
+    if paid_from:
+        return {"ok": True, "status": "confirmed", "amount": agreed, "paid_from": paid_from}
     await notify(b["member_id"], "Your request was accepted",
                  f"Your companion accepted at {fmt_money(agreed)}. Pay now to lock the hangout in.",
                  "order", "/hangouts/bookings")
@@ -5667,6 +5815,44 @@ async def complete_booking(bid: str, user: dict = Depends(get_current_user)):
                                           {"$set": {"status": "completed", "completed_at": iso(now_utc())}})
     await db.users.update_one({"_id": ObjectId(b["companion_id"])}, {"$inc": {"companion.completed": 1}})
     return {"ok": True, "status": "completed"}
+
+
+class RatingIn(BaseModel):
+    stars: int = Field(ge=1, le=5)
+    note: str = ""
+
+
+@api.post("/bookings/{bid}/rate")
+async def rate_hangout(bid: str, payload: RatingIn, user: dict = Depends(get_current_user)):
+    """Private feedback: only the star average and hangout count ever show on a companion's card."""
+    b = await load_booking(bid, user["id"], "member")
+    if b["status"] != "completed":
+        raise HTTPException(status_code=400, detail="You can rate a hangout once it's marked done.")
+    if await db.companion_ratings.find_one({"booking_id": bid}):
+        raise HTTPException(status_code=400, detail="You've already rated this hangout.")
+    await db.companion_ratings.insert_one({
+        "booking_id": bid, "member_id": user["id"], "companion_id": b["companion_id"],
+        "stars": payload.stars, "note": payload.note[:500], "created_at": iso(now_utc())})
+    rows = await db.companion_ratings.find({"companion_id": b["companion_id"]},
+                                           {"stars": 1}).limit(500).to_list(500)
+    avg = round(sum(r["stars"] for r in rows) / len(rows), 2)
+    await db.users.update_one({"_id": ObjectId(b["companion_id"])},
+                              {"$set": {"companion.rating": avg, "companion.rating_count": len(rows)}})
+    await db.companion_bookings.update_one({"_id": b["_id"]}, {"$set": {"rated": True}})
+    return {"ok": True, "rating": avg, "rating_count": len(rows)}
+
+
+@api.get("/admin/companion-ratings")
+async def admin_ratings(companion_id: str = "", user: dict = Depends(require_perm("members:manage"))):
+    flt = {"companion_id": companion_id} if companion_id else {}
+    rows = await db.companion_ratings.find(flt).sort("created_at", -1).limit(200).to_list(200)
+    names = await load_many(db.users, [r["companion_id"] for r in rows] + [r["member_id"] for r in rows],
+                            {"full_name": 1})
+    return {"items": [{"id": str(r["_id"]), "stars": r["stars"], "note": r.get("note", ""),
+                       "created_at": r.get("created_at", ""),
+                       "companion_name": short_name((names.get(r["companion_id"]) or {}).get("full_name", "")),
+                       "member_name": short_name((names.get(r["member_id"]) or {}).get("full_name", ""))}
+                      for r in rows]}
 
 
 class NoShowIn(BaseModel):

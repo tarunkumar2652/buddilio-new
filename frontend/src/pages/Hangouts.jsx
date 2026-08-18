@@ -119,7 +119,8 @@ export function CompanionDetail() {
       .catch((e) => { if (e.response?.status === 403) setLocked(errMsg(e)); else setC(false); });
   }, [id]);
 
-  const fee = c ? c.request_fee || 0 : 0;
+  const fee = c ? (c.free_requests_left > 0 ? 0 : c.request_fee || 0) : 0;
+  const freeLeft = c ? c.free_requests_left || 0 : 0;
 
   const book = async (e) => {
     e.preventDefault();
@@ -130,6 +131,10 @@ export function CompanionDetail() {
         ...f, hours: Number(f.hours) || 0, offer_amount: Number(f.offer_amount) || 0,
         starts_at: new Date(f.starts_at).toISOString(),
       });
+      if (data.fee_waived) {
+        toast.success("Request sent — no fee, one of your free requests was used.");
+        return nav("/hangouts/bookings");
+      }
       nav(`/checkout?kind=companion&id=${data.booking.id}`);
     } catch (er) { toast.error(errMsg(er)); } finally { setBusy(false); }
   };
@@ -146,7 +151,7 @@ export function CompanionDetail() {
           : <span className="grid h-24 w-24 place-items-center rounded-2xl bg-slate-900 text-white font-display text-3xl">{c.name[0]}</span>}
         <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-bold">{c.name}{c.age ? `, ${c.age}` : ""}</h1>
-          <p className="mt-1 text-sm text-slate-500">{c.city || "Global"} · {c.hangouts} hangouts{c.languages?.length ? ` · ${c.languages.join(", ")}` : ""}</p>
+          <p className="mt-1 text-sm text-slate-500">{c.city || "Global"} · {c.hangouts} hangouts{c.rating_count ? ` · ★ ${c.rating} (${c.rating_count})` : ""}{c.languages?.length ? ` · ${c.languages.join(", ")}` : ""}</p>
           <p className="mt-3 text-base font-semibold text-slate-500" data-testid="companion-rate">
             Rate stays private until they accept your request
           </p>
@@ -192,10 +197,13 @@ export function CompanionDetail() {
           the full rate is shown and payable only after my companion accepts.
         </label>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-lg font-bold" data-testid="booking-total">Request fee now: {money(fee)}</p>
+          <p className="text-lg font-bold" data-testid="booking-total">
+            {fee > 0 ? `Request fee now: ${money(fee)}`
+              : `Free request (${freeLeft} left this month)`}
+          </p>
           <button disabled={busy} data-testid="booking-submit"
             className="inline-flex items-center gap-2 rounded-full brand-gradient px-7 py-3 text-sm font-bold text-white disabled:opacity-50">
-            <Sparkles className="h-4 w-4" />{busy ? "Creating…" : `Pay ${money(fee)} & send request`}
+            <Sparkles className="h-4 w-4" />{busy ? "Sending…" : fee > 0 ? `Pay ${money(fee)} & send request` : "Send request"}
           </button>
         </div>
       </form>
@@ -220,6 +228,8 @@ export function MyBookings() {
   const act = async (b, path, body) => {
     try { const { data } = await api.post(`/bookings/${b.id}/${path}`, body || {}); 
       toast.success(data.paid_from === "wallet" ? "Confirmed — paid from their Buddilio wallet."
+        : data.paid_from === "card" ? "Confirmed — their saved card was charged."
+        : data.rating ? "Thanks — your rating is private."
         : data.credit_issued ? `Done — ${money(data.credit_issued)} credit added.` : "Done.");
       load();
     } catch (e) { toast.error(errMsg(e)); }
@@ -238,6 +248,10 @@ export function MyBookings() {
         <p className="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-bold text-white" data-testid="credit-balance">
           Credit: {money(data.credit_balance || 0)}
         </p>
+        <Link to="/wallet" data-testid="wallet-link"
+          className="rounded-full border border-slate-200 px-5 py-2.5 text-sm font-bold">
+          Wallet · {data.free_requests_left || 0} free requests
+        </Link>
       </div>
 
       {data.items.length === 0 ? (
@@ -295,6 +309,14 @@ export function MyBookings() {
                     <button onClick={() => act(b, "decline")} data-testid={`decline-${b.id}`}
                       className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold text-rose-600">Decline</button>
                   </>
+                )}
+                {b.status === "completed" && b.role === "member" && !b.rated && (
+                  <button data-testid={`rate-${b.id}`} className="rounded-full bg-slate-900 px-4 py-2 text-xs font-bold text-white"
+                    onClick={() => {
+                      const stars = window.prompt("Rate this hangout 1–5 (private — only the average is shown)");
+                      if (!stars) return;
+                      act(b, "rate", { stars: Number(stars), note: window.prompt("Anything our team should know? (private)") || "" });
+                    }}>Rate this hangout</button>
                 )}
                 {b.status === "confirmed" && (
                   <>

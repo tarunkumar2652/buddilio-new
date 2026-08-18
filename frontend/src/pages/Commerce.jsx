@@ -177,6 +177,7 @@ export function Checkout() {
   useEffect(() => { if (kind && itemId) create(code, ""); /* eslint-disable-next-line */ }, [kind, itemId]);
 
   const done = () => nav(kind === "membership" ? "/membership" : kind === "event" ? `/events/${itemId}`
+    : kind === "wallet" ? "/wallet"
     : kind === "companion" ? "/hangouts/bookings" : "/orders");
 
   const loadRazorpayScript = () => new Promise((resolve) => {

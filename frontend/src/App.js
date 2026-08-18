@@ -26,6 +26,7 @@ import { Hosts, HostProfile } from "@/pages/Hosts";
 import { Hangouts, CompanionDetail, MyBookings, HostHangouts } from "@/pages/Hangouts";
 import PartnerDashboard from "@/pages/Partner";
 import Admin from "@/pages/Admin";
+import Wallet from "@/pages/Wallet";
 import Console from "@/pages/Console";
 import VendorSignup from "@/pages/VendorSignup";
 import "@/index.css";
@@ -95,6 +96,7 @@ function Shell() {
           <Route path="/profile" element={<Protected><MyProfile /></Protected>} />
           <Route path="/referrals" element={<Protected><Referrals /></Protected>} />
           <Route path="/ai" element={<Protected><Concierge /></Protected>} />
+          <Route path="/wallet" element={<Protected><Wallet /></Protected>} />
           <Route path="/hangouts" element={<Protected><Hangouts /></Protected>} />
           <Route path="/hangouts/host" element={<Protected><HostHangouts /></Protected>} />
           <Route path="/hangouts/bookings" element={<Protected><MyBookings /></Protected>} />

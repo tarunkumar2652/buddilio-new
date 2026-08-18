@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 27 — verified wallet top-up, saved card, auto-charge order, fee waiver, ratings and the iter25 regression. New pytest module /app/backend/tests/test_iteration27_wallet.py (17 tests, 6 classes, ALL PASS) plus the rewritten /app/backend/tests/test_iteration25_hangouts.py (22 tests, ALL PASS after setting hangout_free_requests=0 in its fixture so the fee-first assertions keep firing). Total 39/39 green. Front-end spot-check on desktop (aarav.mehta member and admin@buddilio.com): all 15 testids on /wallet render, quick top-up 500 lands on /checkout?kind=wallet&id=..., wallet-link visible on /hangouts/bookings, request-fee-input, free-requests-input, request-fee-save persist both settings, and ScrollToTop confirmed (scrollY 271→0 on nav link click). One real user-facing bug found and fixed here: the default nav.member returned by /api/site-content did not include the Wallet entry so no member could reach the wallet from the top bar — the review request explicitly requires 'Wallet appears in the member navbar'. Fixed by adding the Wallet link to DEFAULT_SITE_CONTENT in backend/server.py (line ~4937). Companion-ratings list is empty-only-hidden — component only mounts <ul data-testid=\"companion-ratings\"> if there is at least one rating, so a brand-new instance shows nothing. Minor design nit, not a bug. All artefacts cleaned: Tara/Aarav credits+orders+topups+saved cards purged, Ananya companion reset (completed/rating/rating_count all 0, enabled=true, status=approved), settings.hangout_request_fee=100, settings.hangout_free_requests=3, all iter25/iter27/wallet_smoke memberships removed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Layout / site-content default nav", "issue": "Default nav.member returned by GET /api/site-content did not include the /wallet link, so signed-in members had no Wallet button in the top bar even though NAV_USER in Layout.jsx has one — the client always prefers site.nav.member over the local fallback. Fixed by appending {label:'Wallet', to:'/wallet'} to DEFAULT_SITE_CONTENT.nav.member in backend/server.py.", "selector": "header a[href=\"/wallet\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin -> Companions", "issues": ["companion-ratings <ul> only renders when ratings.length>0 (Companions.jsx line 175). A fresh instance/no-ratings environment shows nothing under the tab, so reviewers may think the list is missing. Consider rendering an empty-state row with the same data-testid, or always render the wrapper."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration27_wallet.py",
+    "/app/backend/tests/test_iteration25_hangouts.py",
+    "/app/test_reports/pytest/iteration27_wallet.xml",
+    "/app/test_reports/pytest/iteration27_regression25.xml"
+  ],
+  "action_items": [
+    "None blocking. Optional: render the /wallet Wallet nav link based on user role via NAV_USER in the client only (not through site-content) so future default changes don't need a backend edit. Optional: always render <ul data-testid=\"companion-ratings\"> with an empty-state so QA can locate the section even before any rating exists."
+  ],
+  "critical_code_review_comments": [
+    "backend/server.py:5622 fulfil_topup() — idempotent via `status=='paid'` check; a replay of /api/payments/verify on a completed wallet order correctly does NOT double-credit (verified by test_topup_cannot_fulfil_twice).",
+    "backend/server.py:5711 try_auto_debit() — still bumps paid_total by the agreed amount when it debits the wallet, so paid_total mixes real gateway captures and wallet spend. Not a correctness bug for the current flows (no cash refund on companion orders) but the field is now overloaded — consider a separate wallet_spent field so finance can reconcile easily.",
+    "backend/server.py:5631 save_card() — stores brand/last4/name/exp; verified DB doc contains no 'number' or 'pan' key and no substring of the full PAN (test_put_stores_no_pan).",
+    "backend/server.py:5652 charge_saved_card() — no autopay-off short-circuit reused card; both codepaths handled (autopay=false stays payment_due, verified in test_autopay_false_skipped).",
+    "backend/server.py:5581 free_requests_left() — counts documents by fee_waived=true in the current calendar month. When quota is lowered from 3 to 0 mid-month the counted-vs-quota subtraction still returns 0 via max(...) — safe.",
+    "backend/server.py:4933 DEFAULT_SITE_CONTENT — nav.member was missing the Wallet entry (fixed here). Suggest a small unit test that exercises 'critical routes appear in the default member nav'.",
+    "frontend/Companions.jsx:175 — the private ratings list is conditionally rendered; better to always mount the wrapper with an empty-state to keep testids stable."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration27_wallet.py (new — 17 tests covering wallet get/topup/card/auto-charge/fee-waiver/ratings)",
+    "/app/backend/tests/test_iteration25_hangouts.py (fixture now sets hangout_free_requests=0 during the run and restores to 3 on teardown, so fee-first assertions still fire alongside the new waiver feature)",
+    "/app/backend/server.py (added Wallet nav item to DEFAULT_SITE_CONTENT.nav.member)"
+  ],
+  "success_rate": {"backend": "100% (39/39 — 17 iter27 wallet + 22 iter25 hangouts regression)", "frontend": "100% of the review-request testids present; wallet top-up flow lands on /checkout?kind=wallet&id=...; ScrollToTop confirmed"},
+  "test_credentials": "admin@buddilio.com/Admin@123, aarav.mehta@example.com/User@123 (Premium member — used for the desktop UI spot-check), tara.joshi@example.com/User@123 (fixture creates a temporary Basic membership with test_marker=iter27_wallet and removes it on teardown), ananya.kapoor@example.com/User@123 (approved companion), arjun.sethi@example.com/User@123 (no-membership subject), partner@buddilio.com/Partner@123",
+  "seed_data_creation": "iter27 fixture creates one temporary Basic membership for Tara (test_marker='iter27_wallet') and deletes it on teardown. iter25 fixture is unchanged apart from setting hangout_free_requests=0 during the run. Post-run mongo check: 0 bookings involving Tara/Ananya/Aarav, hangout_request_fee=100, hangout_free_requests=3, Ananya companion={enabled:true, status:approved, completed:0, rating:0, rating_count:0}.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 39 backend tests pass. Wallet nav bug is fixed in backend DEFAULT_SITE_CONTENT — main agent should verify the /wallet Link renders in the header for a member session (aarav.mehta@example.com). The rewritten iter25 test file requires hangout_free_requests=0 during the run; the fixture does this automatically. smoke_wallet.py can be safely deleted — its scenarios are now all covered by test_iteration27_wallet.py. When running the suite locally always use -n 0 (the shared Tara/Ananya pair races under xdist)."
+}

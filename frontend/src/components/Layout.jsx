@@ -28,6 +28,7 @@ const NAV_USER = [
   { to: "/messages", label: "Messages" },
   { to: "/membership", label: "Membership" },
   { to: "/orders", label: "Orders" },
+  { to: "/wallet", label: "Wallet" },
 ];
 
 const navFor = (site, signedIn) => {

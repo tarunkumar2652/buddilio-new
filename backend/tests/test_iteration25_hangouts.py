@@ -105,7 +105,7 @@ def prep_and_cleanup(sessions):
     DB.companion_bookings.delete_many({"$or": [{"member_id": tara_id}, {"companion_id": ana_id}]})
     DB.payouts.delete_many({"kind": "companion"})
     DB.orders.delete_many({"kind": "companion", "user_id": tara_id})
-    DB.settings.update_one({}, {"$set": {"hangout_request_fee": 100},
+    DB.settings.update_one({}, {"$set": {"hangout_request_fee": 100, "hangout_free_requests": 0},
                                 "$unset": {"companions_min_plan": ""}})
     yield
     DB.user_memberships.delete_many({"test_marker": "iter25_fee_flow"})
@@ -126,7 +126,7 @@ def prep_and_cleanup(sessions):
         "rejected_reason": "",
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
     }}})
-    DB.settings.update_one({}, {"$set": {"hangout_request_fee": 100},
+    DB.settings.update_one({}, {"$set": {"hangout_request_fee": 100, "hangout_free_requests": 3},
                                 "$unset": {"companions_min_plan": ""}})
     print("[cleanup] iter25 hangouts artefacts purged; fee reset to 100; Ananya restored")
 

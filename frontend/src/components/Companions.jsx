@@ -12,20 +12,28 @@ export const Companions = () => {
   const [bookings, setBookings] = useState(null);
   const [notes, setNotes] = useState({});
   const [fee, setFee] = useState("");
+  const [freeReqs, setFreeReqs] = useState("");
+  const [ratings, setRatings] = useState([]);
 
   const load = useCallback(() => {
     setData(null);
     api.get(`/admin/companions?status=${status}`).then(({ data }) => setData(data))
       .catch((e) => { toast.error(errMsg(e)); setData({ items: [], counts: {} }); });
     api.get("/admin/companion-bookings").then(({ data }) => setBookings(data)).catch(() => setBookings(null));
-    api.get("/admin/settings").then(({ data }) => setFee(String(data.hangout_request_fee ?? 100))).catch(() => {});
+    api.get("/admin/settings").then(({ data }) => {
+      setFee(String(data.hangout_request_fee ?? 100));
+      setFreeReqs(String(data.hangout_free_requests ?? 3));
+    }).catch(() => {});
+    api.get("/admin/companion-ratings").then(({ data }) => setRatings(data.items)).catch(() => setRatings([]));
   }, [status]);
   useEffect(() => { load(); }, [load]);
 
   const saveFee = async () => {
     try {
-      await api.put("/admin/settings", { hangout_request_fee: Number(fee) });
-      toast.success("Request fee updated.");
+      await api.put("/admin/settings", {
+        hangout_request_fee: Number(fee), hangout_free_requests: Number(freeReqs),
+      });
+      toast.success("Hangout settings updated.");
     } catch (e) { toast.error(errMsg(e)); }
   };
 
@@ -59,8 +67,14 @@ export const Companions = () => {
             onChange={(e) => setFee(e.target.value)}
             className="mt-1 w-40 rounded-xl border border-slate-200 px-3 py-2 text-sm" />
         </label>
+        <label className="text-sm">
+          <span className="block text-xs font-bold uppercase tracking-wide text-slate-500">Free requests / month (members)</span>
+          <input type="number" min={0} value={freeReqs} data-testid="free-requests-input"
+            onChange={(e) => setFreeReqs(e.target.value)}
+            className="mt-1 w-40 rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+        </label>
         <button onClick={saveFee} data-testid="request-fee-save"
-          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-bold text-white">Save fee</button>
+          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-bold text-white">Save</button>
         <p className="text-xs text-slate-500">Charged on every hangout request to keep spam out.</p>
       </div>
 
@@ -158,6 +172,22 @@ export const Companions = () => {
           </div>
         </div>
       )}
+      <div>
+        <h2 className="mb-3 text-sm font-bold uppercase tracking-widest text-slate-500">Private ratings</h2>
+        <ul className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white" data-testid="companion-ratings">
+          {ratings.length === 0 ? (
+            <li className="px-4 py-3 text-sm text-slate-500" data-testid="ratings-empty">No ratings yet.</li>
+          ) : ratings.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3" data-testid={`rating-${r.id}`}>
+              <div>
+                <p className="text-sm font-semibold">{r.companion_name} · {"★".repeat(r.stars)}</p>
+                {r.note && <p className="text-xs text-slate-500">“{r.note}” — {r.member_name}</p>}
+              </div>
+              <span className="text-xs text-slate-400">{fmtDate(r.created_at)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 };

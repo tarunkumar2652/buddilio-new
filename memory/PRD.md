@@ -504,6 +504,23 @@ Deployment agent verdict: **PASS — no blockers**, after these fixes:
 - Verified: `backend/tests/test_iteration25_hangouts.py` **22/22 passing** (run with `-n 0`) plus testing-agent
   iterations 25 & 26. Test data cleaned (0 companion bookings/payouts, fee reset to 100).
 
+## Iteration 27 — Wallet, saved cards, ratings & free requests (June 2026)
+- **Buddilio wallet** (`frontend/src/pages/Wallet.jsx`, route `/wallet`, in the member nav): top up ₹500–₹200,000
+  (`POST /api/wallet/topup` → checkout `kind=wallet`, tax-free, idempotent fulfilment), see the credit ledger,
+  and the balance is spent automatically the moment a companion accepts.
+- **Saved card (SIMULATED vault)**: `PUT/DELETE /api/wallet/card` stores brand, last4, name, expiry and an
+  `autopay` flag — never the full number. `charge_saved_card()` writes an order/payment with
+  `gateway="saved_card_sim"`. `try_auto_debit()` order of preference: wallet → saved card (if autopay) →
+  otherwise the booking waits at `payment_due` for a manual checkout. **No real Stripe/Razorpay card storage yet.**
+- **Companion ratings**: `POST /api/bookings/{id}/rate` (member, completed bookings only, once per booking)
+  stores 1–5 stars plus a private note. Only the average + count show on a companion card
+  (`companion.rating`, `rating_count`); notes are admin-only via `GET /api/admin/companion-ratings`.
+- **Free requests**: `settings.hangout_free_requests` (default 3, editable in Admin → Companions) gives paying
+  members N fee-free hangout requests per calendar month; those bookings are created as `fee_waived: true`
+  and go straight to `awaiting_acceptance`.
+- Verified: `backend/tests/test_iteration27_wallet.py` **17/17** and `test_iteration25_hangouts.py` **22/22**
+  (testing-agent iteration 27, run with `-n 0`). Wallet nav link added to `DEFAULT_SITE_CONTENT.nav.member`.
+
 ## Backlog
 **P0** — Add real `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` to flip INR checkout live; claim a Stripe account for
 live international payments; register both webhook URLs. Verify Resend delivery to a real inbox (only
