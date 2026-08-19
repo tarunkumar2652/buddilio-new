@@ -4637,6 +4637,20 @@ class IdVerificationIn(BaseModel):
     address: str = ""
 
 
+@api.get("/me/admin-nav")
+async def my_admin_nav(user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}, {"admin_nav": 1})
+    return {"favourites": ((doc or {}).get("admin_nav") or {}).get("favourites", [])}
+
+
+@api.put("/me/admin-nav")
+async def save_admin_nav(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    favs = [str(x)[:40] for x in (payload.get("favourites") or [])][:12]
+    await db.users.update_one({"_id": ObjectId(user["id"])},
+                              {"$set": {"admin_nav": {"favourites": favs, "updated_at": iso(now_utc())}}})
+    return {"favourites": favs}
+
+
 @api.get("/me/verification")
 async def my_verification(user: dict = Depends(get_current_user)):
     doc = await db.users.find_one({"_id": ObjectId(user["id"])},
@@ -5495,6 +5509,50 @@ async def site_content() -> dict:
     saved = {d["key"]: d.get("data", {}) for d in await db.site_content.find({}).limit(50).to_list(50)}
     return {k: (saved.get(k) or v) for k, v in DEFAULT_SITE_CONTENT.items()} | {
         k: v for k, v in saved.items() if k not in DEFAULT_SITE_CONTENT}
+
+
+@api.get("/sitemap.xml")
+async def sitemap_xml():
+    """Dynamic sitemap built from live published content."""
+    base = (FRONTEND_URL or "https://buddilio.com").rstrip("/")
+    urls = [("/", "1.0"), ("/events", "0.9"), ("/passes", "0.8"), ("/membership", "0.8"),
+            ("/discover", "0.8"), ("/organisers", "0.7"), ("/safety", "0.7")]
+    pages = await db.cms_pages.find({"status": {"$ne": "draft"}}, {"slug": 1, "last_updated": 1}) \
+        .limit(200).to_list(200)
+    lastmod = {}
+    for pg in pages:
+        urls.append((f"/p/{pg['slug']}", "0.6"))
+        if pg.get("last_updated"):
+            lastmod[f"/p/{pg['slug']}"] = str(pg["last_updated"])[:10]
+    for c in await db.cities.find({}, {"name": 1}).limit(300).to_list(300):
+        if c.get("name"):
+            urls.append((f"/city/{city_slug(c['name'])}", "0.8"))
+    for country in COUNTRIES:
+        for name in country["cities"]:
+            urls.append((f"/city/{city_slug(name)}", "0.8"))
+    for ev in await db.events.find({"status": "published"}, {"_id": 1, "updated_at": 1}) \
+            .sort("starts_at", -1).limit(500).to_list(500):
+        urls.append((f"/events/{ev['_id']}", "0.7"))
+    seen, body = set(), []
+    for loc, pri in urls:
+        if loc in seen:
+            continue
+        seen.add(loc)
+        mod = f"<lastmod>{lastmod[loc]}</lastmod>" if loc in lastmod else ""
+        body.append(f"<url><loc>{base}{loc}</loc>{mod}<priority>{pri}</priority></url>")
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>'
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + "".join(body) + "</urlset>")
+    return Response(content=xml, media_type="application/xml",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+@api.post("/admin/cms/seed-policies")
+async def seed_policy_pages(mode: str = "missing", user: dict = Depends(require_perm("content:manage"))):
+    """Fills the standard policy/information pages. mode=missing never touches existing pages."""
+    from scripts.seed_policies import seed as seed_pages
+    res = await seed_pages(db, only_missing=(mode != "all"))
+    await audit(user, "CMS_POLICIES_SEEDED", "cms_page", "", res)
+    return res
 
 
 @api.get("/site-content")

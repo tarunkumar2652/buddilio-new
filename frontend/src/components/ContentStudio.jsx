@@ -113,6 +113,17 @@ export const Pages = () => {
           className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-slate-900 px-4 py-2.5 text-sm font-bold text-white">
           <Plus className="h-4 w-4" />New page
         </button>
+        <button onClick={async () => {
+          if (!window.confirm("Fill any missing standard policy/information pages? Existing pages are left untouched.")) return;
+          try {
+            const { data } = await api.post("/admin/cms/seed-policies?mode=missing");
+            toast.success(data.created.length ? `Added ${data.created.length} page(s): ${data.created.join(", ")}` : "Nothing missing — all standard pages exist.");
+            load();
+          } catch (e) { toast.error(errMsg(e)); }
+        }} data-testid="page-seed-policies"
+          className="w-full rounded-full border border-slate-200 px-4 py-2.5 text-xs font-bold">
+          Fill missing policy pages
+        </button>
         {items.map((p) => (
           <button key={p.id} onClick={() => setSel({ ...BLANK, ...p, blocks: p.blocks || [] })}
             data-testid={`page-select-${p.slug}`}

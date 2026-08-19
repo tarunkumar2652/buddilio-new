@@ -32,7 +32,8 @@ export const downloadAgreementPdf = async (id, label) => {
 const BLANK = {
   legal_name: "", trade_name: "", vendor_kind: "organiser", contact_person: "", email: "", phone: "",
   registered_address: "", operating_address: "", pan: "", gstin: "", registration_details: "",
-  bank_account_name: "", bank_account_number: "", bank_ifsc: "", service_category: "",
+  bank_account_name: "", bank_account_number: "", bank_ifsc: "", bank_name: "", bank_branch: "",
+  bank_account_type: "current", bank_swift: "", upi_id: "", service_category: "",
   service_description: "", city: "", country: "India", website: "", licenses: "",
 };
 
@@ -159,14 +160,42 @@ const Profile = ({ vendor, meta, onSaved }) => {
           onChange={(e) => setF({ ...f, registration_details: e.target.value })} className={cls} /></F>
         <F label="Website / social"><input value={f.website} data-testid="vendor-website"
           onChange={(e) => setF({ ...f, website: e.target.value })} className={cls} /></F>
-        <F label="Bank account name"><input value={f.bank_account_name} data-testid="vendor-bank-name"
-          onChange={(e) => setF({ ...f, bank_account_name: e.target.value })} className={cls} /></F>
-        <F label="Bank account number"><input value={f.bank_account_number} data-testid="vendor-bank-account"
-          onChange={(e) => setF({ ...f, bank_account_number: e.target.value })} className={cls} /></F>
-        <F label="IFSC"><input value={f.bank_ifsc} data-testid="vendor-ifsc"
-          onChange={(e) => setF({ ...f, bank_ifsc: e.target.value.toUpperCase() })} className={cls} /></F>
         <F label="Licences / permits held"><input value={f.licenses} data-testid="vendor-licenses"
           onChange={(e) => setF({ ...f, licenses: e.target.value })} className={cls} /></F>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-5" data-testid="vendor-banking">
+        <p className="font-bold">Banking details for payment transfer</p>
+        <p className="mt-1 text-sm text-slate-500">
+          Settlements are transferred only to this account. Upload a <b>cancelled cheque</b> or a recent
+          <b> bank statement</b> in the Documents tab — one of the two is mandatory before activation.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <F label="Account holder name"><input value={f.bank_account_name} data-testid="vendor-bank-name"
+            onChange={(e) => setF({ ...f, bank_account_name: e.target.value })} className={cls} /></F>
+          <F label="Bank name"><input value={f.bank_name} data-testid="vendor-bank-bankname"
+            onChange={(e) => setF({ ...f, bank_name: e.target.value })} className={cls} /></F>
+          <F label="Branch"><input value={f.bank_branch} data-testid="vendor-bank-branch"
+            onChange={(e) => setF({ ...f, bank_branch: e.target.value })} className={cls} /></F>
+          <F label="Account number"><input value={f.bank_account_number} data-testid="vendor-bank-account"
+            onChange={(e) => setF({ ...f, bank_account_number: e.target.value })} className={cls} /></F>
+          <F label="Account type">
+            <select value={f.bank_account_type} data-testid="vendor-bank-account-type"
+              onChange={(e) => setF({ ...f, bank_account_type: e.target.value })} className={cls}>
+              {(meta.bank_account_types || ["current", "savings"]).map((t) => (
+                <option key={t} value={t}>
+                  {{ current: "Current", savings: "Savings", cc: "Cash credit", od: "Overdraft" }[t] || t}
+                </option>
+              ))}
+            </select>
+          </F>
+          <F label="IFSC"><input value={f.bank_ifsc} data-testid="vendor-ifsc"
+            onChange={(e) => setF({ ...f, bank_ifsc: e.target.value.toUpperCase() })} className={cls} /></F>
+          <F label="SWIFT / BIC" hint="Only for international transfers."><input value={f.bank_swift}
+            data-testid="vendor-bank-swift" onChange={(e) => setF({ ...f, bank_swift: e.target.value.toUpperCase() })} className={cls} /></F>
+          <F label="UPI ID (optional)"><input value={f.upi_id} data-testid="vendor-upi"
+            onChange={(e) => setF({ ...f, upi_id: e.target.value })} className={cls} /></F>
+        </div>
       </div>
       <F label="Registered address"><textarea rows={2} value={f.registered_address} data-testid="vendor-reg-address"
         onChange={(e) => setF({ ...f, registered_address: e.target.value })} className={cls} /></F>
@@ -197,8 +226,9 @@ const Documents = ({ docs, meta, vendor, onSaved }) => {
   return (
     <div className="space-y-5" data-testid="vendor-documents">
       <p className="text-sm text-slate-500">
-        PAN, bank proof and address proof are mandatory. Buddilio can't activate a vendor while a mandatory
-        document is missing or expired.
+        PAN, address proof and a bank proof — a <b>cancelled cheque</b> or a recent <b>bank statement</b> —
+        are mandatory. Buddilio can't activate a vendor or transfer settlements while a mandatory document
+        is missing or expired.
       </p>
       <div className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="grid gap-3 sm:grid-cols-2">

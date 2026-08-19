@@ -348,6 +348,16 @@ const AgreementDetail = ({ id, onClose }) => {
                 ))}
               </tbody>
             </table>
+            {d.banking_rows?.length > 0 && (
+              <div className="rounded-2xl border border-slate-200 p-4" data-testid="detail-banking">
+                <p className="font-bold">Banking details for payment transfer</p>
+                <table className="mt-2 w-full text-sm"><tbody className="divide-y divide-slate-100">
+                  {d.banking_rows.map(([k, val]) => (
+                    <tr key={k}><td className="py-1.5 pr-4 text-slate-500">{k}</td><td className="py-1.5 font-semibold">{val}</td></tr>
+                  ))}
+                </tbody></table>
+              </div>
+            )}
             {d.acceptance && (
               <div className="rounded-2xl border border-slate-200 p-4 text-sm" data-testid="detail-acceptance">
                 <p className="font-bold">Acceptance record</p>

@@ -51,11 +51,18 @@ DOC_TYPES = [
     {"key": "trade_license", "label": "Trade licence", "required": False},
     {"key": "service_license", "label": "Service-specific licence", "required": False},
     {"key": "insurance", "label": "Insurance", "required": False},
-    {"key": "bank_proof", "label": "Bank proof", "required": True},
+    {"key": "cancelled_cheque", "label": "Cancelled cheque", "required": False,
+     "hint": "Cancelled cheque or bank statement is mandatory for payment transfer."},
+    {"key": "bank_statement", "label": "Bank statement", "required": False,
+     "hint": "Recent statement showing account name, number and IFSC."},
+    {"key": "bank_proof", "label": "Other bank proof", "required": False},
     {"key": "address_proof", "label": "Address proof", "required": True},
     {"key": "other", "label": "Other document", "required": False},
 ]
 REQUIRED_DOCS = [d["key"] for d in DOC_TYPES if d["required"]]
+# Any one of these satisfies the mandatory bank-proof requirement for payment transfer.
+BANK_PROOF_DOCS = ["cancelled_cheque", "bank_statement", "bank_proof"]
+BANK_FIELDS = ["bank_account_name", "bank_account_number", "bank_ifsc"]
 TERMINATION_REASONS = ["vendor_request", "buddilio_decision", "compliance", "fraud", "safety",
                        "repeated_cancellation", "poor_service", "non_payment", "breach",
                        "business_closure", "other"]
@@ -166,6 +173,25 @@ def commercial_rows(s: dict) -> list[tuple[str, str]]:
     ]
 
 
+def mask_account(number: str) -> str:
+    num = (number or "").strip()
+    return f"{'•' * max(len(num) - 4, 0)}{num[-4:]}" if len(num) > 4 else (num or "—")
+
+
+def banking_rows(v: dict, *, mask: bool = False) -> list[tuple[str, str]]:
+    acc = v.get("bank_account_number") or ""
+    return [
+        ("Account holder name", v.get("bank_account_name") or "—"),
+        ("Bank name", v.get("bank_name") or "—"),
+        ("Branch", v.get("bank_branch") or "—"),
+        ("Account number", mask_account(acc) if mask else (acc or "—")),
+        ("Account type", (v.get("bank_account_type") or "current").title()),
+        ("IFSC", v.get("bank_ifsc") or "—"),
+        ("SWIFT / BIC", v.get("bank_swift") or "—"),
+        ("UPI ID", v.get("upi_id") or "—"),
+    ]
+
+
 def agreement_sections(vendor: dict, s: dict, entity: dict) -> list[tuple[str, list[str]]]:
     """The master agreement. Every commercial number is read from the schedule, never hard-coded."""
     cur = s.get("currency", "INR")
@@ -245,6 +271,14 @@ def agreement_sections(vendor: dict, s: dict, entity: dict) -> list[tuple[str, l
             f"Settlement runs on a {s.get('settlement_cycle', 'T+7')} cycle after the qualifying transaction "
             "is completed, net of commission, platform fees where borne by the Vendor, refunds, chargebacks "
             "and permitted deductions. Statements are available in the Vendor portal.",
+        ]),
+        ("Banking and payment transfer details", [
+            "Settlements are transferred only to the Vendor bank account recorded below: "
+            + " · ".join(f"{k}: {val}" for k, val in banking_rows(vendor)) + ".",
+            "The Vendor must support these details with a cancelled cheque or a recent bank statement in the "
+            "name of the account holder. Buddilio may withhold settlement until that proof is verified. Any "
+            "change of bank account must be notified through the Vendor portal with fresh proof and is "
+            "re-verified before the next transfer.",
         ]),
         ("Taxes", [
             "Each party is responsible for its own taxes. The Vendor is responsible for all taxes applicable "
@@ -409,7 +443,15 @@ def agreement_pdf(agreement: dict, vendor: dict, schedule: dict, acceptance: dic
                                ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                ("TOPPADDING", (0, 0), (-1, -1), 4),
                                ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
-    flow += [table, Spacer(1, 7 * mm)]
+    flow += [table, Spacer(1, 6 * mm), _p("Banking details for payment transfer", 12, INK, bold=True),
+             Spacer(1, 2 * mm)]
+    brows = [[_p(k, 8.5, MUTED, bold=True), _p(str(val), 8.5)] for k, val in banking_rows(vendor)]
+    btable = Table(brows, colWidths=[62 * mm, 112 * mm])
+    btable.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.3, LINE),
+                                ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    flow += [btable, Spacer(1, 2 * mm),
+             _p("Supported by a cancelled cheque or recent bank statement held on file.", 7.5, MUTED),
+             Spacer(1, 7 * mm)]
 
     for i, (title, paras) in enumerate(agreement_sections(vendor, schedule, ent), start=1):
         flow.append(_p(f"{i}. {title}", 10, INK, bold=True))

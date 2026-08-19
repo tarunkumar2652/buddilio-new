@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 35 full-stack verification. Ran the previously-authored pytest (test_iteration35_nav_banking.py) after repairing three test-side defects (wrong admin agreement route, wrong vendor-profile payload keys, wrong PDF route) — 13/13 now pass. Authored and ran a new suite test_iteration35_sitemap_policies.py (12 tests) covering the dynamic sitemap, robots.txt, seed-policies RBAC/idempotency and footer page content depth — all pass. Backend total 25/25. Playwright verified admin sidebar scroll (position: static, 'Team & roles' reachable), 390px 'All sections' drawer, sidebar search (filter -> 'Results', Enter opens Payments, clear restores groups, no-results testid), admin favourites (pin -> 'Favourites' group, survives reload, unpins), vendor banking (all 8 fields save + persist after reload), Documents tab Cancelled cheque + Bank statement rows, admin agreement detail modal [data-testid=detail-banking] with all 8 rows, Admin -> Pages [data-testid=page-seed-policies] (toast 'Nothing missing — all standard pages exist'), footer with a single 'Safety Centre' link and legible 14px legal text, and all five thin-page slugs rendering multi-section content. No blocking issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /sitemap.xml (frontend path)", "issue": "Legacy static sitemap URL now returns the SPA index.html with 200 text/html instead of a 301 to /api/sitemap.xml or a 404. Crawlers with the old URL cached get HTML. Recommend a redirect."},
+      {"endpoint": "POST /api/vendor/profile", "issue": "Contract note (not a bug): requires 'email' and uses 'vendor_kind'/'phone' — older tests/clients sending contact_email/kind get a 422. Worth documenting."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "VendorAgreement banking", "issue": "Account type <select> renders raw enum values ('savings', 'current', 'cc', 'od') instead of human labels (Savings / Current / Cash credit / Overdraft); admin/PDF views correctly show 'Savings'.", "selector": "[data-testid=vendor-bank-account-type]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/p/grievance", "issues": ["Thinnest footer page: ~560 rendered chars and one of the three blocks is only a 'Related pages' link list. Consider adding escalation timelines/SLA and nodal-officer detail so it matches the depth of /p/trust (~2.1k chars)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration35_nav_banking.py",
+    "/app/backend/tests/test_iteration35_sitemap_policies.py",
+    "/app/test_reports/pytest/iteration35.xml"
+  ],
+  "action_items": [
+    "Optional: redirect /sitemap.xml -> /api/sitemap.xml (301) so the removed static file does not resolve to SPA HTML.",
+    "Optional: label the vendor bank account-type options instead of showing raw enum values.",
+    "Optional: deepen /p/grievance content (SLA, escalation, nodal officer)."
+  ],
+  "critical_code_review_comments": [
+    "seed_policies.seed(only_missing=True) is correctly non-destructive and idempotent (2nd run: 0 created, 16 skipped); page depth lives in the 'blocks' array, not 'content' — future tests must read blocks too.",
+    "GET/PUT /api/me/admin-nav sanitises and caps favourites at 12, rejects anonymous access and is per-account isolated — verified.",
+    "docs_complete() correctly treats cancelled_cheque OR bank_statement (OR other bank_proof) as satisfying the bank-proof requirement, and PATCH /admin/vendor-profiles/{id}/status returns 400 naming 'cancelled cheque' when missing.",
+    "Admin.jsx sidebar is intentionally non-sticky (position: static) and search/favourites logic is contained; no _id leakage seen in /api/vendor/profile or /api/cms/{slug} responses."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration35_nav_banking.py",
+    "/app/backend/tests/test_iteration35_sitemap_policies.py"
+  ],
+  "success_rate": {"backend": "100% (25/25)", "frontend": "100% of flows tested (10/10)"},
+  "seed_data_creation": "Temporary vendor 'TEST Bank Proof LLP' created and removed by the test fixture. Deleted a leftover 'TEST_ Incomplete Vendor' profile from an earlier iteration that was polluting the admin Vendors list. SMOKE Vendor LLP banking fields were overwritten by tests and then reset via the vendor UI to realistic values (Nightfall Collective LLP / HDFC0000123 / 50100234567890 / current).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123, arjun.sethi@example.com/User@123 (login returns access_token)",
+  "context_for_next_testing_agent": "Both iteration-35 pytest files pass in full; run them as regression (pytest tests/test_iteration35_nav_banking.py tests/test_iteration35_sitemap_policies.py). Admin agreement routes are /api/admin/vendor-agreements[/{id}] and the PDF is /api/vendor-agreements/{id}/pdf. Vendor profile POST needs email + vendor_kind. CMS page body lives in page['blocks'] (richtext) — the 'content' field is only the intro paragraph. Admin sidebar is intentionally static/non-sticky. Admin UI: agreements tab -> [data-testid=agr-view-agreements] -> [data-testid=agreement-view-<id>] opens the modal containing [data-testid=detail-banking].",
+  "rca_of_the_issue": "The three initial pytest failures were test-authoring defects, not product bugs: (1) the test called /api/admin/agreements which does not exist (real route: /api/admin/vendor-agreements), (2) it posted vendor profile keys contact_email/contact_phone/kind while VendorIn defines email/phone/vendor_kind and requires email -> 422, (3) the PDF route is /api/vendor-agreements/{id}/pdf, not under /admin. After correcting the test to the real contracts, every iteration-35 backend behaviour passed."
+}

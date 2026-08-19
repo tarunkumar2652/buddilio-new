@@ -635,6 +635,28 @@ PAGES = [
              text("Grievance Officer",
                   p(f"{ENTITY['grievance']} · {ENTITY['name']} · {ENTITY['address']} · "
                     f"<a href=\"mailto:{ENTITY['email']}\">{ENTITY['email']}</a>")),
+             text("How we handle a grievance",
+                  ol(["<b>Acknowledgement</b> — we confirm receipt within 48 hours of a written complaint.",
+                      "<b>Review</b> — we examine the account, booking, payment or report history involved and "
+                      "may ask you for further information.",
+                      "<b>Action</b> — we aim to resolve or give a substantive response within 30 days of "
+                      "acknowledgement. Safety and fraud matters are prioritised and actioned sooner.",
+                      "<b>Outcome</b> — you receive the decision in writing, including any refund, moderation "
+                      "or account action taken.",
+                      "<b>Escalation</b> — if you are not satisfied, reply to the same thread marking it "
+                      "'Escalation — Grievance Officer' and it is reviewed again at officer level."])),
+             text("What we can and cannot resolve",
+                  p("We can help with account access, membership and billing, booking and refund disputes "
+                    "under the published policy, content and profile moderation, privacy requests and vendor "
+                    "service complaints raised through the platform.")
+                  + p("We cannot act as a court or arbitrator between members, recover money paid outside "
+                      "Buddilio, or intervene in matters that require the police or another authority — for "
+                      "those, contact the appropriate authority first and tell us the reference so we can "
+                      "cooperate.")),
+             text("Data and privacy requests",
+                  p("Requests to access, correct, export or delete your personal data are handled under the "
+                    + link("Privacy Policy", "/p/privacy") + " and are answered within the timelines stated "
+                    "there. Write from your registered email address so we can verify you.")),
              related_block("grievance"))),
 
     # ---------------- Cities ----------------
@@ -651,6 +673,23 @@ PAGES = [
              text("Browse by city",
                   p("Open " + link("Events", "/events") + " or " + link("Companions", "/companions")
                     + " and pick your city to see what's live right now.")),
+             text("India", ul(["Delhi NCR (including Gurugram and Noida)", "Mumbai", "Bengaluru", "Hyderabad",
+                              "Pune", "Chandigarh", "Jaipur", "Goa", "Kolkata", "Chennai", "Ahmedabad"])),
+             text("International", ul(["Dubai and Abu Dhabi", "Singapore and Bangkok",
+                                       "London and Manchester", "New York, Los Angeles, Miami and Austin",
+                                       "Toronto and Vancouver", "Sydney and Melbourne",
+                                       "Paris, Berlin, Barcelona and Madrid", "Tokyo"])),
+             text("What's available in a city",
+                  p("Each city can carry a different mix depending on local partners and demand:")
+                  + ul(["Curated events and meet-ups", "Experience passes and day plans",
+                        "Verified companions for social outings", "Travel crew and city hosts",
+                        "Partner venues, dining and nightlife"])
+                  + p("If a category is quiet in your city, it usually means we are still onboarding "
+                      "partners there — new listings appear as soon as they are approved.")),
+             text("Want Buddilio in your city?",
+                  p("Members can request a city and organisers can apply to list from the "
+                    + link("Organisers", "/organisers") + " page. We prioritise cities by member demand and "
+                    "partner readiness.")),
              related_block("cities"))),
 
     # ---------------- Insights ----------------
@@ -664,8 +703,24 @@ PAGES = [
                        "Dining", "Community", "Safety", "Social confidence", "Experience discovery"])
                  + p("Content published on the Buddilio blog is intended for general informational purposes "
                      "and should not be treated as professional advice unless expressly stated."),
-         blocks=blocks(related_block("insights"))),
-
+         blocks=blocks(
+             text("What we write about",
+                  p("Short, practical reads to help you get more out of going out:")
+                  + ul(["City guides — where to go, when, and what it costs",
+                        "Event round-ups and what makes a good first meet-up",
+                        "Social confidence for solo members joining a group",
+                        "Dining, nightlife and daytime experience picks",
+                        "Travel and weekend plans with a crew",
+                        "Safety habits that experienced members swear by"])),
+             text("Start here",
+                  p("Browse live plans on " + link("Events", "/events") + ", pick a city on "
+                    + link("Cities We Serve", "/p/cities") + ", or read the "
+                    + link("Safety Centre", "/safety") + " before your first outing.")),
+             text("A note on our content",
+                  p("Articles are general information only and are not professional, legal, medical or "
+                    "financial advice. Availability, pricing and venue details change — always check the "
+                    "live listing before you book.")),
+             related_block("insights"))),
     # ---------------- Trust ----------------
     dict(slug="trust", title="Safety & Trust",
          seo_title="Safety & Trust | Buddilio",
@@ -680,20 +735,48 @@ PAGES = [
                  + p("However, no platform can guarantee that every user or interaction will be safe. Users "
                      "should always exercise independent judgment."),
          blocks=blocks(
+             text("How we verify", ul([
+                 "Email verification on every account",
+                 "Optional government-ID verification with a visible verified badge",
+                 "Photo moderation before profile pictures go live",
+                 "Companion applications reviewed manually before approval",
+                 "Vendors, organisers and travel providers onboarded under a signed agreement with PAN, "
+                 "address proof and bank proof on file"])),
+             text("Payments and money", ul([
+                 "Payments are collected through established payment gateways — Buddilio never stores your "
+                 "full card details",
+                 "Every purchase generates an invoice and a receipt you can download from your ledger",
+                 "Published cancellation and refund rules apply to each booking",
+                 "Vendor settlements run on a fixed cycle and are fully auditable"])),
+             text("Reporting and moderation", ul([
+                 "One-tap reporting on profiles, events, reviews and messages",
+                 "Reports are queued for human review, not auto-dismissed",
+                 "Outcomes include warnings, hidden content, suspension or a permanent ban",
+                 "Repeat or serious safety breaches remove an account and its listings"])),
              text("Every Buddilio user is responsible for", ul([
                  "Providing truthful information", "Respecting other users",
                  "Protecting personal information", "Protecting financial information", "Following the law",
                  "Following Community Guidelines", "Following Safety Centre recommendations",
                  "Reporting suspicious behaviour", "Respecting consent and boundaries"])),
+             text("What we cannot promise",
+                  p("Buddilio is a discovery platform, not a guarantor. We do not run background checks on "
+                    "every member, we cannot supervise offline meetings, and vendors are independent "
+                    "businesses responsible for their own services. Meet in public, tell someone your plan, "
+                    "and use the " + link("Report a Concern", "/p/report") + " option early rather than "
+                    "late.")),
              related_block("trust"))),
 ]
 
 
-async def main():
-    db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+async def seed(db, *, only_missing: bool = False) -> dict:
+    """Create/refresh the policy pages. only_missing leaves existing pages untouched."""
     now = datetime.now(timezone.utc).isoformat()
+    created, updated, skipped = [], [], []
     for page in PAGES:
         existing = await db.cms_pages.find_one({"slug": page["slug"]})
+        if existing and only_missing:
+            skipped.append(page["slug"])
+            continue
         body = {**page, "status": "published", "nav_header": False, "updated_at": now,
                 "last_updated": now, "policy_version": (existing or {}).get("policy_version", 0) + 1,
                 "updated_by_name": "Content seed"}
@@ -705,18 +788,25 @@ async def main():
                 "seo_description": existing.get("seo_description", ""),
                 "archived_at": now, "changed_by": existing.get("updated_by_name", "unknown")})
             await db.cms_pages.update_one({"_id": existing["_id"]}, {"$set": body})
-            print(f"updated  /p/{page['slug']} → v{body['policy_version']}")
+            updated.append(page["slug"])
         else:
             await db.cms_pages.insert_one({**body, "created_at": now})
-            print(f"created  /p/{page['slug']}")
+            created.append(page["slug"])
     await db.settings.update_one({}, {"$set": {
         "footer_legal_note": FOOTER_NOTE,
         "vendor_entity": {"legal_name": ENTITY["name"], "entity_type": "Registered firm",
                           "signatory": "Manish Kumar", "signatory_title": "Authorised Signatory",
                           "email": ENTITY["email"], "msme": ENTITY["msme"], "gstin": "",
                           "address": ENTITY["address"], "jurisdiction": ENTITY["jurisdiction"]},
-    }})
-    print("settings updated")
+    }}, upsert=True)
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
+async def main():
+    db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+    res = await seed(db, only_missing="--missing" in sys.argv)
+    for k in ("created", "updated", "skipped"):
+        print(f"{k}: {', '.join(res[k]) or '—'}")
 
 
 if __name__ == "__main__":

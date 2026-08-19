@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Search, Star } from "lucide-react";
 import { api, errMsg, money, fmtDate, fileUrl } from "@/lib/api";
 import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
@@ -143,13 +143,34 @@ export default function Admin() {
   const nav = NAV.filter(([, , p]) => !perms || perms.includes(p));
   const [tab, setTab] = useState("");
   const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [favs, setFavs] = useState([]);
   const active = tab && nav.some(([v]) => v === tab) ? tab : (nav[0]?.[0] || "dashboard");
   const label = (nav.find(([v]) => v === active) || [])[1] || "Dashboard";
-  const groups = GROUPS
+
+  useEffect(() => {
+    api.get("/me/admin-nav").then(({ data }) => setFavs(data.favourites || [])).catch(() => setFavs([]));
+  }, []);
+
+  const toggleFav = (v) => {
+    const next = favs.includes(v) ? favs.filter((x) => x !== v) : [...favs, v];
+    setFavs(next);
+    api.put("/me/admin-nav", { favourites: next })
+      .then(() => toast.success(favs.includes(v) ? "Removed from favourites" : "Pinned to favourites"))
+      .catch((e) => toast.error(errMsg(e)));
+  };
+
+  const term = q.trim().toLowerCase();
+  const matches = term ? nav.filter(([, l]) => l.toLowerCase().includes(term)) : [];
+  const baseGroups = GROUPS
     .map(([title, keys]) => [title, keys.map((k) => nav.find(([v]) => v === k)).filter(Boolean)])
     .filter(([, items]) => items.length);
+  const favGroup = favs.map((k) => nav.find(([v]) => v === k)).filter(Boolean);
+  const groups = term
+    ? (matches.length ? [["Results", matches]] : [])
+    : (favGroup.length ? [["Favourites", favGroup], ...baseGroups] : baseGroups);
 
-  const pick = (v) => { setTab(v); setOpen(false); };
+  const pick = (v) => { setTab(v); setOpen(false); setQ(""); };
 
   return (
     <div className="grid lg:grid-cols-[264px_1fr]" data-testid="admin-page">
@@ -159,22 +180,39 @@ export default function Admin() {
         <div className="p-6" data-testid="admin-sidebar-inner">
           <p className="overline">Control centre</p>
           <p className="mt-1.5 font-display text-lg font-bold">Buddilio admin</p>
-          <nav className="mt-7 space-y-7">
+          <div className="relative mt-5">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} data-testid="admin-nav-search"
+              onKeyDown={(e) => { if (e.key === "Enter" && matches[0]) pick(matches[0][0]); }}
+              placeholder="Search sections…"
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-[13px] outline-none focus:border-brand-magenta focus:bg-white" />
+          </div>
+          <nav className="mt-6 space-y-7">
             {groups.map(([title, items]) => (
               <div key={title}>
                 <p className="px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">{title}</p>
                 <div className="mt-2 space-y-0.5">
                   {items.map(([v, l]) => (
-                    <button key={v} onClick={() => pick(v)} data-testid={`admin-tab-${v}`}
-                      className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-semibold transition-colors ${
-                        active === v ? "bg-brand-magenta/10 text-brand-magenta" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"}`}>
-                      <span className={`h-1.5 w-1.5 rounded-full ${active === v ? "bg-brand-magenta" : "bg-transparent"}`} />
-                      {l}
-                    </button>
+                    <div key={`${title}-${v}`} className="group flex items-center gap-1">
+                      <button onClick={() => pick(v)} data-testid={`admin-tab-${v}`}
+                        className={`flex flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-semibold transition-colors ${
+                          active === v ? "bg-brand-magenta/10 text-brand-magenta" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${active === v ? "bg-brand-magenta" : "bg-transparent"}`} />
+                        {l}
+                      </button>
+                      <button onClick={() => toggleFav(v)} data-testid={`admin-fav-${v}`}
+                        aria-label={favs.includes(v) ? `Unpin ${l}` : `Pin ${l}`}
+                        className="rounded-md p-1.5 text-slate-300 transition-colors hover:text-amber-500">
+                        <Star className={`h-3.5 w-3.5 ${favs.includes(v) ? "fill-amber-400 text-amber-400" : ""}`} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
             ))}
+            {term && !matches.length && (
+              <p className="px-3 text-xs text-slate-400" data-testid="admin-nav-no-results">No section matches “{q}”.</p>
+            )}
           </nav>
         </div>
       </aside>

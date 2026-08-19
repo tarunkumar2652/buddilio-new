@@ -1,43 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>/</loc><priority>1.0</priority></url>
-  <url><loc>/events</loc><priority>0.9</priority></url>
-  <url><loc>/cities</loc><priority>0.9</priority></url>
-  <url><loc>/city/delhi-ncr</loc><priority>0.9</priority></url>
-  <url><loc>/city/gurugram</loc><priority>0.8</priority></url>
-  <url><loc>/city/noida</loc><priority>0.8</priority></url>
-  <url><loc>/city/mumbai</loc><priority>0.9</priority></url>
-  <url><loc>/city/bengaluru</loc><priority>0.9</priority></url>
-  <url><loc>/city/hyderabad</loc><priority>0.8</priority></url>
-  <url><loc>/city/pune</loc><priority>0.8</priority></url>
-  <url><loc>/city/goa</loc><priority>0.9</priority></url>
-  <url><loc>/city/dubai</loc><priority>0.9</priority></url>
-  <url><loc>/city/abu-dhabi</loc><priority>0.8</priority></url>
-  <url><loc>/city/singapore</loc><priority>0.9</priority></url>
-  <url><loc>/city/london</loc><priority>0.9</priority></url>
-  <url><loc>/city/manchester</loc><priority>0.8</priority></url>
-  <url><loc>/city/new-york</loc><priority>0.9</priority></url>
-  <url><loc>/city/los-angeles</loc><priority>0.8</priority></url>
-  <url><loc>/city/miami</loc><priority>0.8</priority></url>
-  <url><loc>/city/austin</loc><priority>0.8</priority></url>
-  <url><loc>/city/toronto</loc><priority>0.8</priority></url>
-  <url><loc>/city/vancouver</loc><priority>0.8</priority></url>
-  <url><loc>/city/sydney</loc><priority>0.8</priority></url>
-  <url><loc>/city/melbourne</loc><priority>0.8</priority></url>
-  <url><loc>/city/berlin</loc><priority>0.8</priority></url>
-  <url><loc>/city/barcelona</loc><priority>0.8</priority></url>
-  <url><loc>/city/madrid</loc><priority>0.8</priority></url>
-  <url><loc>/city/paris</loc><priority>0.8</priority></url>
-  <url><loc>/city/bangkok</loc><priority>0.8</priority></url>
-  <url><loc>/city/tokyo</loc><priority>0.8</priority></url>
-  <url><loc>/passes</loc><priority>0.8</priority></url>
-  <url><loc>/membership</loc><priority>0.8</priority></url>
-  <url><loc>/safety</loc><priority>0.7</priority></url>
-  <url><loc>/p/about</loc><priority>0.6</priority></url>
-  <url><loc>/p/faq</loc><priority>0.6</priority></url>
-  <url><loc>/p/terms</loc><priority>0.4</priority></url>
-  <url><loc>/p/privacy</loc><priority>0.4</priority></url>
-  <url><loc>/p/refund</loc><priority>0.4</priority></url>
-  <url><loc>/p/guidelines</loc><priority>0.5</priority></url>
-  <url><loc>/p/contact</loc><priority>0.5</priority></url>
-</urlset>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://buddilio.com/api/sitemap.xml</loc></sitemap>
+</sitemapindex>

@@ -9,4 +9,4 @@ Disallow: /checkout
 Disallow: /profile
 Disallow: /notifications
 
-Sitemap: /sitemap.xml
+Sitemap: https://buddilio.com/api/sitemap.xml

@@ -51,6 +51,11 @@ class VendorIn(BaseModel):
     bank_account_name: str = ""
     bank_account_number: str = ""
     bank_ifsc: str = ""
+    bank_name: str = ""
+    bank_branch: str = ""
+    bank_account_type: Literal["current", "savings", "cc", "od"] = "current"
+    bank_swift: str = ""
+    upi_id: str = ""
     service_category: str = ""
     service_description: str = ""
     city: str = ""
@@ -202,9 +207,10 @@ def diff_schedules(old: dict, new: dict) -> list[dict]:
 
 
 async def docs_complete(vendor_id: str) -> bool:
+    """PAN + address proof, plus one bank proof (cancelled cheque or bank statement)."""
     docs = await D["db"].vendor_documents.find({"vendor_id": vendor_id}).to_list(100)
     approved = {d["doc_type"] for d in docs if d.get("status") == "approved"}
-    return all(k in approved for k in agr.REQUIRED_DOCS)
+    return all(k in approved for k in agr.REQUIRED_DOCS) and bool(approved & set(agr.BANK_PROOF_DOCS))
 
 
 async def vendor_for_order(order: dict) -> str:
@@ -293,6 +299,8 @@ def register(deps: dict):
                 "commission_types": agr.COMMISSION_TYPES, "rate_policies": agr.RATE_POLICIES,
                 "refund_responsibility": agr.REFUND_RESPONSIBILITY, "discount_funding": agr.DISCOUNT_FUNDING,
                 "doc_types": agr.DOC_TYPES, "termination_reasons": agr.TERMINATION_REASONS,
+                "bank_proof_options": agr.BANK_PROOF_DOCS,
+                "bank_account_types": ["current", "savings", "cc", "od"],
                 "entity": await entity_settings(),
                 "default_commission_percent": float(s.get("platform_commission_percent") or 25),
                 "default_platform_fee_percent": float(s.get("platform_fee_percent") or 10)}
@@ -321,7 +329,8 @@ def register(deps: dict):
     @api.post("/vendor/profile/submit")
     async def submit_profile(user: dict = Depends(get_current_user)):
         v = await my_vendor(user)
-        missing = [f for f in ("legal_name", "contact_person", "pan", "registered_address", "service_category")
+        missing = [f for f in ("legal_name", "contact_person", "pan", "registered_address", "service_category",
+                               "bank_account_name", "bank_account_number", "bank_ifsc", "bank_name")
                    if not (v.get(f) or "").strip()]
         if missing:
             raise HTTPException(status_code=400,
@@ -338,7 +347,9 @@ def register(deps: dict):
             return {"vendor": None, "documents": [], "required": agr.REQUIRED_DOCS}
         docs = await db.vendor_documents.find({"vendor_id": str(doc["_id"])}).to_list(100)
         return {"vendor": clean(doc), "documents": [clean(d) for d in docs],
-                "required": agr.REQUIRED_DOCS, "documents_complete": await docs_complete(str(doc["_id"]))}
+                "required": agr.REQUIRED_DOCS, "bank_proof_options": agr.BANK_PROOF_DOCS,
+                "banking_rows": agr.banking_rows(clean(doc)),
+                "documents_complete": await docs_complete(str(doc["_id"]))}
 
     @api.post("/vendor/documents")
     async def add_document(payload: DocIn, user: dict = Depends(get_current_user)):
@@ -554,7 +565,8 @@ def register(deps: dict):
         v = await vendor_or_404(vid)
         if payload.status == "approved" and not await docs_complete(vid):
             raise HTTPException(status_code=400,
-                                detail="Approve the mandatory documents (PAN, bank proof, address proof) first.")
+                                detail="Approve the mandatory documents first: PAN, address proof and a bank "
+                                       "proof (cancelled cheque or bank statement).")
         await db.vendor_profiles.update_one(
             {"_id": v["_id"]}, {"$set": {"status": payload.status, "status_reason": payload.reason,
                                          "status_changed_at": iso(now_utc())}})
@@ -731,7 +743,8 @@ def register(deps: dict):
         acc = await db.agreement_acceptances.find_one({"agreement_id": aid, "version": ag["version"]})
         entity = await entity_settings()
         schedules = await db.commercial_schedules.find({"vendor_id": ag["vendor_id"]}).sort("version", -1).to_list(50)
-        return {"agreement": clean(ag), "vendor": clean(v), "schedule": clean(sched) if sched else None,
+        return {"agreement": clean(ag), "vendor": clean(v), "banking_rows": agr.banking_rows(clean(v)),
+                "schedule": clean(sched) if sched else None,
                 "acceptance": clean(acc) if acc else None, "entity": entity,
                 "schedules": [clean(s) for s in schedules],
                 "commercial_rows": agr.commercial_rows(clean(sched)) if sched else [],
