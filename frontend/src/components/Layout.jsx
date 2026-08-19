@@ -48,7 +48,8 @@ const footerGroups = (site) => {
   (site?.pages || []).filter((p) => p.footer_group).forEach((p) => {
     const g = groups.find((x) => x.title === p.footer_group);
     const link = { label: p.label, to: `/p/${p.slug}` };
-    if (g) { if (!g.links.some((l) => l.to === link.to)) g.links.push(link); }
+    const same = (l) => l.to === link.to || (l.label || "").trim().toLowerCase() === (link.label || "").trim().toLowerCase();
+    if (g) { if (!g.links.some(same)) g.links.push(link); }
     else groups.push({ title: p.footer_group, links: [link] });
   });
   return groups;
@@ -115,17 +116,17 @@ export const Navbar = () => {
     <>
       <header className="sticky top-0 z-50" data-testid="site-header">
         <div className="brand-rule" />
-        <div className="glass border-b border-slate-200">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 h-[70px] flex items-center gap-4">
+        <div className="glass border-b border-slate-200/80">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-[76px] flex items-center gap-5">
             <Link to="/" className="shrink-0 transition-transform hover:scale-[1.02]" data-testid="nav-logo">
               <Logo />
             </Link>
 
-            <nav className="hidden lg:flex items-center gap-1 ml-3">
+            <nav className="hidden lg:flex items-center gap-0.5 ml-4">
               {links.map((l) => (
                 <Link key={l.to} to={l.to} data-testid={`nav-${l.label.toLowerCase()}`} data-active={loc.pathname === l.to}
-                  className={`link-underline px-3 py-2 rounded-lg text-sm font-bold transition-colors ${
-                    loc.pathname === l.to ? "text-slate-900" : "text-slate-600 hover:text-slate-900"}`}>
+                  className={`link-underline px-3 py-2 rounded-lg text-[13px] font-bold tracking-tight transition-colors ${
+                    loc.pathname === l.to ? "text-slate-900" : "text-slate-500 hover:text-slate-900"}`}>
                   {l.label}
                 </Link>
               ))}
@@ -172,9 +173,9 @@ export const Navbar = () => {
                   </Link>
                   {user.role === "admin" && <Link to="/admin" className="hidden sm:block text-sm font-bold px-3 py-2 rounded-lg hover:bg-slate-100" data-testid="nav-admin">Admin</Link>}
                   {user.role === "partner" && <Link to="/partner" className="hidden sm:block text-sm font-bold px-3 py-2 rounded-lg hover:bg-slate-100" data-testid="nav-partner">Partner</Link>}
-                  <Link to="/profile" data-testid="nav-profile" className="hidden sm:flex items-center gap-2">
-                    {user.photo ? <img src={fileUrl(user.photo)} alt="" className="h-9 w-9 rounded-full object-cover ring-2 ring-brand-pink/40" />
-                      : <span className="h-9 w-9 rounded-full brand-gradient text-white grid place-items-center text-xs font-bold">{user.full_name?.[0]}</span>}
+                  <Link to="/profile" data-testid="nav-profile" className="hidden sm:flex shrink-0 items-center gap-2">
+                    {user.photo ? <img src={fileUrl(user.photo)} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-brand-pink/40" />
+                      : <span className="h-9 w-9 shrink-0 rounded-full brand-gradient text-white grid place-items-center text-xs font-bold">{user.full_name?.[0]}</span>}
                   </Link>
                   <button onClick={() => { logout(); nav("/"); }} data-testid="nav-logout"
                     className="hidden sm:block shrink-0 whitespace-nowrap text-sm font-bold text-slate-600 hover:text-slate-900 px-2 py-2">Log out</button>
@@ -183,7 +184,7 @@ export const Navbar = () => {
                 <>
                   <Link to="/login" data-testid="nav-login" className="hidden sm:block text-sm font-bold px-3 py-2 rounded-lg hover:bg-slate-100">Log in</Link>
                   <Link to="/register" data-testid="nav-join"
-                    className="brand-gradient text-white text-sm font-bold rounded-full px-4 sm:px-5 py-2.5 shadow-[0_6px_18px_rgba(232,30,124,0.26)] transition-transform hover:scale-[1.03] active:scale-[.98]">
+                    className="bg-slate-900 text-white text-sm font-bold rounded-full px-4 sm:px-5 py-2.5 transition-all hover:-translate-y-0.5 hover:bg-brand-magenta">
                     Join<span className="hidden sm:inline"> Buddilio</span>
                   </Link>
                 </>
@@ -241,12 +242,15 @@ export const Navbar = () => {
 };
 
 const FOOT_LINKS = [
-  ["Explore", [["Events", "/events"], ["Cities", "/cities"], ["Passes", "/passes"], ["Membership", "/membership"],
-    ["Discover", "/discover"], ["Leaderboard", "/leaderboard"], ["Invite & earn", "/referrals"]]],
-  ["Company", [["About", "/p/about"], ["Contact", "/p/contact"], ["FAQ", "/p/faq"],
-    ["Partner with us", "/register?role=partner"]]],
-  ["Trust & Safety", [["Safety Center", "/safety"], ["Community Guidelines", "/p/guidelines"],
-    ["Terms", "/p/terms"], ["Privacy", "/p/privacy"], ["Refund Policy", "/p/refund"]]],
+  ["Buddilio", [["About Us", "/p/about"], ["How It Works", "/p/how-it-works"], ["FAQ", "/p/faq"],
+    ["Contact Us", "/p/contact"], ["Cities We Serve", "/p/cities"]]],
+  ["Safety & Trust", [["Safety Centre", "/safety"], ["Community Guidelines", "/p/guidelines"],
+    ["Report a Concern", "/p/report"], ["Trust & Verification", "/p/trust"]]],
+  ["Legal", [["Privacy Policy", "/p/privacy"], ["Terms & Conditions", "/p/terms"],
+    ["Cancellation & Refund Policy", "/p/refund"], ["Cookie Policy", "/p/cookies"],
+    ["Vendor Terms", "/p/vendor-terms"]]],
+  ["Explore", [["Events", "/events"], ["Experiences", "/passes"], ["Companions", "/discover"],
+    ["Membership", "/membership"]]],
 ];
 
 const SOCIALS = [
@@ -259,9 +263,9 @@ export const Footer = () => {
   const site = useSite();
   return (
   <footer className="relative mt-28 overflow-hidden bg-brand-ink text-white grain" data-testid="footer">
-    <div className="aurora opacity-80" />
-    <div className="relative mx-auto max-w-7xl px-4 sm:px-6 pt-16 pb-8">
-      <div className="grid gap-12 lg:grid-cols-[1.5fr_repeat(3,1fr)]">
+    <div className="aurora opacity-60" />
+    <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-20 pb-10">
+      <div className="grid gap-12 sm:grid-cols-2 xl:grid-cols-[1.3fr_repeat(4,1fr)]">
         <div>
           <Logo tone="light" />
           <p className="mt-6 text-sm text-white/70 leading-relaxed max-w-sm">
@@ -284,7 +288,7 @@ export const Footer = () => {
 
         {footerGroups(site).map((g) => (
           <div key={g.title}>
-            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/45">{g.title}</p>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/55">{g.title}</p>
             <ul className="mt-5 space-y-3">
               {(g.links || []).map(({ label, to }) => (
                 <li key={to}>
@@ -296,7 +300,7 @@ export const Footer = () => {
         ))}
       </div>
 
-      <div className="mt-14 rounded-2xl border border-white/10 bg-white/[0.04] py-4 overflow-hidden" data-testid="footer-cities">
+      <div className="mt-16 rounded-2xl border border-white/10 bg-white/[0.04] py-4 overflow-hidden" data-testid="footer-cities">
         <div className="flex w-max animate-marquee gap-8 pr-8">
           {[...CITY_STRIP, ...CITY_STRIP].map((c, i) => (
             <Link key={`${c}-${i}`} to={`/city/${citySlug(c)}`} data-testid={i < CITY_STRIP.length ? `footer-city-${citySlug(c)}` : undefined}
@@ -307,9 +311,15 @@ export const Footer = () => {
         </div>
       </div>
 
-      <div className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-white/10 pt-6">
-        <p className="text-xs text-white/45">© {new Date().getFullYear()} Buddilio Experiences · a global social club</p>
-        <p className="text-xs text-white/45">Buddilio is a social discovery platform, not a dating service. Members are 21+.</p>
+      <div className="mt-10 space-y-4 border-t border-white/10 pt-8">
+        <p className="text-sm leading-relaxed text-white/75 max-w-4xl" data-testid="footer-legal-note">
+          {site?.footer?.legal_note ||
+            "Buddilio is a social discovery and experience platform for adults aged 21+. Buddilio is not a dating or matchmaking platform. User interactions, third-party services, events and experiences may involve independent individuals or vendors. Please use the platform responsibly and review our Safety Centre, Community Guidelines, Terms & Conditions and applicable purchase policies before using our services."}
+        </p>
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+          <p className="text-sm text-white/55">© {new Date().getFullYear()} Buddilio · Gurugram-122505, Haryana · MSME UDYAM-HR-05-0203611</p>
+          <p className="text-sm text-white/55">Discover people. Discover experiences. Meet responsibly.</p>
+        </div>
       </div>
     </div>
   </footer>

@@ -7,7 +7,7 @@ import { PersonCard } from "@/components/Cards";
 import { ImageUpload } from "@/components/ImageUpload";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { PushToggle } from "@/components/PushToggle";
-import { RichText, RichHtml } from "@/components/RichText";
+import { RichText, RichHtml, plainText } from "@/components/RichText";
 import { IdVerification } from "@/components/IdVerification";
 import { MessageCircle, UserPlus, Ban, Flag, CalendarDays, Ticket } from "lucide-react";
 
@@ -136,7 +136,7 @@ export function PublicProfile() {
 
   return (
     <div className="mx-auto max-w-5xl px-4 sm:px-6 py-10 pb-28" data-testid="public-profile-page">
-      <SEO title={p.full_name} description={(p.bio || "").replace(/<[^>]*>/g, " ").slice(0, 155)} />
+      <SEO title={p.full_name} description={plainText(p.bio).slice(0, 155)} />
       <div className="rounded-3xl border border-slate-200 bg-white overflow-hidden">
         <div className="h-32 bg-slate-900" />
         <div className="px-6 sm:px-10 pb-8">

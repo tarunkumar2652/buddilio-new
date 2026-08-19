@@ -1,158 +1,99 @@
 {
-  "theme": "light",
-  "project_name": "Buddilio",
-  "description": "A modern social discovery and companionship platform for adults to find people to attend social activities, events, and lifestyle experiences. The platform bridges digital trust with physical world connection.",
-  "vibe": "Premium, trustworthy, modern, mobile-first, exclusive yet accessible (The Modern Social Club). Think Soho House aesthetics meets high-end lifestyle tech.",
-  
+  "project_context": "Buddilio - Consumer social/events marketplace + Admin Console",
+  "design_philosophy": "Elevated Editorial & Soft Utility. The brand identity shifts away from 'overwhelming pink' to a sophisticated, high-contrast neutral base where magenta and pink act purely as high-impact accents. The UI must feel spacious, authoritative, and modern. Admin panels shift from cluttered tabs to a strictly organized, focused sidebar structure.",
   "typography": {
-    "strategy": "The 'Old Money Tech' approach adapted for lifestyle. We avoid generic corporate sans-serifs for headings. We need a typeface that speaks to culture, curation, and premium experiences.",
-    "headings": {
-      "font_family": "Outfit, 'Cabinet Grotesk', sans-serif",
-      "weight": "font-semibold to font-bold",
-      "tracking": "tracking-tight",
-      "usage": "Use for all H1, H2, H3, and major callouts. Never use Inter for headings."
+    "font_pairing": {
+      "headings": "Cabinet Grotesk (replaces Outfit) - Provides a punchy, editorial, and modern feel without being generic.",
+      "body": "Satoshi (replaces Manrope) - Clean, highly legible, modern geometric sans that works beautifully for dense admin data."
     },
-    "body": {
-      "font_family": "Manrope, 'Satoshi', sans-serif",
-      "weight": "font-normal",
-      "tracking": "tracking-normal",
-      "line_height": "leading-relaxed"
-    },
-    "labels_overlines": {
-      "style": "uppercase text-xs tracking-[0.2em] font-bold text-slate-500"
-    },
-    "hierarchy_rules": [
-      "H1 (Hero): text-4xl sm:text-5xl lg:text-6xl tracking-tighter leading-[1.1]",
-      "H2 (Section): text-3xl sm:text-4xl tracking-tight",
-      "H3 (Card/Widget): text-xl sm:text-2xl",
-      "Body: text-base (mobile: text-sm)"
-    ]
-  },
-
-  "colors": {
-    "strategy": "Archetype 5: Luxury (Light Mode). Bone-white backgrounds, Midnight Navy accents, and structural grays for high-contrast, sophisticated clarity.",
-    "palette": {
-      "background": {
-        "primary": "#FAFAFA",
-        "secondary": "#FFFFFF",
-        "tertiary": "#F1F5F9"
-      },
-      "brand": {
-        "primary": "#0F172A", 
-        "primary_hover": "#1E293B",
-        "accent": "#000000"
-      },
-      "text": {
-        "primary": "#0F172A",
-        "secondary": "#475569",
-        "muted": "#94A3B8",
-        "inverse": "#FFFFFF"
-      },
-      "ui": {
-        "border": "#E2E8F0",
-        "divider": "#F1F5F9",
-        "error": "#EF4444",
-        "success": "#10B981"
-      }
-    },
-    "rules": [
-      "No pure #FFFFFF backgrounds for the main body; use #FAFAFA (Bone White) to reduce eye strain and feel more premium.",
-      "Primary actions and bold accents must use the Midnight Navy (#0F172A).",
-      "Avoid all generic 'tech blue' or 'dating app pink/red'. Maintain a neutral, sophisticated palette."
-    ]
-  },
-
-  "layouts": {
-    "strategy": "Generous spacing. The 'Bento' Grid Protocol for marketing sections and high-density, cardless/flat grids for dashboards.",
-    "spacing_scale": "p-4, p-6, p-8, p-12, p-16, p-24, p-32",
-    "patterns": {
-      "homepage": "Bento grids for 'Discover Events' and 'Featured Experiences'. Wide gaps (gap-8 to gap-12). Asymmetric alignments to break the 'template' look.",
-      "dashboards": "High-density Grid Mode. 1px solid strokes for borders (border-slate-200), max 12px border-radius (rounded-xl), minimal shadows.",
-      "cards": "Subtle roundness (rounded-2xl or rounded-3xl for marketing, rounded-xl for dashboards). Internal padding must be generous (p-6 or p-8)."
-    },
-    "navigation": "Sticky glassmorphism header (backdrop-blur-xl bg-white/80). Minimalist layout. Mobile-first bottom navigation for the PWA dashboard experience."
-  },
-
-  "visual_enhancers": {
-    "surfaces": "Flat Solid for data/dashboards (clean, clinical trust). Crystal Glassmorphism for floating navs and modal overlays.",
-    "borders": "1px delicate inner stroke (border-slate-200) to separate containers from the background.",
-    "shadows": "Ambient, diffuse shadows only (shadow-[0_8px_30px_rgb(0,0,0,0.04)]). Never use harsh default drop shadows."
-  },
-
-  "motion": {
-    "strategy": "Smooth, purposeful, premium. No excessive bouncing.",
-    "interactions": [
-      "Hover on cards: -translate-y-1, shadow-lg, border-slate-300.",
-      "Buttons: scale-[1.02] active:scale-[0.98] transition-transform duration-200.",
-      "Lists: Staggered fade-up entrances using framer-motion."
-    ]
-  },
-
-  "components": {
-    "buttons": "Pill-shaped (rounded-full) or soft-rect (rounded-xl). Primary uses bg-[#0F172A] text-white. No default HTML buttons.",
-    "inputs": "Shadcn UI forms, customized with rounded-xl, bg-white, border-slate-200, focus:ring-slate-900.",
-    "cards": "Profile cards (Companions) must focus heavily on the image (aspect ratio 3:4 or 4:5), with text overlay as a gradient from black/60 to transparent at the bottom.",
-    "toasts": "Use Sonner component (located in /app/frontend/src/components/ui/sonner.tsx) for all notifications."
-  },
-
-  "media": {
-    "image_strategy": "High-quality lifestyle imagery showcasing authentic connection. No corny stock photos. Focus on lighting, mood, and diversity.",
-    "image_urls": {
-      "hero_background": {
-        "url": "https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg",
-        "description": "Stylish group dinner with drinks in a cozy setting. Represents premium social dining."
-      },
-      "discover_nightlife": {
-        "url": "https://images.unsplash.com/photo-1760331339913-da9637154477",
-        "description": "People dancing at a formal event. Represents premium nightlife and parties."
-      },
-      "discover_cafe": {
-        "url": "https://images.pexels.com/photos/36729801/pexels-photo-36729801.jpeg",
-        "description": "Friends enjoying conversation over coffee. Represents casual daytime meetups."
-      },
-      "companion_profiles": [
-        {
-          "url": "https://images.pexels.com/photos/7580994/pexels-photo-7580994.jpeg",
-          "description": "Professional man smiling."
-        },
-        {
-          "url": "https://images.pexels.com/photos/7580837/pexels-photo-7580837.jpeg",
-          "description": "Professional woman with arms crossed."
-        }
-      ]
+    "hierarchy_rules": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl font-black tracking-tighter text-bud-ink leading-tight",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-bud-ink leading-snug",
+      "h3": "text-xl sm:text-2xl font-bold tracking-tight text-bud-ink",
+      "body": "text-base text-bud-muted leading-relaxed",
+      "small_labels": "text-xs font-bold uppercase tracking-[0.2em] text-bud-muted"
     }
   },
-  
-  "accessibility": {
-    "contrast": "Ensure text over images uses a gradient overlay (bg-gradient-to-t from-black/80 to-transparent) to pass APCA/WCAG contrast minimums.",
-    "focus": "All interactive elements must have a high-contrast focus ring (focus:ring-2 focus:ring-offset-2 focus:ring-slate-900).",
-    "testing": "All interactive and key informational elements MUST include a `data-testid` attribute (kebab-case, role-based, e.g., data-testid='hero-join-cta')."
+  "colors": {
+    "strategy": "Dial back the pink. The background and surface colors must be neutral, airy, and professional. Pink/Magenta are reserved EXCLUSIVELY for primary buttons, active sidebar states, and brand moments.",
+    "tokens": {
+      "--bud-bg": "#FCFBFB",
+      "--bud-surface": "#FFFFFF",
+      "--bud-ink": "#1A0F1E",
+      "--bud-muted": "#685B6D",
+      "--bud-line": "#EAE3EA",
+      "--bud-magenta": "#E81E7C",
+      "--bud-pink": "#F0459B",
+      "--bud-coral": "#FF9A62",
+      "--bud-violet": "#6B34CD"
+    },
+    "usage": {
+      "backgrounds": "Use --bud-bg for main app backgrounds and --bud-surface (white) for cards, sidebars, and content areas.",
+      "text": "Never use pure black. Use --bud-ink for headings and primary text, --bud-muted for secondary text.",
+      "accents": "Use --bud-magenta for primary CTAs and active states. Use --bud-coral for warnings or secondary highlights."
+    }
   },
-
-  "instructions_to_main_agent": [
-    "You are building Buddilio.com - a premium social club PWA.",
-    "Install required icon library: yarn add lucide-react",
-    "Install animation library: yarn add framer-motion",
-    "Do NOT build generic center-aligned Vercel template designs. Apply the E1 persona - make it look like a high-end editorial lifestyle product.",
-    "Use pure HTML/Tailwind for the landing page marketing sections to achieve bento grids and overlapping layouts. Use Shadcn for the Dashboard, Forms, and Modals.",
-    "Implement a mobile-first approach. Ensure touch targets are at least 48x48px on mobile.",
-    "Avoid using card components excessively. Go for cardless, rectangular, flat designs for dense dashboards.",
-    "For the companion profile cards, ensure they do not look like Tinder (dating). Focus on shared interests, professional background, and lifestyle vibes."
-  ],
-
-  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
-    "You tend to converge toward generic, 'on distribution' outputs. Avoid this: make creative, distinctive frontends.",
-    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
-    "Create depth through layered design elements with z-index hierarchy.",
-    "Use glass-morphism effects with backdrop filters (12-24px blur) where appropriate.",
-    "You MUST NOT apply universal transition (e.g., transition: all). Always add transitions for specific properties.",
-    "You MUST NOT center align the app container, i.e., do not add .App { text-align: center; }.",
-    "Always use modern button styles (pill-shaped or rounded-xl) with interaction animations.",
-    "NEVER use AI assistant Emoji characters (like 🤖🧠💭) for icons. Use clean Lucide icons.",
-    "Every interaction needs micro-animations (hover, transitions, entrance animations).",
-    "Use 2-3x more spacing than feels comfortable.",
-    "Do not use placeholder text for images or logos. Use the provided high-quality image URLs.",
-    "All interactive elements MUST include `data-testid` attribute (e.g., data-testid='login-submit').",
-    "Use 'sonner' for toasts."
+  "layouts": {
+    "header": {
+      "style": "Crystal Glassmorphism",
+      "classes": "sticky top-0 z-50 w-full h-20 backdrop-blur-xl bg-white/80 border-b border-bud-line px-6 lg:px-12 flex items-center justify-between",
+      "spacing": "Generous internal padding. Do not use transparent backgrounds without blur.",
+      "mobile": "Bottom tab bar (`fixed bottom-0 w-full bg-white border-t border-bud-line pb-safe pt-2`) for Home, Discover, Events, Chat, You."
+    },
+    "footer": {
+      "style": "High-Contrast Anchor",
+      "classes": "bg-bud-ink text-white py-24 px-6 lg:px-12",
+      "structure": "Grid layout. Top section: Logo + Tagline (left), 3 link groups (right). Bottom section: City marquee (slow scrolling ribbon in text-bud-muted), Legal line, Social icons.",
+      "typography": "Links should be text-sm text-white/70 hover:text-white transition-colors."
+    },
+    "auth_page": {
+      "style": "Split Editorial",
+      "layout": "Grid cols-1 lg:grid-cols-2 min-h-screen.",
+      "left_panel": "White background (`bg-white`), content perfectly centered with generous padding (`p-12 lg:p-24`). Form max-width `max-w-md`.",
+      "right_panel": "Brand imagery/lifestyle photo with a subtle gradient overlay (`bg-gradient-to-t from-bud-ink/50 to-transparent`). Never a flat pink block.",
+      "21_gate_messaging": "Styled as a distinct, trust-building badge above the form: `inline-flex items-center gap-2 bg-bud-bg border border-bud-line px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest text-bud-ink mb-8`."
+    },
+    "admin_console": {
+      "style": "Soft Utility Grouped Sidebar",
+      "layout": "Desktop: `grid lg:grid-cols-[260px_1fr] min-h-screen`. Mobile: Collapsible drawer for sidebar.",
+      "sidebar_classes": "bg-[#FAFAFA] border-r border-bud-line h-screen sticky top-0 overflow-y-auto p-6 flex flex-col gap-8",
+      "sidebar_groups": {
+        "Base": ["Dashboard", "Events", "Settings"],
+        "Money": ["Orders", "Payments", "Payouts", "Coupons", "Memberships", "Products", "Ledger"],
+        "Content": ["Content", "Pages", "Site sections", "City guides", "Emails", "Countries & cities"],
+        "People": ["Users", "Partners", "Console access", "Hangouts", "Team & roles"],
+        "Trust": ["Verification", "ID checks", "Travel crew", "Reports", "Reviews", "Photo wall", "Audit logs"]
+      },
+      "active_state": "Do NOT use solid pink blocks for active tabs. Use: `bg-pink-50 text-bud-magenta font-semibold rounded-lg` with a subtle pink dot or line indicator.",
+      "content_area": "bg-white p-8 lg:p-12"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-bud-magenta text-white font-semibold rounded-full px-6 py-3 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-bud-magenta/25 transition-all",
+      "secondary": "bg-bud-bg text-bud-ink border border-bud-line font-semibold rounded-full px-6 py-3 hover:bg-bud-line/50 transition-all"
+    },
+    "cards_and_tables": {
+      "style": "Flat, sharp, border-driven. No muddy shadows.",
+      "classes": "bg-white border border-bud-line rounded-2xl overflow-hidden",
+      "table_headers": "bg-[#FAFAFA] text-xs uppercase tracking-wider text-bud-muted font-bold py-4 px-6 border-b border-bud-line"
+    }
+  },
+  "functionality_fixes": {
+    "membership_pricing_bug": "CRITICAL TASK FOR MAIN AGENT: The user reported 'I changed the price in backend but it is not getting updated on website content section'. You MUST trace the data fetching logic for the membership section on the frontend and ensure it correctly binds to the backend database/API endpoint instead of relying on hardcoded or heavily cached data."
+  },
+  "accessibility_and_testing": {
+    "data_testid": "CRITICAL: Every interactive element MUST retain or be assigned a `data-testid` attribute (e.g., `dash-tile-*`, `ledger-export`, `forgot-link`). Do not remove any existing test IDs.",
+    "contrast": "Ensure all text over images uses proper text-shadow or gradient overlays to maintain 4.5:1 contrast."
+  },
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "NEVER use generic centered layouts or simplistic UI patterns.",
+    "Apply the updated Cabinet Grotesk (Headings) and Satoshi (Body) fonts. Update the font imports in the HTML/CSS.",
+    "Remove the overwhelmingly pink design elements. Use the neutral palette provided, keeping magenta ONLY for primary buttons and active indicators.",
+    "Implement the 27-tab admin layout as a deeply grouped sidebar (Money, Content, People, Trust).",
+    "Ensure the header has a backdrop-blur and footer has generous padding (py-24).",
+    "Fix the membership pricing API linkage between the admin settings and the frontend display.",
+    "Preserve all `data-testid` attributes on interactive elements.",
+    "Use `lucide-react` for icons and `sonner` for toasts."
   ]
 }

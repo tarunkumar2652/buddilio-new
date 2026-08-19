@@ -60,7 +60,19 @@ export const RichText = ({ value = "", onChange, rows = 8, testid = "richtext", 
   );
 };
 
-/** Renders admin/member authored HTML that the backend has already sanitised. */
-export const RichHtml = ({ html = "", className = "", testid }) => (
-  <div data-testid={testid} className={`rich-html ${className}`} dangerouslySetInnerHTML={{ __html: html }} />
-);
+/** Tag-free version of authored HTML, for card previews, meta tags and truncated blurbs. */
+export const plainText = (html = "") =>
+  String(html).replace(/<br\s*\/?>/gi, " ").replace(/<\/(p|li|h2|h3|h4|blockquote)>/gi, " ")
+    .replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
+
+/** Renders admin/member authored HTML that the backend has already sanitised.
+ *  Legacy plain-text values (no tags) keep their line breaks. */
+export const RichHtml = ({ html = "", className = "", testid }) => {
+  const raw = String(html || "");
+  const body = /<[a-z][\s\S]*>/i.test(raw)
+    ? raw
+    : raw.split(/\n+/).filter(Boolean).map((l) => `<p>${l}</p>`).join("");
+  return <div data-testid={testid} className={`rich-html ${className}`} dangerouslySetInnerHTML={{ __html: body }} />;
+};

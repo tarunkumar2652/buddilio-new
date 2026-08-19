@@ -6,8 +6,12 @@ import { ImageUpload } from "@/components/ImageUpload";
 import { RichText } from "@/components/RichText";
 
 const cls = "mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm";
-const L = ({ label, children }) => (
-  <label className="block"><span className="text-xs font-bold text-slate-600">{label}</span>{children}</label>
+const L = ({ label, children, hint }) => (
+  <label className="block">
+    <span className="text-xs font-bold text-slate-600">{label}</span>
+    {children}
+    {hint && <span className="mt-1 block text-[11px] text-slate-400">{hint}</span>}
+  </label>
 );
 
 const Modal = ({ title, onClose, children, testid }) => (
@@ -77,8 +81,8 @@ export const ProfileForm = ({ profile, onClose, onSaved }) => {
               onChange={(e) => setF({ ...f, password: e.target.value })} className={cls} />
           </L>
         </div>
-        <L label="Bio"><textarea rows={4} value={f.bio || ""} data-testid="profile-bio"
-          onChange={(e) => setF({ ...f, bio: e.target.value })} className={cls} /></L>
+        <L label="Bio"><RichText value={f.bio || ""} rows={4} testid="profile-bio"
+          onChange={(html) => setF({ ...f, bio: html })} /></L>
         <L label="Interests (comma separated)">
           <input value={(f.interests || []).join(", ")} data-testid="profile-interests"
             onChange={(e) => setF({ ...f, interests: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
@@ -100,12 +104,20 @@ export const ProfileForm = ({ profile, onClose, onSaved }) => {
 
 const EVENT_BLANK = {
   title: "", description: "", category: "Nightlife", city: "", country: "", venue: "", starts_at: "",
-  ends_at: "", cover_image: "", price: 0, capacity: 50, rules: "", cancellation_policy: "",
+  ends_at: "", cover_image: "", price: 0, price_currency: "INR", capacity: 50, rules: "", cancellation_policy: "",
   approval_mode: "instant", featured: false, partner_id: "", status: "published",
 };
 
+const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD", "JPY", "AUD", "THB"];
+
 export const EventForm = ({ event, onClose, onSaved }) => {
-  const [f, setF] = useState({ ...EVENT_BLANK, ...(event || {}) });
+  const [f, setF] = useState({
+    ...EVENT_BLANK,
+    ...(event || {}),
+    // The event carries a converted base price; the organiser's own figure lives in price_input.
+    price: event ? (event.price_input ?? event.price ?? 0) : 0,
+    price_currency: event?.price_currency || "INR",
+  });
   const [hosts, setHosts] = useState([]);
   const [busy, setBusy] = useState(false);
   const editing = !!event?.id;
@@ -142,8 +154,14 @@ export const EventForm = ({ event, onClose, onSaved }) => {
             data-testid="event-starts" onChange={(e) => setF({ ...f, starts_at: e.target.value })} className={cls} /></L>
           <L label="Ends at (ISO)"><input value={f.ends_at || ""} data-testid="event-ends"
             onChange={(e) => setF({ ...f, ends_at: e.target.value })} className={cls} /></L>
-          <L label="Price"><input type="number" min={0} value={f.price} data-testid="event-price"
+          <L label="Price"><input type="number" min={0} step="any" value={f.price} data-testid="event-price"
             onChange={(e) => setF({ ...f, price: e.target.value })} className={cls} /></L>
+          <L label="Priced in" hint="Locals pay exactly this amount; other currencies convert automatically.">
+            <select value={f.price_currency} data-testid="event-price-currency"
+              onChange={(e) => setF({ ...f, price_currency: e.target.value })} className={cls}>
+              {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </L>
           <L label="Capacity"><input type="number" min={1} value={f.capacity} data-testid="event-capacity"
             onChange={(e) => setF({ ...f, capacity: e.target.value })} className={cls} /></L>
           <L label="Organiser"><select value={f.partner_id || ""} data-testid="event-host"
@@ -160,6 +178,8 @@ export const EventForm = ({ event, onClose, onSaved }) => {
           onChange={(html) => setF({ ...f, description: html })} /></L>
         <L label="Rules"><RichText value={f.rules || ""} rows={3} testid="event-rules"
           onChange={(html) => setF({ ...f, rules: html })} /></L>
+        <L label="Cancellation policy"><RichText value={f.cancellation_policy || ""} rows={3} testid="event-cancellation"
+          onChange={(html) => setF({ ...f, cancellation_policy: html })} /></L>
         <ImageUpload value={f.cover_image} onChange={(url) => setF({ ...f, cover_image: url })}
           label="Cover image" testid="event-cover" aspect="wide" />
         <label className="flex items-center gap-2 text-sm font-semibold">

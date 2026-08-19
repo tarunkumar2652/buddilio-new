@@ -18,15 +18,17 @@ import { Ledger } from "@/components/Ledger";
 import { Team } from "@/components/Team";
 import { Pages, SiteContent, CityGuides } from "@/components/ContentStudio";
 import { EmailTemplates } from "@/components/EmailTemplates";
+import { PlansAdmin } from "@/components/PlansAdmin";
+import { AgreementsAdmin } from "@/components/AgreementsAdmin";
 import { ProfileForm, EventForm } from "@/components/AdminForms";
 import { useAuth } from "@/context/AuthContext";
 
 const NAV = [
   ["dashboard", "Dashboard", "analytics:view"], ["users", "Users", "members:view"],
-  ["partners", "Partners", "vendors:view"], ["verification", "Verification", "verification:manage"],
+  ["partners", "Partners", "vendors:view"], ["agreements", "Vendor agreements", "vendors:view"],
+  ["verification", "Verification", "verification:manage"],
   ["managers", "Console access", "team:manage"], ["events", "Events", "events:view"],
-  ["memberships", "Memberships", "finance:manage"], ["products", "Products", "finance:manage"],
-  ["orders", "Orders", "finance:view"], ["payments", "Payments", "finance:view"],
+  ["memberships", "Memberships", "finance:manage"], ["products", "Products", "finance:manage"],  ["orders", "Orders", "finance:view"], ["payments", "Payments", "finance:view"],
   ["payouts", "Payouts", "payouts:view"], ["coupons", "Coupons", "finance:manage"],
   ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
   ["photos", "Photo wall", "moderation:manage"], ["companions", "Hangouts", "members:manage"],
@@ -127,29 +129,68 @@ const Input = ({ label, ...p }) => (
     <input {...p} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" /></label>
 );
 
+const GROUPS = [
+  ["Overview", ["dashboard", "events", "settings"]],
+  ["Money", ["orders", "payments", "payouts", "coupons", "memberships", "products", "ledger"]],
+  ["Content", ["content", "pages", "sections", "guides", "emails", "places"]],
+  ["People", ["users", "partners", "agreements", "managers", "companions", "team"]],
+  ["Trust", ["verification", "idchecks", "providers", "reports", "reviews", "photos", "audit"]],
+];
+
 export default function Admin() {
   const { user } = useAuth();
   const perms = user?.permissions;
   const nav = NAV.filter(([, , p]) => !perms || perms.includes(p));
   const [tab, setTab] = useState("");
+  const [open, setOpen] = useState(false);
   const active = tab && nav.some(([v]) => v === tab) ? tab : (nav[0]?.[0] || "dashboard");
+  const label = (nav.find(([v]) => v === active) || [])[1] || "Dashboard";
+  const groups = GROUPS
+    .map(([title, keys]) => [title, keys.map((k) => nav.find(([v]) => v === k)).filter(Boolean)])
+    .filter(([, items]) => items.length);
+
+  const pick = (v) => { setTab(v); setOpen(false); };
+
   return (
-    <div className="mx-auto max-w-[1500px] px-4 sm:px-6 py-8 pb-28" data-testid="admin-page">
+    <div className="grid lg:grid-cols-[264px_1fr]" data-testid="admin-page">
       <SEO title="Admin" />
-      <p className="overline">Super admin</p>
-      <h1 className="mt-2 text-3xl font-bold">Buddilio control centre</h1>
-      <div className="relative mt-6">
-        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 pr-10 sm:pr-0">
-          {nav.map(([v, l]) => (
-            <button key={v} onClick={() => setTab(v)} data-testid={`admin-tab-${v}`}
-              className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold border ${active === v ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200"}`}>{l}</button>
-          ))}
+      <aside className={`border-r border-slate-200 bg-white ${open ? "block" : "hidden lg:block"}`}
+        data-testid="admin-sidebar">
+        <div className="p-6" data-testid="admin-sidebar-inner">
+          <p className="overline">Control centre</p>
+          <p className="mt-1.5 font-display text-lg font-bold">Buddilio admin</p>
+          <nav className="mt-7 space-y-7">
+            {groups.map(([title, items]) => (
+              <div key={title}>
+                <p className="px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">{title}</p>
+                <div className="mt-2 space-y-0.5">
+                  {items.map(([v, l]) => (
+                    <button key={v} onClick={() => pick(v)} data-testid={`admin-tab-${v}`}
+                      className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-semibold transition-colors ${
+                        active === v ? "bg-brand-magenta/10 text-brand-magenta" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"}`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${active === v ? "bg-brand-magenta" : "bg-transparent"}`} />
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </nav>
         </div>
-        <div aria-hidden className="sm:hidden pointer-events-none absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-[#FAFAFA] via-[#FAFAFA]/80 to-transparent flex items-center justify-end">
-          <ChevronRight className="h-4 w-4 text-slate-400" />
+      </aside>
+
+      <div className="min-w-0 px-4 sm:px-8 lg:px-12 py-8 pb-28">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="overline">Super admin</p>
+            <h1 className="mt-2 text-3xl font-bold">{label}</h1>
+          </div>
+          <button onClick={() => setOpen(!open)} data-testid="admin-menu-toggle"
+            className="lg:hidden inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold">
+            {open ? "Close menu" : "All sections"}<ChevronRight className="h-3.5 w-3.5" />
+          </button>
         </div>
-      </div>
-      <div className="mt-8">
+        <div className="mt-8">
         {active === "dashboard" && <Overview />}
         {active === "users" && <Users key="u" role="user" />}
         {active === "partners" && <Users key="p" role="partner" />}
@@ -164,9 +205,8 @@ export default function Admin() {
           </div>
         )}
         {active === "events" && <Events />}
-        {active === "memberships" && <Crud path="plans" title="Membership plans"
-          fields={[["name", "text"], ["price", "number"], ["duration_days", "number"], ["description", "text"], ["discount_percent", "number"], ["benefits", "list"], ["price_overrides", "json"], ["active", "bool"]]}
-          blank={{ name: "", price: 0, duration_days: 30, description: "", benefits: [], discount_percent: 0, price_overrides: {}, active: true }} />}
+        {active === "memberships" && <PlansAdmin />}
+        {active === "agreements" && <AgreementsAdmin />}
         {active === "products" && <Crud path="products" title="Products & passes"
           fields={[["name", "text"], ["description", "text"], ["price", "number"], ["discount_percent", "number"], ["tax_percent", "number"], ["image", "image"], ["validity_days", "number"], ["city", "text"], ["inventory", "number"], ["member_discount_percent", "number"], ["price_overrides", "json"], ["active", "bool"]]}
           blank={{ name: "", description: "", price: 0, discount_percent: 0, tax_percent: 18, image: "", validity_days: 30, city: "All India", inventory: 100, member_discount_percent: 10, price_overrides: {}, active: true }} />}
@@ -191,6 +231,7 @@ export default function Admin() {
         {active === "sections" && <SiteContent />}
         {active === "guides" && <CityGuides />}
         {active === "emails" && <EmailTemplates />}
+        </div>
       </div>
     </div>
   );
@@ -749,6 +790,8 @@ function Settings() {
       {keys.map(([k, t]) => (
         <Input key={k} label={k.replace(/_/g, " ")} type={t} data-testid={`setting-${k}`} value={s[k] ?? ""} onChange={(e) => setS({ ...s, [k]: t === "number" ? Number(e.target.value) : e.target.value })} />
       ))}
+      <Input label="free messages per week (members with no plan)" type="number" data-testid="setting-free_messages_per_week"
+        value={s.free_messages_per_week ?? 5} onChange={(e) => setS({ ...s, free_messages_per_week: Number(e.target.value) })} />
       {[["require_email_verification", "Require email verification"], ["auto_approve_events", "Auto-approve partner events"]].map(([k, l]) => (
         <label key={k} className="flex items-center gap-2 text-sm"><input type="checkbox" data-testid={`setting-${k}`} checked={!!s[k]} onChange={(e) => setS({ ...s, [k]: e.target.checked })} />{l}</label>
       ))}

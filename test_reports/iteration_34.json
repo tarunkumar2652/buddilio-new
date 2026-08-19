@@ -1,0 +1,86 @@
+{
+  "summary": "Iteration 34 retest of the 7 fixes + the previously unreachable booking-snapshot path. 21 backend tests (2 new pytest modules) + Playwright checks on /safety, footer at 1920/768/390, the admin schedule modal floor guard, admin sidebar tabs, /p/terms and the sign-up wizard. PASSED: FIX 1 (quote 401 anon / 403 unrelated member / 200 owning vendor / 200 admin, quantity scaling, 404 unknown vendor, no terms leak), FIX 3 (PUT /api/admin/pages/{slug} works, previous version archived, /versions shows current v2 + archived v1, blocks + last_updated preserved, member 403), FIX 6 (4 footer groups side by side at 1920 with no overflow, 2 columns at 768, stacked at 390; footer-legal-note rgba(255,255,255,0.7) on #2A0836), FIX 7 (/safety renders all 8 seeded blocks + 'Last updated 19 August 2026 . version 2', 9 blocks rendered), BOOKING SNAPSHOT end to end (paid event order -> snapshot with agreement id/version + schedule id/version + all amounts equal to the pricing engine, vendor_settlements pending row with a correct T+15 due date visible at /api/vendor/settlements, other member 403, anonymous 401, snapshot unchanged after the vendor's commission was amended to 25%), ACCEPTANCE PATH re-verified TWICE end to end (amend -> amendment_pending -> 3/4 confirmations rejected 400 -> OTP -> accept -> active + executed PDF 200 %PDF), and the light regression (/me/ledger + invoice.pdf, /plans benefits, admin sidebar tab switching, /p/terms 21 h2 / 30 li unescaped). FAILED: FIX 4 (registration is 500 - record_signup_consents is called but never defined, so ALL sign-ups are broken), FIX 2 (accepting future-dated terms supersedes the effective schedule immediately, leaving a window with NO effective schedule: quote 404, no snapshot, no settlement row) and FIX 5 backend half (the amend endpoint still accepts pricing_floor > vendor_net_rate).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/auth/register (and POST /api/auth/google callback path)",
+        "issue": "500 Internal Server Error - NameError: name 'record_signup_consents' is not defined (called at server.py L947 and L1074, never defined anywhere in the codebase; confirmed in /var/log/supervisor/backend.err.log). ALL email sign-ups and all first-time Google sign-ups fail. Worse, db.users.insert_one runs BEFORE the crash, so an orphan user row with no token and no consents is left behind and a retry with the same email then returns 'An account with this email already exists.' FIX 4 is not delivered.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "GET /api/pricing/quote + booking snapshot (future-dated commercial terms)",
+        "issue": "FIX 2 is only half done. accept_agreement() marks every other active schedule 'superseded' the moment the vendor accepts, even when the new schedule's effective_from is in the future, so between acceptance and effective_from the vendor has NO effective schedule: GET /api/pricing/quote returns 404 'No active commercial schedule', and a booking paid in that window is fulfilled with NO booking_commercial_snapshots row and NO vendor_settlements row (verified: order paid 200, snapshot 404, settlements 0 - vendor money silently untracked). The spec requires the currently effective version to keep applying until effective_from passes. After effective_from the new terms do apply correctly (net 1900 quoted).",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /api/admin/vendor-agreements/{aid}/amend",
+        "issue": "FIX 5 server-side guard missing: pricing_floor 1500 with vendor_net_rate 1000 was accepted (200), created schedule v5 and agreement v1.4 and pushed the live vendor into amendment_pending. POST /admin/vendor-profiles/{vid}/commercial-schedule has the guard; amend() does not (the check is not shared). I rolled the vendor back manually.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/checkout -> vendor_snapshot_hook",
+        "issue": "Snapshot failure is swallowed with only a warning log (correct for fulfilment) but nothing surfaces it - the missing snapshot/settlement above is invisible to operators. Consider an admin alert or a reconciliation endpoint listing paid orders whose vendor has no snapshot."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Auth.jsx register wizard (step 4)",
+        "issue": "Sign-up fails silently: with all four consents ticked, 'Create my account' fires the 500 and the UI shows NO error, toast or message - the user stays on step 4 with no feedback (only a console 'Failed to load resource: 500'). Add an error state for the register mutation.",
+        "selector": "[data-testid=\"reg-submit\"]",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Registration -> policy_acceptances",
+        "issue": "Cannot be verified through the UI at all because /api/auth/register 500s (backend NameError).",
+        "affected_selectors": ["[data-testid=\"reg-submit\"]", "[data-testid=\"reg-accept_terms\"]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Admin -> Vendor agreements -> Set/Amend terms modal",
+        "issues": ["'Effective from' uses the native browser datetime-local picker instead of the shadcn calendar component used elsewhere", "Superseded agreement rows still expose Amend/Terminate actions, which invites amending a historical version"]
+      },
+      {
+        "screen": "Footer (all breakpoints)",
+        "issues": ["footer-legal-note is only 11px; contrast at rgba(255,255,255,0.7) on #2A0836 is acceptable but the size is at the edge of legibility", "'Safety Centre' appears twice in the Safety & Trust group (duplicate link)"]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration34_fixes.py",
+    "/app/backend/tests/test_iteration34_snapshot_future.py",
+    "/app/backend/tests/i34_gap_impact.py",
+    "/app/test_reports/pytest/iteration34_results.xml"
+  ],
+  "action_items": [
+    "Define record_signup_consents(uid, email, request) in server.py (write policy_acceptances rows with slug terms/privacy/guidelines, source 'registration', current required versions) - registration is completely broken until then; also make the user insert + consent write fail-safe so no orphan user is left on error.",
+    "Show an error message/toast when POST /api/auth/register fails (Auth.jsx submit has no error state).",
+    "Fix future-dated terms: on acceptance, keep the currently effective schedule effective until the new schedule's effective_from (e.g. set effective_until on the old one instead of superseding immediately, and have active_schedule() fall back to the latest schedule whose effective_from <= now regardless of a later accepted version).",
+    "Move the pricing_floor <= vendor_net_rate validation into a shared validator used by BOTH create_schedule and amend_agreement (amend currently accepts it).",
+    "Optional: surface skipped commercial snapshots (log-only today) via an admin reconciliation view."
+  ],
+  "critical_code_review_comments": [
+    "server.py calls record_signup_consents at two places but the function does not exist - a lint/import-time smoke test on the register path would have caught this before handoff.",
+    "vendor_routes.accept_agreement() supersedes all other active schedules unconditionally; the effective-date logic added to active_schedule() must be mirrored here or the two disagree.",
+    "Duplicate business rule: the pricing floor guard exists only in create_schedule; extract to a helper (DRY) so amend cannot bypass it.",
+    "server.py is 7441 lines - split the CMS/policy, commerce and auth sections into modules like vendor_routes.py."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration34_fixes.py",
+    "/app/backend/tests/test_iteration34_snapshot_future.py",
+    "/app/backend/tests/i34_gap_impact.py"
+  ],
+  "success_rate": {"backend": "86% (18/21 tests)", "frontend": "83% (5/6 checked flows)"},
+  "seed_data_creation": "No new seed data. Two real paid event orders were created for aarav.mehta@example.com against a SMOKE-vendor event to exercise snapshots/settlements (left in place deliberately, with their snapshots + vendor_settlements rows). TEST_ users created by the register attempts were deleted. The 'safety' CMS page policy_version went 1 -> 2 (content unchanged) as part of the FIX 3 test.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "/app/memory/test_credentials.md used as-is (admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123, aarav.mehta@example.com and diya.sharma@example.com / User@123)",
+  "context_for_next_testing_agent": "Current SMOKE Vendor LLP state after this run (restored by hand after the amend-guard bug): schedules v1/v2/v3 superseded, v4 ACTIVE (net 1900, commission 30%, platform fee 12%, tax 18%, T+15, effective_from 2026-08-19T21:29:52Z), agreements v1.0-v1.2 superseded, v1.3 ACTIVE and accepted with a PDF. policy_acceptance_required currently holds terms version 3, so seeded members will see the re-acceptance modal. Re-run: pytest tests/test_iteration34_fixes.py tests/test_iteration34_snapshot_future.py -n 0 (the snapshot module is order dependent and amends the vendor twice, each time completing a real OTP acceptance by recovering the code hash from agreement_otps). tests/i34_gap_impact.py reproduces the future-dated gap by temporarily pushing effective_from forward and restores it.",
+  "rca_of_the_issue": "1) Registration: server.py L947/L1074 call record_signup_consents which was never implemented -> NameError -> 500 after the user document has already been inserted. 2) Future-dated terms: active_schedule() was correctly hardened to require effective_from <= now, but accept_agreement() still supersedes all other active schedules immediately, so a future-dated acceptance leaves the vendor with zero effective schedules; pricing_quote then 404s and snapshot_booking returns None, and vendor_snapshot_hook swallows it, so paid orders in that window carry no commercials or settlement. 3) Floor guard: the validation lives only in create_schedule, so the amend route bypasses it."
+}

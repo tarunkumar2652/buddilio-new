@@ -11,6 +11,7 @@ import { PhotoWall } from "@/components/PhotoWall";
 import { RecapCard } from "@/components/RecapCard";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { RichHtml } from "@/components/RichText";
+import { plainText } from "@/components/RichText";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert, BadgeCheck } from "lucide-react";
 export function Events() {
   const { fmt } = useCurrency();
@@ -167,7 +168,7 @@ export function EventDetail() {
 
   return (
     <div data-testid="event-detail-page">
-      <SEO title={ev.title} description={(ev.description || "").replace(/<[^>]*>/g, " ").slice(0, 155)} />
+      <SEO title={ev.title} description={plainText(ev.description).slice(0, 155)} />
       <div className="relative h-[45vh] min-h-[300px] bg-slate-900">
         <img src={fileUrl(ev.cover_image)} alt={ev.title} className="absolute inset-0 h-full w-full object-cover opacity-70" />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
@@ -232,7 +233,8 @@ export function EventDetail() {
               <p className="overline">Rules</p><RichHtml html={ev.rules} className="mt-2 text-sm text-slate-600" testid="event-rules-body" />
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-6">
-              <p className="overline">Cancellation policy</p><p className="mt-2 text-sm text-slate-600">{ev.cancellation_policy}</p>
+              <p className="overline">Cancellation policy</p>
+              <RichHtml html={ev.cancellation_policy} className="mt-2 text-sm text-slate-600" testid="event-cancellation-body" />
             </div>
           </div>
 

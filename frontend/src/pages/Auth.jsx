@@ -6,33 +6,42 @@ import { api, errMsg } from "@/lib/api";
 import { useCurrency } from "@/context/CurrencyContext";
 import { ImageUpload } from "@/components/ImageUpload";
 import { SEO } from "@/components/Shared";
+import { ShieldCheck } from "lucide-react";
 
 const Field = ({ label, ...p }) => (
   <label className="block">
-    <span className="text-xs font-bold text-slate-600">{label}</span>
-    <input {...p} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-slate-900" />
+    <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{label}</span>
+    <input {...p} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition-shadow focus:border-brand-magenta/40 focus:ring-4 focus:ring-brand-magenta/10" />
   </label>
 );
 
 const AuthShell = ({ title, sub, children }) => (
-  <div className="min-h-[80vh] grid lg:grid-cols-2">
-    <div className="hidden lg:block relative bg-slate-900">
-      <img src="https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg?auto=compress&w=1200" alt=""
-        className="absolute inset-0 h-full w-full object-cover opacity-40" />
-      <div className="relative h-full flex flex-col justify-end p-14 text-white">
-        <h2 className="text-3xl font-bold leading-tight">Thousands of members. One reason.</h2>
-        <p className="mt-4 text-slate-300 max-w-sm">Nobody should skip a night out just because their friends were busy.</p>
+  <div className="grid min-h-[86vh] lg:grid-cols-2">
+    <div className="flex items-center px-5 sm:px-10 lg:px-16 py-16">
+      <div className="w-full max-w-md mx-auto">
+        <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-600">
+          <ShieldCheck className="h-3.5 w-3.5 text-brand-magenta" />Members are 21+
+        </span>
+        <h1 className="mt-7 text-4xl font-display font-extrabold tracking-tight">{title}</h1>
+        <p className="mt-3 text-sm text-slate-500 leading-relaxed">{sub}</p>
+        <div className="mt-9">{children}</div>
       </div>
     </div>
-    <div className="px-5 sm:px-10 py-14 flex items-center">
-      <div className="w-full max-w-md mx-auto">
-        <h1 className="text-3xl font-bold">{title}</h1>
-        <p className="mt-2 text-sm text-slate-500">{sub}</p>
-        <div className="mt-8">{children}</div>
+    <div className="relative hidden lg:block">
+      <img src="https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg?auto=compress&w=1400" alt=""
+        className="absolute inset-0 h-full w-full object-cover" />
+      <div className="absolute inset-0 bg-gradient-to-t from-brand-ink/90 via-brand-ink/45 to-brand-ink/10" />
+      <div className="relative h-full flex flex-col justify-end p-14 text-white">
+        <h2 className="max-w-sm font-display text-3xl font-extrabold leading-tight">Thousands of members. One reason.</h2>
+        <p className="mt-4 max-w-sm text-sm text-white/75 leading-relaxed">
+          Nobody should skip a night out just because their friends were busy.
+        </p>
       </div>
     </div>
   </div>
 );
+
+const BTN = "w-full rounded-full bg-slate-900 py-3.5 text-sm font-bold text-white transition-all hover:-translate-y-0.5 hover:bg-brand-magenta disabled:translate-y-0 disabled:opacity-60";
 
 export const GoogleButton = ({ label = "Continue with Google", testid = "google-login" }) => {
   const go = () => {
@@ -86,8 +95,7 @@ export function Login() {
         <Link to="/forgot-password" className="block text-xs font-semibold text-slate-500 hover:text-slate-900" data-testid="forgot-link">
           Forgot your password?
         </Link>
-        <button disabled={busy} data-testid="login-submit"
-          className="w-full rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60 hover:bg-slate-800">
+        <button disabled={busy} data-testid="login-submit" className={BTN}>
           {busy ? "Logging in…" : "Log in"}
         </button>
       </form>
@@ -111,7 +119,8 @@ export function Register() {
   const [f, setF] = useState({
     full_name: "", email: "", mobile: "", password: "", dob: "", gender: "female",
     city: "Delhi NCR", country: "India", bio: "", photo: "", interests: [], event_categories: [], lifestyle: [],
-    is_adult: false, accept_terms: false, role: isPartner ? "partner" : "user", org_name: "",
+    is_adult: false, accept_terms: false, accept_privacy: false, accept_guidelines: false,
+    role: isPartner ? "partner" : "user", org_name: "",
     referral_code: params.get("ref") || "",
   });
   const [inviter, setInviter] = useState(null);
@@ -140,7 +149,8 @@ export function Register() {
   };
 
   const submit = async () => {
-    if (!f.is_adult || !f.accept_terms) return toast.error("Please confirm you're 21+ and accept the policies.");
+    if (!f.is_adult || !f.accept_terms || !f.accept_privacy || !f.accept_guidelines)
+      return toast.error("Please confirm all four statements to continue.");
     setBusy(true);
     try {
       const u = await register(f);
@@ -161,7 +171,7 @@ export function Register() {
         </div>
       )}
       <div className="flex gap-1.5 mb-7">
-        {STEPS.map((s, i) => <div key={s} className={`h-1.5 flex-1 rounded-full ${i <= step ? "bg-slate-900" : "bg-slate-200"}`} />)}
+        {STEPS.map((s, i) => <div key={s} className={`h-1.5 flex-1 rounded-full transition-colors ${i <= step ? "bg-brand-magenta" : "bg-slate-200"}`} />)}
       </div>
 
       <div className="space-y-4" data-testid="register-form">
@@ -254,8 +264,10 @@ export function Register() {
               <p><span className="text-slate-500">City:</span> <b>{f.city}</b></p>
               <p><span className="text-slate-500">Interests:</span> <b>{f.interests.length}</b> selected</p>
             </div>
-            {[["is_adult", "I confirm I am 21 years of age or older."],
-              ["accept_terms", "I accept the Terms, Privacy Policy and Community Safety Guidelines."]].map(([k, l]) => (
+            {[["is_adult", <>I confirm that I am at least 21 years old.</>],
+              ["accept_terms", <>I agree to Buddilio's <a href="/p/terms" target="_blank" rel="noreferrer" className="underline font-semibold">Terms &amp; Conditions</a>.</>],
+              ["accept_privacy", <>I acknowledge Buddilio's <a href="/p/privacy" target="_blank" rel="noreferrer" className="underline font-semibold">Privacy Policy</a>.</>],
+              ["accept_guidelines", <>I agree to follow Buddilio's <a href="/p/guidelines" target="_blank" rel="noreferrer" className="underline font-semibold">Community Guidelines</a>.</>]].map(([k, l]) => (
               <label key={k} className="flex gap-3 items-start text-sm">
                 <input type="checkbox" checked={f[k]} data-testid={`reg-${k}`} onChange={(e) => setF({ ...f, [k]: e.target.checked })} className="mt-1 h-4 w-4" />
                 <span className="text-slate-600">{l}</span>
@@ -268,10 +280,9 @@ export function Register() {
           {step > 0 && <button onClick={() => setStep(step - 1)} data-testid="reg-back"
             className="rounded-full border border-slate-200 px-6 py-3 text-sm font-bold">Back</button>}
           {step < 3 ? (
-            <button onClick={next} data-testid="reg-next" className="flex-1 rounded-full bg-slate-900 text-white py-3 text-sm font-bold hover:bg-slate-800">Continue</button>
+            <button onClick={next} data-testid="reg-next" className={`${BTN} flex-1`}>Continue</button>
           ) : (
-            <button onClick={submit} disabled={busy} data-testid="reg-submit"
-              className="flex-1 rounded-full bg-slate-900 text-white py-3 text-sm font-bold disabled:opacity-60">
+            <button onClick={submit} disabled={busy} data-testid="reg-submit" className={`${BTN} flex-1`}>
               {busy ? "Creating account…" : "Create my account"}
             </button>
           )}
@@ -297,7 +308,7 @@ export function ForgotPassword() {
       ) : (
         <form onSubmit={submit} className="space-y-4" data-testid="forgot-form">
           <Field label="Email" type="email" required data-testid="forgot-email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <button className="w-full rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold" data-testid="forgot-submit">Send reset link</button>
+          <button className={BTN} data-testid="forgot-submit">Send reset link</button>
         </form>
       )}
       <p className="mt-6 text-sm"><Link to="/login" className="font-bold">Back to log in</Link></p>
@@ -321,7 +332,7 @@ export function ResetPassword() {
     <AuthShell title="Choose a new password" sub="Make it something only you would guess.">
       <form onSubmit={submit} className="space-y-4" data-testid="reset-form">
         <Field label="New password" type="password" required data-testid="reset-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        <button className="w-full rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold" data-testid="reset-submit">Update password</button>
+        <button className={BTN} data-testid="reset-submit">Update password</button>
       </form>
     </AuthShell>
   );

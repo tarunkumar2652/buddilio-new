@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api, fileUrl } from "@/lib/api";
 import { Spinner, Empty, SEO } from "@/components/Shared";
+import { RichHtml } from "@/components/RichText";
 import { ShieldCheck, MapPin, EyeOff, Flag, Ban, PhoneCall } from "lucide-react";
 
 export function CmsPage() {
@@ -16,10 +17,15 @@ export function CmsPage() {
       <SEO title={p.seo_title || p.title} description={p.seo_description} />
       <p className="overline">Buddilio</p>
       <h1 className="mt-3 text-3xl sm:text-4xl font-bold">{p.title}</h1>
+      {p.last_updated && (
+        <p className="mt-3 text-xs font-bold uppercase tracking-[0.14em] text-slate-400" data-testid="cms-last-updated">
+          Last updated {new Date(p.last_updated).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
+          {p.policy_version ? ` · version ${p.policy_version}` : ""}
+        </p>
+      )}
       {p.content && (
-        <div className="mt-8 space-y-4 text-slate-600 leading-relaxed" data-testid="cms-intro">
-          {p.content.split("\n").filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}
-        </div>
+        <RichHtml html={p.content} testid="cms-intro"
+          className="mt-8 text-slate-600 leading-relaxed" />
       )}
       {blocks.length > 0 && (
         <div className="mt-10 space-y-8" data-testid="cms-blocks">
@@ -38,7 +44,8 @@ const PageBlock = ({ b, i }) => {
     : null;
   if (b.type === "quote") return (
     <blockquote className="rounded-2xl border-l-4 border-slate-900 bg-slate-50 p-6 text-lg italic text-slate-700" data-testid={key}>
-      “{b.text}”{b.heading && <span className="mt-2 block text-sm not-italic font-bold text-slate-500">— {b.heading}</span>}
+      <RichHtml html={b.text} />
+      {b.heading && <span className="mt-2 block text-sm not-italic font-bold text-slate-500">— {b.heading}</span>}
     </blockquote>
   );
   if (b.type === "list") return (
@@ -58,7 +65,7 @@ const PageBlock = ({ b, i }) => {
           return (
             <details key={n} className="px-5 py-4" data-testid={`${key}-faq-${n}`}>
               <summary className="cursor-pointer text-sm font-bold">{q.trim()}</summary>
-              <p className="mt-2 text-sm text-slate-600">{rest.join("|").trim()}</p>
+              <RichHtml html={rest.join("|").trim()} className="mt-2 text-sm text-slate-600" />
             </details>
           );
         })}
@@ -68,26 +75,17 @@ const PageBlock = ({ b, i }) => {
   if (b.type === "cta") return (
     <div className="rounded-2xl bg-brand-ink p-8 text-white" data-testid={key}>
       {b.heading && <h2 className="text-2xl font-bold">{b.heading}</h2>}
-      {b.text && <p className="mt-2 text-white/70">{b.text}</p>}
+      {b.text && <RichHtml html={b.text} className="mt-2 text-white/70" />}
       {b.cta_label && (
         <Link to={b.cta_url || "/events"} data-testid={`${key}-cta`}
           className="mt-5 inline-block rounded-full brand-gradient px-6 py-3 text-sm font-bold">{b.cta_label}</Link>
       )}
     </div>
   );
-  if (b.type === "richtext" || b.type === "html") return (
-    <div data-testid={key}>
-      {b.heading && <h2 className="text-2xl font-bold">{b.heading}</h2>}
-      <div className="prose-sm mt-3 space-y-3 text-slate-600 leading-relaxed"
-        dangerouslySetInnerHTML={{ __html: b.text }} />
-    </div>
-  );
   return (
     <div data-testid={key}>
       {b.heading && <h2 className="text-2xl font-bold">{b.heading}</h2>}
-      <div className="mt-3 space-y-3 text-slate-600 leading-relaxed">
-        {String(b.text || "").split("\n").filter(Boolean).map((line, n) => <p key={n}>{line}</p>)}
-      </div>
+      <RichHtml html={b.text} className="mt-3 text-slate-600 leading-relaxed" />
     </div>
   );
 };
@@ -129,9 +127,14 @@ export function Safety() {
         {page && (
           <div className="mt-14 rounded-2xl border border-slate-200 bg-white p-8">
             <p className="overline">Official policy</p>
-            <div className="mt-4 space-y-3 text-sm text-slate-600">
-              {page.content.split("\n").filter(Boolean).map((l, i) => <p key={i}>{l}</p>)}
-            </div>
+            {page.last_updated && (
+              <p className="mt-2 text-xs font-bold uppercase tracking-[0.14em] text-slate-400" data-testid="cms-last-updated">
+                Last updated {new Date(page.last_updated).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
+                {page.policy_version ? ` · version ${page.policy_version}` : ""}
+              </p>
+            )}
+            <RichHtml html={page.content} className="mt-4 text-sm text-slate-600" testid="safety-policy" />
+            {(page.blocks || []).map((b, i) => <div key={i} className="mt-8"><PageBlock b={b} i={i} /></div>)}
           </div>
         )}
       </div>

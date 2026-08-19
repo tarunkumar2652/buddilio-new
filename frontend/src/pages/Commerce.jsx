@@ -7,6 +7,28 @@ import { useCurrency } from "@/context/CurrencyContext";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
 import { Check, ShieldCheck, CreditCard, Smartphone, Building2, Globe } from "lucide-react";
 
+/** Everything the plan unlocks, built from the live plan record so admin edits show up immediately. */
+export const planFeatures = (p) => {
+  const derived = [
+    p.messages_per_week ? `${p.messages_per_week} messages a week` : "Unlimited messaging",
+    p.premium_filters && "Premium discovery filters",
+    p.hangouts_access && "Paid hangouts with companions",
+    p.priority_access && "Priority event access",
+    p.concierge_support && "Dedicated concierge support",
+    p.discount_percent > 0 && `${p.discount_percent}% off every pass`,
+  ].filter(Boolean);
+  const key = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const seen = new Set(derived.map(key));
+  // Hand-written extras survive unless they repeat a line the switches already produced.
+  const extras = (p.benefits || []).filter((b) => {
+    const k = key(b);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return [...derived, ...extras];
+};
+
 export function Membership() {
   const { user } = useAuth();
   const { fmt, code, list } = useCurrency();
@@ -58,8 +80,13 @@ export function Membership() {
             <p className={`text-sm mt-2 ${i === 2 ? "text-slate-400" : "text-slate-500"}`}>{p.description}</p>
             <p className="mt-6 text-4xl font-display font-bold">{p.price === 0 ? "Free" : priceFor(p)}</p>
             <p className={`text-xs mt-1 ${i === 2 ? "text-slate-400" : "text-slate-500"}`}>for {p.duration_days} days{p.discount_percent > 0 && ` · ${p.discount_percent}% off all passes`}</p>
-            <ul className="mt-6 space-y-2.5 text-sm">
-              {p.benefits.map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}
+            {p.price_overrides?.[code] && (
+              <p className={`text-[11px] mt-1 ${i === 2 ? "text-slate-400" : "text-slate-400"}`} data-testid={`plan-exact-${p.id}`}>
+                Exact {code} price set by Buddilio
+              </p>
+            )}
+            <ul className="mt-6 space-y-2.5 text-sm" data-testid={`plan-features-${p.id}`}>
+              {planFeatures(p).map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}
             </ul>
             <button onClick={() => pick(p)} data-testid={`plan-cta-${p.id}`}
               className={`mt-8 w-full rounded-full py-3.5 text-sm font-bold ${i === 2 ? "bg-white text-slate-900" : "bg-slate-900 text-white"}`}>
@@ -294,6 +321,38 @@ export function Checkout() {
             className="rounded-xl border border-slate-900 px-5 py-2.5 text-sm font-bold">Apply</button>
         </div>
         <p className="text-xs text-slate-400 mt-2">Try BUDDY20 or FIRSTNIGHT</p>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
+        <p className="overline">Before you pay</p>
+        <p className="mt-2 text-sm text-slate-600" data-testid="checkout-notice">
+          By completing this purchase, you confirm that you have reviewed the applicable price, service or
+          event details and cancellation/refund terms.
+        </p>
+        {order.kind === "membership" && (
+          <p className="mt-2 text-sm text-slate-600" data-testid="checkout-notice-membership">
+            Please review the membership price, duration, benefits, renewal terms and cancellation/refund
+            policy before completing your purchase.
+          </p>
+        )}
+        {order.kind === "event" && (
+          <p className="mt-2 text-sm text-slate-600" data-testid="checkout-notice-event">
+            Please review the event date, venue, inclusions, exclusions, price and cancellation policy before
+            completing your booking.
+          </p>
+        )}
+        {["travel", "companion", "product"].includes(order.kind) && (
+          <p className="mt-2 text-sm text-slate-600" data-testid="checkout-notice-vendor">
+            This service is provided by the listed Vendor. Please review the Vendor's service details and
+            applicable cancellation terms before completing your booking.
+          </p>
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          <a href="/p/refund" target="_blank" rel="noreferrer" className="underline" data-testid="checkout-refund-link">
+            Cancellation &amp; Refund Policy</a>{" · "}
+          <a href="/p/terms" target="_blank" rel="noreferrer" className="underline" data-testid="checkout-terms-link">
+            Terms &amp; Conditions</a>
+        </p>
       </div>
 
       <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">

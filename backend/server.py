@@ -34,6 +34,7 @@ from storage import init_storage, put_object, get_object, MIME_TYPES, ALL_MIME_T
 from geo import COUNTRY_SEED, EXTRA_CURRENCIES, ID_DOC_TYPES
 from travel import PROVIDER_ROLES, TRIP_ACTIVITIES, TRAVEL_TERMS
 from invoices import invoice_pdf, template_for
+import agreements as agr
 from city_guides import guide_for, auto_guide
 import ai
 
@@ -152,6 +153,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("Vendors", "vendors:manage", "Create, edit and suspend vendors"),
     ("Vendors", "invites:manage", "Send and revoke vendor invitations"),
     ("Vendors", "verification:manage", "Review documents and grant the verified badge"),
+    ("Vendors", "agreements:manage", "Create, amend, suspend and terminate vendor agreements"),
     ("Money", "payouts:view", "See what vendors are owed"),
     ("Money", "payouts:pay", "Mark payouts as settled"),
     ("Money", "finance:view", "See orders and payments"),
@@ -175,6 +177,7 @@ STAFF_ROLES: dict[str, dict] = {
     "operations": {"label": "Operations", "scope": "admin",
                    "description": "Vendors, invitations, verification and the event calendar.",
                    "permissions": ["vendors:view", "vendors:manage", "invites:manage", "verification:manage",
+                                   "agreements:manage",
                                    "events:view", "events:moderate", "analytics:view", "audit:view"]},
     "finance": {"label": "Finance", "scope": "admin",
                 "description": "Payouts, orders, refunds and pricing.",
@@ -350,6 +353,38 @@ REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "250"))
 # ---------------- editable email templates ----------------
 # Every automated email lives here. Admins can override subject/title/body/button; {{vars}} stay dynamic.
 EMAIL_TEMPLATES: dict[str, dict] = {
+    "vendor_agreement_otp": {
+        "label": "Vendor agreement acceptance OTP", "group": "Vendors",
+        "vars": ["first_name", "otp", "agreement_number", "minutes"],
+        "subject": "Your Buddilio agreement code: {{otp}}",
+        "title": "Confirm your vendor agreement",
+        "body": "<p>Hi {{first_name}},</p><p>Use this code to accept agreement "
+                "<b>{{agreement_number}}</b>:</p><p style=\"font-size:26px;font-weight:800;letter-spacing:6px\">"
+                "{{otp}}</p><p>The code expires in {{minutes}} minutes. If you didn't request it, ignore "
+                "this email and tell us at info@buddilio.com.</p>",
+        "cta_label": "", "cta_url": ""},
+    "vendor_agreement_accepted": {
+        "label": "Vendor agreement accepted", "group": "Vendors",
+        "vars": ["first_name", "agreement_number", "version", "effective_date", "commercial_summary",
+                 "dashboard_url", "agreement_url"],
+        "subject": "Buddilio Vendor Agreement Successfully Accepted",
+        "title": "Agreement {{agreement_number}} is now active",
+        "body": "<p>Hi {{first_name}},</p><p>Thank you — your Buddilio Vendor Agreement is accepted and "
+                "active.</p><p><b>Agreement:</b> {{agreement_number}}<br/><b>Version:</b> {{version}}<br/>"
+                "<b>Effective from:</b> {{effective_date}}</p><p><b>Commercial summary</b><br/>"
+                "{{commercial_summary}}</p><p>Your executed agreement is saved in your vendor portal: "
+                "<a href=\"{{agreement_url}}\">download the PDF</a>.</p>",
+        "cta_label": "Open my vendor dashboard", "cta_url": "{{dashboard_url}}"},
+    "vendor_terms_amended": {
+        "label": "Vendor commercial terms amended", "group": "Vendors",
+        "vars": ["first_name", "agreement_number", "version", "changes", "effective_date", "agreement_url"],
+        "subject": "Your Buddilio commercial terms have been updated",
+        "title": "Please review your revised commercial terms",
+        "body": "<p>Hi {{first_name}},</p><p>Your Buddilio Commercial Terms have been updated. Please review "
+                "and accept the revised terms.</p><p><b>What changed</b><br/>{{changes}}</p>"
+                "<p><b>Effective from:</b> {{effective_date}}</p><p>Bookings already confirmed continue on "
+                "the terms recorded at the time of booking.</p>",
+        "cta_label": "Review and accept", "cta_url": "{{agreement_url}}"},
     "notification": {
         "label": "In-app notification email", "group": "Members",
         "vars": ["first_name", "title", "message", "link_url"],
@@ -560,6 +595,50 @@ async def membership_active(user_id: str) -> Optional[dict]:
     return clean(m) if m else None
 
 
+FREE_PLAN_LIMITS = {"plan_name": "Free", "messages_per_week": 5, "hangouts_access": False,
+                    "premium_filters": False, "priority_access": False, "concierge_support": False,
+                    "discount_percent": 0.0}
+
+
+async def plan_limits(user_id: str) -> dict:
+    """What this member is allowed to do — from their plan if they have one, else the free defaults."""
+    member = await membership_active(user_id)
+    s = await db.settings.find_one({}, {"free_messages_per_week": 1}) or {}
+    free = {**FREE_PLAN_LIMITS, "messages_per_week": int(s.get("free_messages_per_week", 5))}
+    if not member:
+        return free
+    plan = None
+    if member.get("plan_id"):
+        try:
+            plan = await db.membership_plans.find_one({"_id": ObjectId(member["plan_id"])})
+        except Exception:
+            plan = None
+    if not plan:
+        return {**free, "plan_name": member.get("plan_name", "Member")}
+    return {"plan_name": plan.get("name", member.get("plan_name", "Member")),
+            "messages_per_week": int(plan.get("messages_per_week") or 0),
+            "hangouts_access": bool(plan.get("hangouts_access")),
+            "premium_filters": bool(plan.get("premium_filters")),
+            "priority_access": bool(plan.get("priority_access")),
+            "concierge_support": bool(plan.get("concierge_support")),
+            "discount_percent": float(plan.get("discount_percent") or 0)}
+
+
+def week_start() -> str:
+    d = now_utc()
+    return iso((d - timedelta(days=d.weekday())).replace(hour=0, minute=0, second=0, microsecond=0))
+
+
+async def messages_left(user_id: str, limits: Optional[dict] = None) -> Optional[int]:
+    """None means unlimited."""
+    lim = limits or await plan_limits(user_id)
+    cap = int(lim.get("messages_per_week") or 0)
+    if cap <= 0:
+        return None
+    used = await db.messages.count_documents({"sender_id": user_id, "created_at": {"$gte": week_start()}})
+    return max(cap - used, 0)
+
+
 async def load_many(collection, ids, fields: Optional[dict] = None) -> dict:
     """Fetch a set of documents by id in one round-trip, keyed by their string id."""
     oids = []
@@ -609,6 +688,19 @@ def badge_for(count: int) -> dict:
         if count >= need:
             return {"name": name, "at": need, "next": nxt}
     return {"name": "", "at": 0, "next": 1}
+
+
+async def record_signup_consents(user_id: str, email: str, request: Optional[Request] = None):
+    """A sign-up ticks the current Terms, Privacy and Guidelines, so store them as accepted versions."""
+    for slug in ("terms", "privacy", "guidelines"):
+        req = await db.policy_acceptance_required.find_one({"slug": slug})
+        page = await db.cms_pages.find_one({"slug": slug}, {"policy_version": 1})
+        version = int((req or {}).get("version") or (page or {}).get("policy_version") or 1)
+        await db.policy_acceptances.insert_one({
+            "user_id": user_id, "email": email, "slug": slug, "version": version,
+            "accepted_at": iso(now_utc()), "source": "registration",
+            "ip_address": (request.client.host if request and request.client else ""),
+            "user_agent": (request.headers.get("user-agent", "")[:300] if request else "")})
 
 
 async def register_referral(code: str, invitee_id: str, invitee_name: str):
@@ -662,6 +754,8 @@ class RegisterIn(BaseModel):
     lifestyle: List[str] = []
     is_adult: bool = False
     accept_terms: bool = False
+    accept_privacy: bool = False
+    accept_guidelines: bool = False
     role: str = "user"
     org_name: str = ""
     country: str = ""
@@ -737,6 +831,12 @@ class PlanIn(BaseModel):
     benefits: List[str] = []
     discount_percent: float = 0
     price_overrides: dict = {}
+    # What the plan actually unlocks — edited in Admin → Memberships and enforced at runtime.
+    messages_per_week: int = 0          # 0 = unlimited
+    hangouts_access: bool = False
+    premium_filters: bool = False
+    priority_access: bool = False
+    concierge_support: bool = False
     active: bool = True
 
 
@@ -826,15 +926,18 @@ def age_from_dob(dob: str) -> int:
 
 
 @api.post("/auth/register")
-async def register(payload: RegisterIn, response: Response):
+async def register(payload: RegisterIn, response: Response, request: Request):
     email = payload.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
     age = age_from_dob(payload.dob)
     if age < 21:
         raise HTTPException(status_code=400, detail="You must be at least 21 years old to join Buddilio.")
-    if not payload.is_adult or not payload.accept_terms:
-        raise HTTPException(status_code=400, detail="Please confirm your age and accept the policies.")
+    if not all([payload.is_adult, payload.accept_terms, payload.accept_privacy,
+                payload.accept_guidelines]):
+        raise HTTPException(status_code=400,
+                            detail="Please confirm you are 21+ and accept the Terms, Privacy Policy and "
+                                   "Community Guidelines.")
     if len(payload.mobile.strip()) < 8:
         raise HTTPException(status_code=400, detail="Please enter a valid mobile number.")
     role = "partner" if payload.role == "partner" else "user"
@@ -854,6 +957,7 @@ async def register(payload: RegisterIn, response: Response):
     }
     res = await db.users.insert_one(doc)
     uid = str(res.inserted_id)
+    await record_signup_consents(uid, email, request)
     await register_referral(payload.referral_code, uid, payload.full_name)
     await notify(uid, "Welcome to Buddilio", "Complete your profile to get better companion matches.", "registration", "/profile")
     asyncio.create_task(send_tpl("welcome", email, {"first_name": first_name(payload.full_name),
@@ -980,6 +1084,7 @@ async def google_session(payload: GoogleSessionIn, response: Response):
         user = await db.users.find_one({"_id": res.inserted_id})
         uid = str(res.inserted_id)
         await ensure_ref_code(user)
+        await record_signup_consents(uid, email, None)
         await register_referral(payload.referral_code, uid, name)
         await notify(uid, "Welcome to Buddilio",
                      "Finish the last step so we can match you with the right companions.",
@@ -1377,6 +1482,15 @@ async def my_membership(user: dict = Depends(get_current_user)):
     return {"membership": await membership_active(user["id"])}
 
 
+@api.get("/me/limits")
+async def my_limits(user: dict = Depends(get_current_user)):
+    """What the member's current plan allows, and how much of it is left this week."""
+    limits = await plan_limits(user["id"])
+    left = await messages_left(user["id"], limits)
+    return {**limits, "messages_left": left, "messages_unlimited": left is None,
+            "week_starts": week_start()}
+
+
 async def price_for(kind: str, item_id: str):
     if kind == "provider_fee":
         doc = await db.users.find_one({"_id": ObjectId(item_id)}, {"provider": 1})
@@ -1504,6 +1618,15 @@ async def mark_failed(order: dict, reason: str = ""):
                                   "created_at": iso(now_utc())})
 
 
+async def vendor_snapshot_hook(order: dict):
+    """Freeze the vendor's commercial terms onto the paid booking, when the vendor has a schedule."""
+    try:
+        import vendor_routes
+        await vendor_routes.snapshot_booking(order)
+    except Exception as exc:                                     # never block fulfilment
+        logger.warning(f"commercial snapshot skipped for {order.get('order_no')}: {exc}")
+
+
 async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> dict:
     """Single source of truth for post-payment fulfilment. Idempotent."""
     if order["payment_status"] == "paid":
@@ -1519,6 +1642,7 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
     if order.get("coupon"):
         await db.coupon_usage.insert_one({"code": order["coupon"], "user_id": uid,
                                           "order_id": str(order["_id"]), "created_at": iso(now_utc())})
+    await vendor_snapshot_hook(order)
     if order.get("credit_applied", 0) > 0:
         await db.credits.update_one(
             {"order_id": str(order["_id"]), "type": "spent"},
@@ -2028,6 +2152,12 @@ async def send_message(cid: str, payload: MessageIn, user: dict = Depends(get_cu
         raise HTTPException(status_code=403, detail="You are not part of this conversation.")
     if not payload.body.strip() and not payload.attachment_path:
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    limits = await plan_limits(user["id"])
+    left = await messages_left(user["id"], limits)
+    if left is not None and left <= 0:
+        raise HTTPException(status_code=403,
+                            detail=f"Your {limits['plan_name']} plan includes "
+                                   f"{limits['messages_per_week']} messages a week. Upgrade for unlimited chat.")
     attachment = None
     if payload.attachment_path:
         rec = await db.files.find_one({"storage_path": payload.attachment_path,
@@ -5147,6 +5277,7 @@ class PageIn(BaseModel):
     nav_footer_group: str = ""            # Explore | Company | Trust & Safety | ""
     nav_label: str = ""
     order: int = 0
+    material_change: bool = False         # forces members to re-accept Terms/Privacy
 
 
 BLOCK_TYPES = ("heading", "text", "richtext", "image", "quote", "list", "faq", "cta", "html")
@@ -5217,10 +5348,10 @@ async def create_page(payload: PageIn, user: dict = Depends(require_perm("conten
 
 @api.put("/admin/pages/{pid}")
 async def update_page(pid: str, payload: PageIn, user: dict = Depends(require_perm("content:manage"))):
-    try:
-        page = await db.cms_pages.find_one({"_id": ObjectId(pid)})
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid page id")
+    # Admin tooling may address a page by id or by slug.
+    page = await db.cms_pages.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not page:
+        page = await db.cms_pages.find_one({"slug": pid})
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
     slug = page_slug(payload.slug)
@@ -5229,10 +5360,64 @@ async def update_page(pid: str, payload: PageIn, user: dict = Depends(require_pe
         raise HTTPException(status_code=400, detail="Another page already uses that slug.")
     upd = payload.model_dump() | {"slug": slug, "blocks": clean_blocks(payload.blocks),
                                  "content": safe_html(payload.content)[:20000],
-                                 "updated_at": iso(now_utc())}
+                                 "updated_at": iso(now_utc()), "last_updated": iso(now_utc()),
+                                 "policy_version": int(page.get("policy_version") or 1) + 1,
+                                 "updated_by_name": user.get("full_name", user.get("email", ""))}
+    upd.pop("material_change", None)
+    # Legal pages keep every past version; nothing is ever overwritten in place.
+    await db.cms_page_versions.insert_one({
+        "slug": slug, "version": int(page.get("policy_version") or 1), "title": page.get("title", ""),
+        "content": page.get("content", ""), "blocks": page.get("blocks", []),
+        "seo_title": page.get("seo_title", ""), "seo_description": page.get("seo_description", ""),
+        "archived_at": iso(now_utc()), "changed_by": user.get("full_name", user.get("email", ""))})
     await db.cms_pages.update_one({"_id": page["_id"]}, {"$set": upd})
-    await audit(user, "page.update", "cms_page", slug, {"title": payload.title})
+    if payload.material_change and slug in ("terms", "privacy", "guidelines"):
+        await db.policy_acceptance_required.update_one(
+            {"slug": slug}, {"$set": {"version": upd["policy_version"], "since": iso(now_utc()),
+                                      "declared_by": user["id"]}}, upsert=True)
+        await audit(user, "POLICY_MATERIAL_CHANGE", "cms_page", slug, {"version": upd["policy_version"]})
+    await audit(user, "page.update", "cms_page", slug, {"title": payload.title,
+                                                        "version": upd["policy_version"]})
     return clean(await db.cms_pages.find_one({"_id": page["_id"]}))
+
+
+@api.get("/admin/pages/{slug}/versions")
+async def page_versions(slug: str, user: dict = Depends(require_perm("content:manage"))):
+    rows = await db.cms_page_versions.find({"slug": slug}).sort("version", -1).to_list(50)
+    current = await db.cms_pages.find_one({"slug": slug})
+    return {"current": clean(current) if current else None, "items": [clean(r) for r in rows]}
+
+
+@api.get("/policies/pending")
+async def pending_policies(user: dict = Depends(get_current_user)):
+    """Which policy updates this member still has to accept."""
+    required = await db.policy_acceptance_required.find({}).to_list(20)
+    accepted = {a["slug"]: a["version"] for a in
+                await db.policy_acceptances.find({"user_id": user["id"]}).to_list(50)}
+    pending = []
+    for r in required:
+        if int(accepted.get(r["slug"], 0)) < int(r["version"]):
+            page = await db.cms_pages.find_one({"slug": r["slug"]}, {"title": 1, "slug": 1, "last_updated": 1})
+            pending.append({"slug": r["slug"], "version": r["version"],
+                            "title": (page or {}).get("title", r["slug"]),
+                            "last_updated": (page or {}).get("last_updated", r["since"])})
+    return {"items": pending}
+
+
+@api.post("/policies/accept")
+async def accept_policies(request: Request, body: dict = Body(...),
+                          user: dict = Depends(get_current_user)):
+    slugs = body.get("slugs") or []
+    if not slugs:
+        raise HTTPException(status_code=400, detail="Nothing to accept.")
+    for slug in slugs:
+        req = await db.policy_acceptance_required.find_one({"slug": slug})
+        version = int((req or {}).get("version") or 1)
+        await db.policy_acceptances.insert_one({
+            "user_id": user["id"], "email": user["email"], "slug": slug, "version": version,
+            "accepted_at": iso(now_utc()), "ip_address": (request.client.host if request.client else ""),
+            "user_agent": request.headers.get("user-agent", "")[:300]})
+    return {"ok": True, "accepted": slugs}
 
 
 @api.delete("/admin/pages/{pid}")
@@ -5278,16 +5463,31 @@ DEFAULT_SITE_CONTENT: dict[str, dict] = {
                        {"label": "Hangouts", "to": "/hangouts"},
                        {"label": "Messages", "to": "/messages"}, {"label": "Membership", "to": "/membership"},
                        {"label": "Orders", "to": "/orders"}, {"label": "Wallet", "to": "/wallet"}]},
-    "footer": {"groups": [
-        {"title": "Explore", "links": [{"label": "Events", "to": "/events"}, {"label": "Cities", "to": "/cities"},
-                                       {"label": "Organisers", "to": "/hosts"}, {"label": "Passes", "to": "/passes"},
-                                       {"label": "Membership", "to": "/membership"}]},
-        {"title": "Company", "links": [{"label": "About", "to": "/p/about"}, {"label": "Contact", "to": "/p/contact"},
-                                       {"label": "FAQ", "to": "/p/faq"}]},
-        {"title": "Trust & Safety", "links": [{"label": "Safety Center", "to": "/safety"},
+    "footer": {"legal_note": ("Buddilio is a social discovery and experience platform for adults aged 21+. "
+                              "Buddilio is not a dating or matchmaking platform. User interactions, "
+                              "third-party services, events and experiences may involve independent "
+                              "individuals or vendors. Please use the platform responsibly and review our "
+                              "Safety Centre, Community Guidelines, Terms & Conditions and applicable "
+                              "purchase policies before using our services."),
+               "groups": [
+        {"title": "Buddilio", "links": [{"label": "About Us", "to": "/p/about"},
+                                        {"label": "How It Works", "to": "/p/how-it-works"},
+                                        {"label": "FAQ", "to": "/p/faq"},
+                                        {"label": "Contact Us", "to": "/p/contact"},
+                                        {"label": "Cities We Serve", "to": "/p/cities"}]},
+        {"title": "Safety & Trust", "links": [{"label": "Safety Centre", "to": "/safety"},
                                               {"label": "Community Guidelines", "to": "/p/guidelines"},
-                                              {"label": "Terms", "to": "/p/terms"},
-                                              {"label": "Privacy", "to": "/p/privacy"}]}]},
+                                              {"label": "Report a Concern", "to": "/p/report"},
+                                              {"label": "Trust & Verification", "to": "/p/trust"}]},
+        {"title": "Legal", "links": [{"label": "Privacy Policy", "to": "/p/privacy"},
+                                     {"label": "Terms & Conditions", "to": "/p/terms"},
+                                     {"label": "Cancellation & Refund Policy", "to": "/p/refund"},
+                                     {"label": "Cookie Policy", "to": "/p/cookies"},
+                                     {"label": "Vendor Terms", "to": "/p/vendor-terms"}]},
+        {"title": "Explore", "links": [{"label": "Events", "to": "/events"},
+                                       {"label": "Experiences", "to": "/passes"},
+                                       {"label": "Companions", "to": "/discover"},
+                                       {"label": "Membership", "to": "/membership"}]}]},
 }
 
 
@@ -5607,7 +5807,7 @@ def booking_refundable(b: dict) -> float:
 
 
 async def premium_member(user: dict = Depends(get_current_user)) -> dict:
-    """Hangouts are invisible to everyone but paying members."""
+    """Hangouts are invisible to everyone but plans that switch hangout access on."""
     member = await membership_active(user["id"])
     if not member:
         raise HTTPException(status_code=403, detail="Hangouts are a premium member feature.")
@@ -5615,6 +5815,18 @@ async def premium_member(user: dict = Depends(get_current_user)) -> dict:
     required = (s.get("companions_min_plan") or "").strip()
     if required and member.get("plan_name") != required:
         raise HTTPException(status_code=403, detail=f"Hangouts are for {required} members.")
+    plan = None
+    if member.get("plan_id"):
+        try:
+            plan = await db.membership_plans.find_one({"_id": ObjectId(member["plan_id"])},
+                                                     {"hangouts_access": 1, "name": 1})
+        except Exception:
+            plan = None
+    # Plans created before this switch existed have no flag at all, so they keep their old access.
+    if plan and "hangouts_access" in plan and not plan.get("hangouts_access"):
+        raise HTTPException(status_code=403,
+                            detail=f"Hangouts aren't included in {plan.get('name', 'your plan')}. "
+                                   "Upgrade to unlock paid hangouts.")
     user["membership"] = member
     return user
 
@@ -7140,6 +7352,15 @@ async def my_ledger(kind: str = "", user: dict = Depends(get_current_user)):
                                                    if p.get("status") == "pending"), 2)},
             "kinds": MONEY_IN_KINDS, "currency": BASE_CURRENCY}
 
+
+import vendor_routes
+
+vendor_routes.register({
+    "api": api, "db": db, "clean": clean, "audit": audit, "require_perm": require_perm,
+    "get_current_user": get_current_user, "notify": notify, "send_tpl": send_tpl,
+    "first_name": first_name, "perms_of": perms_of, "Response": Response,
+    "site_url": lambda: FRONTEND_URL,
+})
 
 app.include_router(api)
 app.add_middleware(

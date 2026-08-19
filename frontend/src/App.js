@@ -31,6 +31,8 @@ import Travel from "@/pages/Travel";
 import ProviderSignup from "@/pages/ProviderSignup";
 import Invoice from "@/pages/Invoice";
 import LedgerPage from "@/components/MyLedger";
+import VendorAgreement from "@/pages/VendorAgreement";
+import { PolicyConsent } from "@/components/PolicyConsent";
 import Console from "@/pages/Console";
 import VendorSignup from "@/pages/VendorSignup";
 import "@/index.css";
@@ -105,6 +107,7 @@ function Shell() {
           <Route path="/travel/provider" element={<Protected><ProviderSignup /></Protected>} />
           <Route path="/invoice/:id" element={<Protected><Invoice /></Protected>} />
           <Route path="/ledger" element={<Protected><LedgerPage /></Protected>} />
+          <Route path="/vendor/agreement" element={<Protected><VendorAgreement /></Protected>} />
           <Route path="/hangouts" element={<Protected><Hangouts /></Protected>} />
           <Route path="/hangouts/host" element={<Protected><HostHangouts /></Protected>} />
           <Route path="/hangouts/bookings" element={<Protected><MyBookings /></Protected>} />
@@ -116,6 +119,7 @@ function Shell() {
         </Routes>
       </main>
       <Footer />
+      <PolicyConsent />
       <InstallPrompt />
       <AiChatWidget />
       <Toaster position="top-center" richColors />

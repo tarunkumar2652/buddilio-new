@@ -3,6 +3,7 @@ import { CalendarDays, MapPin, Users, Star, BadgeCheck } from "lucide-react";
 import { fmtDate, fileUrl } from "@/lib/api";
 import { useCurrency } from "@/context/CurrencyContext";
 import { Badge } from "@/components/Shared";
+import { plainText } from "@/components/RichText";
 
 export const EventCard = ({ ev, className = "" }) => {
   const { fmtOf } = useCurrency();
@@ -78,7 +79,7 @@ export const PersonCard = ({ p }) => (
     </div>
     <div className="p-4">
       <p className="text-sm text-slate-600 line-clamp-2 min-h-[40px]">
-        {(p.bio || "Buddilio member").replace(/<[^>]*>/g, " ").trim()}
+        {(p.bio && plainText(p.bio)) || "Buddilio member"}
       </p>
       <div className="mt-3 flex flex-wrap gap-1.5">
         {(p.interests || []).slice(0, 3).map((i) => <Badge key={i}>{i}</Badge>)}

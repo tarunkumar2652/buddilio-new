@@ -6,6 +6,7 @@ import { api, errMsg, fileUrl, fmtDate } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { EventCard } from "@/components/Cards";
 import { Spinner, Empty, SEO } from "@/components/Shared";
+import { RichHtml, plainText } from "@/components/RichText";
 
 const Avatar = ({ src, name, size = "h-16 w-16" }) => (src ? (
   <img src={fileUrl(src)} alt={name} className={`${size} rounded-2xl object-cover border border-slate-200`} />
@@ -99,7 +100,7 @@ export function HostProfile() {
 
   return (
     <div data-testid="host-profile-page">
-      <SEO title={`${h.name} on Buddilio`} description={(h.bio || `Events hosted by ${h.name}.`).slice(0, 155)} />
+      <SEO title={`${h.name} on Buddilio`} description={plainText(h.bio) || `Events hosted by ${h.name}.`} />
       <div className="bg-brand-ink text-white">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 py-12 flex flex-wrap items-center gap-6">
           <Avatar src={h.photo} name={h.name} size="h-24 w-24" />
@@ -127,7 +128,7 @@ export function HostProfile() {
       </div>
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 py-10 pb-28 space-y-12">
-        {h.bio && <p className="max-w-3xl text-slate-600 leading-relaxed whitespace-pre-line" data-testid="host-bio">{h.bio}</p>}
+        {h.bio && <RichHtml html={h.bio} className="max-w-3xl text-slate-600 leading-relaxed" testid="host-bio" />}
 
         <div>
           <h2 className="text-2xl font-bold">Coming up</h2>

@@ -6,6 +6,7 @@ import { useCurrency } from "@/context/CurrencyContext";
 import { EventCard } from "@/components/Cards";
 import { SEO } from "@/components/Shared";
 import { GuestConcierge } from "@/components/GuestConcierge";
+import { planFeatures } from "@/pages/Commerce";
 import { ShieldCheck, Sparkles, UserCheck, Ticket, ArrowRight, Star, Check, MessageCircle } from "lucide-react";
 
 const HERO = "https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg?auto=compress&w=1600";
@@ -187,8 +188,8 @@ export default function Home() {
                 <p className={`mt-2 text-sm ${i === 2 ? "text-slate-600" : "text-slate-400"}`}>{p.description}</p>
                 <p className="mt-6 text-3xl font-display font-bold">{p.price === 0 ? "Free" : fmt(p.price)}
                   <span className="text-sm font-normal opacity-60"> / {p.duration_days} days</span></p>
-                <ul className="mt-6 space-y-2.5 text-sm">
-                  {p.benefits.map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}
+                <ul className="mt-6 space-y-2.5 text-sm" data-testid={`home-plan-features-${p.id}`}>
+                  {planFeatures(p).slice(0, 5).map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}
                 </ul>
                 <Link to="/membership" data-testid={`home-plan-cta-${p.id}`}
                   className={`mt-8 block text-center rounded-full py-3 text-sm font-bold transition-transform hover:scale-[1.02] ${i === 2 ? "brand-gradient text-white shadow-glow" : "bg-white text-slate-900"}`}>

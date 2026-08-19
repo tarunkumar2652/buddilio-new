@@ -25,6 +25,7 @@ export default function Messages() {
   const [pct, setPct] = useState(null);
   const fileInput = useRef(null);
   const [connected, setConnected] = useState(false);
+  const [limits, setLimits] = useState(null);
   const endRef = useRef(null);
   const threadRef = useRef(null);
   const ws = useRef(null);
@@ -43,11 +44,12 @@ export default function Messages() {
   }, [active]);
 
   useEffect(() => { loadConvos(); }, [loadConvos]);
+  const loadLimits = useCallback(() => {
+    api.get("/me/limits").then(({ data }) => setLimits(data)).catch(() => setLimits(null));
+  }, []);
+
   useEffect(() => { loadMsgs(); }, [loadMsgs]);
-  useEffect(() => {
-    const el = threadRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [msgs.length, typing]);
+  useEffect(() => { loadLimits(); }, [loadLimits]);
 
   // realtime socket
   useEffect(() => {
@@ -116,8 +118,8 @@ export default function Messages() {
     setText("");
     setAtt(null);
     emit("stop_typing");
-    try { await api.post(`/conversations/${active}/messages`, { body, attachment_path }); loadMsgs(); loadConvos(); }
-    catch (er) { toast.error(errMsg(er)); }
+    try { await api.post(`/conversations/${active}/messages`, { body, attachment_path }); loadMsgs(); loadConvos(); loadLimits(); }
+    catch (er) { toast.error(errMsg(er)); setText(body); }
   };
 
   const del = async () => {
@@ -240,6 +242,12 @@ export default function Messages() {
                 <div ref={endRef} />
               </div>
               <form onSubmit={send} className="border-t border-slate-200 p-3">
+                {limits && !limits.messages_unlimited && (
+                  <p className="mb-2 flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-500" data-testid="message-quota">
+                    {limits.messages_left} of {limits.messages_per_week} messages left this week on {limits.plan_name}
+                    <Link to="/membership" data-testid="message-quota-upgrade" className="text-brand-magenta underline">Upgrade for unlimited</Link>
+                  </p>
+                )}
                 {(att || pct !== null) && (
                   <div className="mb-2 flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
                     data-testid="attachment-preview">

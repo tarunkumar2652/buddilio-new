@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 32 — full verification of dynamic membership plans (price/messages/feature flags), currency overrides, message-quota enforcement, plan-driven hangouts gating, the new grouped admin shell, the redesigned auth pages and the header/footer/theme refresh. Backend: 27/27 pytest cases green (new /app/backend/tests/test_iteration32_dynamic_plans.py + re-ran iteration-31 invoice/ledger suite). Frontend: admin -> Memberships edit (price 1499 / 7 messages / premium_filters + priority_access / extra benefit) propagated instantly to /membership (plan-features-<id>) and the homepage (home-plan-features-<id>) with no duplicated lines; USD override showed exactly $25 and 'Clear all overrides' restored the converted price ($11.99 / restored base 999). Quota strip + 403 upgrade toast reproduced end-to-end for a Basic member (5/week). All plan, message and settings data touched has been restored (Basic 999/5/no toggles, Premium Monthly 1999/unlimited/hangouts+filters+priority, Premium Annual 19999/unlimited/all four, settings.free_messages_per_week=5, TEST_ messages deleted, Marina Rooftop Sundowner still price_input 285 AED).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/admin/settings", "issue": "Found settings.free_messages_per_week = 1 in the DB at the start of this run (two settings.update audit rows at 20:05/20:06 UTC by admin@buddilio.com, not from my tests). I restored it to 5 — whoever was probing the free quota manually should restore settings afterwards."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Layout header (member view)", "issue": "The avatar/profile link collapses to 0px width on desktop for a logged-in member (offsetWidth 0 at 1920/1440/1280, image itself loads: naturalWidth 400) so nav-profile is invisible and un-clickable — Playwright click times out with 'element is not visible'. Cause: the <img class=\"h-9 w-9\"> / initials <span> inside the flex header row has no shrink-0, so flex-shrink squeezes it to zero once the member nav (9 links + search + currency + Buddy AI + bell + logout) fills the row. Add shrink-0 to the anchor and its child.", "selector": "[data-testid=\"nav-profile\"]", "priority": "HIGH"},
+      {"component": "Commerce planFeatures() DERIVED filter", "issue": "A hand-written benefit is silently dropped if it contains any derived keyword. Basic's saved benefit 'Basic discovery filters' never appears on /membership or the homepage even though it is stored and shown in admin. Suggest filtering a benefit only when the matching derived line was actually emitted (e.g. only strip '...discovery filters' when premium_filters is true).", "selector": "[data-testid=\"plan-features-<id>\"]", "priority": "MEDIUM"},
+      {"component": "Layout header", "issue": "Header measures 79px, not the intended 76px (border/padding rounding) — cosmetic only.", "selector": "header", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Gradient CTAs (See membership plans, Buddy AI / Ask Buddy launcher)", "issues": ["White text on the light pink->orange gradient measures ~2.0-2.3:1, below WCAG AA 4.5:1 for the 14px labels; darken the gradient stops or use a solid magenta fill for these buttons"]},
+      {"screen": "/membership (Basic card)", "issues": ["Basic card only renders 2 feature lines (after the DERIVED filter drops the third), leaving a large empty gap versus the premium cards"]},
+      {"screen": "/events list", "issues": ["React console warning 'validateDOMNesting: <span> cannot appear as a child of <option>' — a dynamic label inside <option> gets wrapped by the preview instrumentation; make the option label a plain interpolated string to keep the console clean"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration32_dynamic_plans.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Add shrink-0 (and a min-w) to the header nav-profile avatar/initials so the profile link is visible and clickable for members on desktop",
+    "Stop the DERIVED regex from swallowing admin-written benefits that are not actually represented by a toggle (Basic's 'Basic discovery filters' disappears from the public cards)",
+    "Optional: fix the <span> inside <option> nesting warning on /events and raise contrast of the pink/orange gradient CTA labels",
+    "Data hygiene: aarav.mehta's /ledger still holds a leftover 'TEST Override 73f8' pending membership order and USD-denominated membership invoices from earlier test runs; purge before demo"
+  ],
+  "critical_code_review_comments": [
+    "GET /api/plans, /api/me/limits and PUT /api/admin/plans are clean (no _id leakage, plan flags all present, member limits recompute live from the plan doc, week_start based counting verified).",
+    "Message quota is enforced server-side (403 with 'Your plan includes N messages a week...') and messages_left drops to 0 — no client-side-only gating.",
+    "premium_member() correctly rejects members whose plan has hangouts_access=false (403 'hangouts') and members with no membership; /hangouts renders the right upsell copy.",
+    "Plan mutation tests must stay in a single test class: pytest.ini forces -n 2 --dist loadscope, and splitting plan-mutating tests across classes made them race (two spurious failures + a corrupted Premium Annual doc that I restored). The new suite is now one class for this reason."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration32_dynamic_plans.py"
+  ],
+  "success_rate": {"backend": "100% (27/27)", "frontend": "95% (1 header bug + 1 benefit-filter content bug)"},
+  "seed_data_creation": "None persisted. Temporary: plan edits (price/messages/flags/benefit/USD override) on Basic + Premium Monthly/Annual, 4 'TEST_QA quota check' messages in one of aarav's conversations, TEST_ probe messages — all reverted/deleted and conversation last_message previews restored. settings.free_messages_per_week set back to 5.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@buddilio.com/Admin@123, aarav.mehta@example.com/User@123 (Basic, 5 msgs/week, 5 conversations - best account for quota testing), diya.sharma@example.com/User@123 (Premium Annual, unlimited), arjun.sethi@example.com/User@123 (no membership -> Free 5)",
+  "context_for_next_testing_agent": "Verified this iteration and not worth repeating: dynamic plan propagation (admin -> /membership -> home), USD override + clear-overrides, /api/me/limits for all three member types, weekly quota 403 (API + UI toast), hangouts plan-flag gating, admin grouped sidebar (all 9 spot-checked tabs load, mobile admin-menu-toggle drawer works at 390px), login/register(4 steps)/forgot/reset testids + real login to /dashboard, header search/currency/notifications/Buddy AI/logout, mobile bottom nav, invoice PDF download (INV-BUDF7366DB9.pdf), Marina Rooftop Sundowner price_input stays 285 AED after two UI saves. Fonts resolve to 'Cabinet Grotesk' headings / 'Satoshi' body (no serif fallback). IMPORTANT: run plan-mutating tests inside one class (pytest.ini pins -n 2 --dist loadscope) or use -n 0, otherwise plan docs get corrupted mid-run. Untested: reg-submit was deliberately not pressed (no new user created).",
+  "rca_of_the_issue": "Reported price/feature 'not linked' bug is fixed and verified: /api/plans now returns price, price_overrides, messages_per_week and the four flags; Commerce.priceFor() honours a currency override first and falls back to the converted base price, so an edited base price always shows once overrides are cleared (verified $25 override -> $11.99 converted after clear). The only new defect found is CSS: the header profile avatar is flex-shrunk to 0px width for members, making [data-testid=nav-profile] invisible/unclickable on desktop."
+}

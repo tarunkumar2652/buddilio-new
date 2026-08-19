@@ -1,0 +1,57 @@
+{
+  "summary": "Iteration 33: end-to-end verification of the Buddilio vendor agreement / dynamic commercial module and the website policy-legal package. Backend: 3 new pytest files, 67 tests, 66 passing (1 genuine security failure). Verified pricing engine maths for percentage/fixed/hybrid + floor + dynamic toggle, vendor agreement payload (BUD-VND-531967, 36 numbered legal sections, 13 commercial rows), acceptance guards (missing confirmation 400, wrong OTP 400), a REAL amendment re-acceptance with a fresh OTP (code recovered from agreement_otps hash) taking v1.1 to active with a second immutable acceptance record (IP, user agent, OTP reference, sha256 document hash, locked=true), executed PDF (vendor 200 BUD-VND-531967-v1.1.pdf, admin 200, other member 403, anonymous 401), an isolated throwaway-vendor lifecycle (approve -> schedule v1 -> agreement pending -> amend v2/v1.1 with old->new change list + material=true -> suspend -> terminate) proving v1 is never overwritten and history survives termination, the full audit trail (VENDOR_CREATED, VENDOR_APPROVED, COMMERCIAL_SCHEDULE_CREATED, AGREEMENT_GENERATED, AGREEMENT_ACCEPTED, COMMERCIAL_SCHEDULE_CHANGED, AGREEMENT_SUSPENDED, AGREEMENT_TERMINATED), RBAC (partner 403 on both admin endpoints and on amend, member 403/404 on vendor endpoints), all 16 policy pages (SEO title + meta description + policy_version + last_updated + blocks, FAQ blocks, no escaped HTML, cross-links), register consent rejection for each of the 4 flags, and the material-change re-acceptance chain (terms v1->v2, v1 archived, /policies/pending, /policies/accept, no re-prompt). Frontend: vendor portal (6 tabs, amendment banner, 4-checkbox gating of send-OTP, OTP send, wrong-OTP error, PDF link, history), admin Vendor agreements panel (agreements/vendors views, Set terms modal with live preview 3115.20 / 2000 matching the engine, agreement detail modal with commercial rows + acceptance + schedule versions + audit actions, amend modal), 16 policy pages at 1920px (H1/H2/H3, lists, 15 expandable <details> on FAQ, 'Last updated ... version N'), footer 4 groups + footer-legal-note + Gurugram/MSME line with all 42 footer links resolving (desktop + 390px), registration consent gating (0/4 and 3/4 blocked client-side, 4/4 registers), checkout notices for membership/event/product (general + kind-specific + Refund/Terms links, no cross-leakage) and the policy-consent modal (disabled accept until tick, records acceptance, does not reappear).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/pricing/quote", "issue": "Endpoint has NO auth dependency. An anonymous caller with only a vendor_id gets the vendor's full commercial terms: vendor_net_rate 1600, pricing_floor 1600, commission_type/commission_value 22%, commission, platform_fee, vendor_settlement, buddilio_earning and the schedule id + version. This breaks the RBAC requirement that a vendor (or anyone) must not see another vendor's terms/settlements. Verified live against the SMOKE vendor id with no Authorization header (HTTP 200).", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/auth/register", "issue": "Registration accepts the 4 consents but never writes policy_acceptances for the currently required policy versions, so a brand-new member is immediately shown the 'policies updated' consent modal right after sign-up (reproduced in the UI with a freshly registered user). Record acceptances for the current required versions at registration."},
+      {"endpoint": "PUT /api/admin/pages/{pid}", "issue": "Version-history/material-change update is keyed by page ObjectId only; the spec/URL in the brief (PUT /api/admin/pages/terms) 400s with 'invalid page id'. Consider accepting the slug as an alternative key for admin tooling."},
+      {"endpoint": "GET /api/bookings/{oid}/commercials", "issue": "NOT TESTED - the orders collection contains no paid/fulfilled order in the preview DB, so snapshot_booking()/vendor_snapshot_hook and the invoice-PDF regression could not be exercised. Needs a seeded paid order to validate the commercial snapshot path."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AgreementsAdmin - Set terms modal", "issue": "Live preview happily renders an invalid combination: with net rate 2000 and pricing floor 5000 the preview shows vendor settlement ₹5000 (above the net rate) and no inline warning; the rejection only arrives from the backend on save. Add client-side validation (floor <= net rate) or an inline warning in the preview.", "selector": "[data-testid='sched-preview'], [data-testid='preview-settlement']", "priority": "MEDIUM"},
+      {"component": "Safety page routing", "issue": "/safety renders the bespoke Safety Centre React page, not the CMS 'safety' policy page, so unlike the other 15 pages it has no 'Last updated ... · version N' line and is outside the version-history / material-change re-acceptance mechanism. The CMS page content is only reachable at /p/safety, and the footer links to /safety.", "selector": "[data-testid='cms-last-updated']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Sign-up -> policy consent", "issue": "A user who has just registered while ticking all four consent boxes is immediately blocked by the policy-consent modal (backend does not store the sign-up consents as policy acceptances). The modal is a full-screen overlay, so it also intercepts clicks on the page behind it until accepted.", "affected_selectors": ["[data-testid='policy-consent']", "[data-testid='reg-submit']"]}
+    ],
+    "design_issues": [
+      {"screen": "Footer (1920px)", "issues": ["Grid is lg:grid-cols-[1.5fr_repeat(3,1fr)] with the brand block occupying column 1, so only 3 of the 4 link groups fit the first row and 'Explore' wraps onto a second row - the promised 4-group row reads as 3+1", "footer-legal-note is text-white/45 on the dark ink background: readable but below comfortable contrast for a legal notice"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration33_vendor_agreements_policies.py",
+    "/app/backend/tests/test_iteration33_amendment_accept.py",
+    "/app/backend/tests/test_iteration33_vendor_lifecycle.py",
+    "/app/test_reports/pytest/iteration33_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: put an auth dependency on GET /api/pricing/quote (and restrict it so a vendor can only quote its own vendor_id; admin/staff for any) - it currently leaks every vendor's net rate, floor, commission and Buddilio earning to anonymous callers",
+    "Record policy_acceptances for the current required policy versions during POST /api/auth/register so new sign-ups are not immediately re-prompted by the consent modal",
+    "Decide the /safety route: either serve the CMS 'safety' page (so it carries the last-updated/version line and re-acceptance) or link the footer to /p/safety and exclude /safety from the 16-page policy set",
+    "Add client-side floor <= net rate validation / inline warning to the Set terms + Amend modal preview",
+    "Fix the footer grid so all four link groups sit in one row at >=1280px and lift the legal-note contrast",
+    "Seed one paid order so the booking commercial snapshot (/api/bookings/{oid}/commercials) and the invoice-PDF regression can be verified"
+  ],
+  "critical_code_review_comments": [
+    "vendor_routes.py: the /pricing/quote route is declared without Depends(get_current_user) while every other commercial route is gated - this is the only unauthenticated read of commercial data in the module",
+    "server.py register flow: the four consent booleans are validated but discarded; store them (with version + timestamp) in policy_acceptances so the consent record is auditable and the re-acceptance modal is consistent",
+    "backend/vendor_routes.py is 759 lines and agreements.py 447 lines - both are close to the 700-line split guidance; consider moving the admin-facing routes into their own module before more phases land",
+    "Admin page update requires an ObjectId; slug-based upserts would make the policy version-history API scriptable and match the documented contract"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration33_vendor_agreements_policies.py",
+    "/app/backend/tests/test_iteration33_amendment_accept.py",
+    "/app/backend/tests/test_iteration33_vendor_lifecycle.py"
+  ],
+  "success_rate": {"backend": "98% (66/67 tests, single failure is the unauthenticated /pricing/quote finding)", "frontend": "92% (all flows functional; 2 medium UI issues + footer layout/contrast)"},
+  "seed_data_creation": "Terms page was intentionally bumped to policy_version 2 with material_change=true to exercise re-acceptance (v1 archived); admin, partner and arjun.sethi have already accepted it - other members will see the consent modal once at next login. A throwaway 'TEST_ Lifecycle Vendor' (with its agreements, schedules and documents) and all TEST_ users were deleted after the run; only 'SMOKE Vendor LLP' remains. The SMOKE vendor's amendment v1.1 was accepted with a real OTP, so it is now status=active on schedule v2 (2 agreements / 2 schedules / 2 acceptances).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "/app/memory/test_credentials.md - admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123 (SMOKE Vendor LLP), aarav.mehta@example.com/User@123, arjun.sethi@example.com/User@123",
+  "context_for_next_testing_agent": "SMOKE Vendor LLP is now fully active on agreement v1.1 / schedule v2 - to retest the acceptance flow you must first Amend from the admin panel, then request an OTP and recover the code from Mongo (agreement_otps.code_hash is sha256 of the plain 6-digit code; brute-force locally as in test_iteration33_amendment_accept.py) because Resend blocks @example.com in preview. Vendor profile fields are disabled once the vendor is approved, so blank-field validation must be tested on a fresh draft vendor. policy_acceptance_required currently holds terms v2; members who have not accepted will get the policy-consent modal at login, which is a full-screen overlay and must be dismissed before any other UI interaction. Untested areas: booking commercial snapshots (no paid orders in DB), document upload via the vendor UI file input, and admin 'Ask docs' mutations on the live SMOKE vendor.",
+  "rca_of_the_issue": "1) /pricing/quote leak: the route in vendor_routes.py is registered without a get_current_user dependency (all sibling routes have one), so the quote resolves the vendor's active commercial schedule and returns the full pricing breakdown for any caller who knows or guesses a vendor id - reproduce with `curl \"$REACT_APP_BACKEND_URL/api/pricing/quote?vendor_id=<id>\"` (HTTP 200). Mitigation: add Depends(get_current_user) plus an ownership/permission check. 2) New-user consent modal: POST /api/auth/register validates is_adult/accept_terms/accept_privacy/accept_guidelines but never inserts into policy_acceptances, while GET /api/policies/pending compares policy_acceptance_required (terms v2) against that collection, so every brand-new account is immediately flagged as needing re-acceptance."
+}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, errMsg, fileUrl, fmtDate, money } from "@/lib/api";
 import { Spinner, Badge, Stat } from "@/components/Shared";
+import { plainText } from "@/components/RichText";
 
 const TABS = [["pending", "Awaiting review"], ["approved", "Approved"], ["rejected", "Rejected"],
   ["suspended", "Suspended"], ["all", "All"]];
@@ -117,7 +118,7 @@ export const Companions = () => {
                   <Badge tone={c.status === "approved" ? "green" : c.status === "pending" ? "amber" : "red"}>{c.status}</Badge>
                 </div>
                 {c.headline && <p className="mt-3 text-sm font-semibold">{c.headline}</p>}
-                {c.about && <p className="mt-1 line-clamp-3 text-sm text-slate-600">{c.about}</p>}
+                {c.about && <p className="mt-1 line-clamp-3 text-sm text-slate-600">{plainText(c.about)}</p>}
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <input value={notes[c.id] || ""} placeholder="Reason / note (sent to them)" data-testid={`companion-note-${c.id}`}
                     onChange={(e) => setNotes((n) => ({ ...n, [c.id]: e.target.value }))}

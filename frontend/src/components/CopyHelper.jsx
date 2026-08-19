@@ -43,7 +43,9 @@ export const CopyHelper = ({ form, onApply }) => {
         {draft && (
           <button type="button" data-testid="copy-helper-apply"
             onClick={() => {
-              onApply({ title: draft.title, description: draft.description, rules: draft.rules });
+              const asHtml = (t) => (/<[a-z][\s\S]*>/i.test(t || "") ? t
+                : String(t || "").split(/\n+/).filter(Boolean).map((l) => `<p>${l}</p>`).join(""));
+              onApply({ title: draft.title, description: asHtml(draft.description), rules: asHtml(draft.rules) });
               toast.success("Draft applied — tweak anything you like.");
             }}
             className="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-bold text-white">

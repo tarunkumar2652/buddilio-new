@@ -22,19 +22,19 @@ module.exports = {
           plum: '#52146F',
           ink: '#2A0836'
         },
-        // Neutral scale is plum-tinted so every existing slate-* class rebrands at once
+        // Warm near-neutral scale: keeps a whisper of the plum without turning every page pink
         slate: {
-          50: '#FBF6FA',
-          100: '#F6EDF5',
-          200: '#ECDEEC',
-          300: '#D8C0DA',
-          400: '#A98BB0',
-          500: '#7C5C86',
-          600: '#5E4069',
-          700: '#45294F',
-          800: '#341C3D',
-          900: '#2A0836',
-          950: '#1B0424'
+          50: '#FAF9FA',
+          100: '#F4F2F4',
+          200: '#EAE6EA',
+          300: '#D5CFD6',
+          400: '#A29AA4',
+          500: '#7A727C',
+          600: '#5B535E',
+          700: '#413A44',
+          800: '#2B252E',
+          900: '#1A0F1E',
+          950: '#120A15'
         },
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',
