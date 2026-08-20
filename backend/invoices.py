@@ -49,6 +49,67 @@ def _p(text, size=9.5, colour=INK, bold=False, align=0, leading=None):
     return Paragraph(text, style)
 
 
+def commission_invoice_pdf(inv: dict, entity: dict) -> bytes:
+    """Buddilio's monthly invoice to a vendor for commission and platform fees."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm,
+                            topMargin=16 * mm, bottomMargin=16 * mm,
+                            title=inv.get("invoice_no", "Commission invoice"), author="Buddilio")
+    cur = inv.get("currency", "INR")
+
+    def money(v):
+        return f"{cur} {float(v or 0):,.2f}"
+
+    flow = [
+        Table([[_p("BUDDILIO", 17, ACCENT, bold=True),
+                _p(f"COMMISSION INVOICE<br/><font size=11>{inv.get('invoice_no', '')}</font>",
+                   8, MUTED, bold=True, align=2)]], colWidths=[95 * mm, 79 * mm]),
+        Spacer(1, 4 * mm),
+        _p(f"Period {inv.get('period', '')} · issued {str(inv.get('issued_at', ''))[:10]}", 8.5, MUTED),
+        Spacer(1, 6 * mm),
+        Table([[_p("<b>From</b><br/>" + entity.get("legal_name", "Buddilio") + "<br/>"
+                   + entity.get("address", "") + "<br/>" + entity.get("email", "")
+                   + "<br/>MSME " + (entity.get("msme") or "—")
+                   + "<br/>GSTIN " + (entity.get("gstin") or "not registered"), 9, MUTED),
+                _p("<b>Billed to</b><br/>" + inv.get("vendor_name", "") + "<br/>"
+                   + (inv.get("vendor_address") or "") + "<br/>" + (inv.get("vendor_email") or "")
+                   + "<br/>PAN " + (inv.get("vendor_pan") or "—")
+                   + "<br/>GSTIN " + (inv.get("vendor_gstin") or "not registered"), 9, MUTED)]],
+              colWidths=[87 * mm, 87 * mm]),
+        Spacer(1, 7 * mm),
+    ]
+    rows = [[_p("Charge", 8.5, MUTED, bold=True), _p("BASIS", 8.5, MUTED, bold=True, align=2),
+             _p("AMOUNT", 8.5, MUTED, bold=True, align=2)]]
+    for line in inv.get("lines", []):
+        rows.append([_p(line["description"], 9.5), _p(line.get("basis", ""), 9.5, align=2),
+                     _p(money(line["amount"]), 9.5, align=2)])
+    table = Table(rows, colWidths=[100 * mm, 32 * mm, 42 * mm])
+    table.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 0.6, LINE),
+                               ("LINEBELOW", (0, 1), (-1, -1), 0.3, LINE),
+                               ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+    flow.append(table)
+
+    totals = [["Bookings in period", str(inv.get("bookings", 0))],
+              ["Gross booking value", money(inv.get("gross"))],
+              ["Vendor settlement", money(inv.get("vendor_settlement"))],
+              ["TOTAL DUE TO BUDDILIO", money(inv.get("total"))]]
+    tt = Table([[_p(l, 9.5, MUTED if "TOTAL" not in l else INK, bold=("TOTAL" in l)),
+                 _p(v, 9.5 if "TOTAL" not in l else 12, INK, bold=("TOTAL" in l), align=2)]
+                for l, v in totals], colWidths=[112 * mm, 62 * mm], hAlign="RIGHT")
+    tt.setStyle(TableStyle([("LINEABOVE", (0, -1), (-1, -1), 0.6, LINE),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    flow += [Spacer(1, 4 * mm), tt, Spacer(1, 7 * mm)]
+    note = ("Commission and platform fees for the period are retained by Buddilio from amounts collected "
+            "from customers, so no separate transfer is required unless stated. "
+            + ("GST is not applicable — Buddilio is not GST registered."
+               if not entity.get("gstin") else "Taxes as applicable are shown above."))
+    flow += [_p(note, 8.5, MUTED), Spacer(1, 5 * mm),
+             _p(f"For {entity.get('legal_name', 'Buddilio')}: {entity.get('signatory', '')}, "
+                f"{entity.get('signatory_title', '')}", 8.5, MUTED)]
+    doc.build(flow)
+    return buf.getvalue()
+
+
 def invoice_pdf(inv: dict, symbol: str = "") -> bytes:
     """Renders the same data the invoice API returns, using the template for that kind."""
     tpl = template_for(inv.get("kind", ""))

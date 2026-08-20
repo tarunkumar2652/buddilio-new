@@ -4814,7 +4814,31 @@ async def cron_daily_maintenance(_: None = Depends(cron_guard)):
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     asyncio.create_task(send_verification_reminders())
     asyncio.create_task(expire_vendor_documents())
+    if now_utc().day == 1:
+        asyncio.create_task(generate_monthly_commission_invoices())
     return {"ok": True, "queued": ["verification-reminders", "vendor-doc-expiry"]}
+
+
+async def generate_monthly_commission_invoices() -> dict:
+    """Invoices Buddilio's commission + platform fee to each vendor for the previous month."""
+    import vendor_routes
+    period = (now_utc().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    build = vendor_routes.D.get("build_commission_invoice")
+    if not build:
+        return {"created": 0}
+    made = 0
+    for v in await db.vendor_profiles.find({}, {"_id": 1}).limit(500).to_list(500):
+        if await build(str(v["_id"]), period, "cron"):
+            made += 1
+    logger.info(f"commission invoices for {period}: {made}")
+    return {"period": period, "created": made}
+
+
+@api.post("/cron/commission-invoices")
+async def cron_commission_invoices(_: None = Depends(cron_guard)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    asyncio.create_task(generate_monthly_commission_invoices())
+    return {"ok": True, "queued": "commission-invoices"}
 
 
 @api.post("/cron/vendor-doc-expiry")
@@ -7586,6 +7610,9 @@ async def startup():
     await db.cms_pages.create_index("slug", unique=True)
     await db.site_content.create_index("key", unique=True)
     await db.city_guides.create_index("slug", unique=True)
+    await db.vendor_commission_invoices.create_index([("vendor_id", 1), ("period", 1)], unique=True)
+    await db.vendor_commission_invoices.create_index("invoice_no", unique=True)
+    await db.vendor_payout_batches.create_index([("status", 1), ("created_at", -1)])
     await db.email_templates.create_index("key", unique=True)
     await db.companion_bookings.create_index([("member_id", 1), ("created_at", -1)])
     await db.companion_bookings.create_index([("companion_id", 1), ("status", 1)])

@@ -14,6 +14,7 @@ from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 import agreements as agr
+import invoices
 
 D: dict = {}          # injected dependencies
 OTP_MINUTES = 10
@@ -273,6 +274,17 @@ async def snapshot_booking(order: dict) -> Optional[dict]:
     return snap
 
 
+class PaidIn(BaseModel):
+    utr: str = ""
+    paid_on: str = ""
+    note: str = ""
+
+
+class BatchIn(BaseModel):
+    vendor_id: str = ""
+    due_only: bool = True
+
+
 BANK_FIELDS = ["bank_account_name", "bank_account_number", "bank_ifsc", "bank_name", "bank_branch",
                "bank_account_type", "bank_swift", "upi_id"]
 
@@ -290,6 +302,7 @@ def register(deps: dict):
     send_tpl = deps["send_tpl"]
     first_name = deps["first_name"]
     site_url = deps["site_url"]
+    perms_of = deps["perms_of"]
 
     manage = require_perm("agreements:manage")
     view = require_perm("vendors:view")
@@ -429,7 +442,8 @@ def register(deps: dict):
         v = await my_vendor(user)
         rows = await db.vendor_settlements.find({"vendor_id": str(v["_id"])}).sort("created_at", -1).to_list(500)
         out = [clean(r) for r in rows]
-        return {"items": out,
+        return {"items": out, "payout_hold": bool(v.get("payout_hold")),
+                "payout_hold_reason": v.get("payout_hold_reason", ""),
                 "totals": {"paid": round(sum(r["net"] for r in out if r["status"] == "paid"), 2),
                            "pending": round(sum(r["net"] for r in out if r["status"] != "paid"), 2)}}
 
@@ -641,6 +655,261 @@ def register(deps: dict):
                                                   {"legal_name": 1, "email": 1, "status": 1})
             out.append({**clean(r), "vendor": clean(v) if v else None})
         return {"items": out}
+
+    # ---------------- payout runs & reconciliation ----------------
+    pay_view = require_perm("payouts:view")
+    pay_do = require_perm("payouts:pay")
+
+    async def settlement_totals(q: dict) -> dict:
+        rows = [D["clean"](r) for r in await db.vendor_settlements.find(q).limit(5000).to_list(5000)]
+        by = lambda s: round(sum(r["net"] for r in rows if r["status"] == s), 2)  # noqa: E731
+        return {"count": len(rows), "due": by("pending"), "batched": by("batched"), "paid": by("paid"),
+                "commission": round(sum(r.get("commission", 0) for r in rows), 2),
+                "platform_fee": round(sum(r.get("platform_fee", 0) for r in rows), 2)}
+
+    @api.get("/admin/vendor-settlements")
+    async def admin_settlements(status: str = "", vendor_id: str = "", user: dict = Depends(pay_view)):
+        q = {k: v for k, v in (("status", status), ("vendor_id", vendor_id)) if v}
+        rows = await db.vendor_settlements.find(q).sort("created_at", -1).limit(1000).to_list(1000)
+        names = {}
+        out = []
+        for r in rows:
+            row = clean(r)
+            if row["vendor_id"] not in names:
+                v = await db.vendor_profiles.find_one({"_id": oid(row["vendor_id"])},
+                                                      {"legal_name": 1, "payout_hold": 1})
+                names[row["vendor_id"]] = clean(v) if v else None
+            row["vendor"] = names[row["vendor_id"]]
+            out.append(row)
+        return {"items": out, "totals": await settlement_totals(q),
+                "held": await db.vendor_profiles.count_documents({"payout_hold": True})}
+
+    @api.post("/admin/vendor-payout-runs")
+    async def create_payout_runs(payload: BatchIn, user: dict = Depends(pay_do)):
+        """Groups due settlements into one batch per vendor. Held vendors are skipped."""
+        q: dict = {"status": "pending"}
+        if payload.vendor_id:
+            q["vendor_id"] = payload.vendor_id
+        if payload.due_only:
+            q["due_on"] = {"$lte": iso(now_utc())}
+        rows = await db.vendor_settlements.find(q).limit(5000).to_list(5000)
+        grouped: dict[str, list] = {}
+        for r in rows:
+            grouped.setdefault(r["vendor_id"], []).append(r)
+        created, skipped = [], []
+        for vid, items in grouped.items():
+            v = await db.vendor_profiles.find_one({"_id": oid(vid)})
+            if not v:
+                continue
+            if v.get("payout_hold"):
+                skipped.append({"vendor": v.get("legal_name", ""),
+                                "reason": v.get("payout_hold_reason") or "payout hold"})
+                continue
+            batch = {
+                "batch_no": "BUD-PR-" + uuid.uuid4().hex[:8].upper(), "vendor_id": vid,
+                "vendor_name": v.get("legal_name", ""), "currency": items[0].get("currency", "INR"),
+                "settlement_ids": [str(i["_id"]) for i in items], "count": len(items),
+                "gross": round(sum(float(i.get("gross") or 0) for i in items), 2),
+                "commission": round(sum(float(i.get("commission") or 0) for i in items), 2),
+                "platform_fee": round(sum(float(i.get("platform_fee") or 0) for i in items), 2),
+                "net": round(sum(float(i.get("net") or 0) for i in items), 2),
+                "bank": {f: v.get(f, "") for f in BANK_FIELDS},
+                "status": "open", "utr": "", "created_by": user["id"], "created_at": iso(now_utc())}
+            res = await db.vendor_payout_batches.insert_one(batch)
+            await db.vendor_settlements.update_many(
+                {"_id": {"$in": [i["_id"] for i in items]}},
+                {"$set": {"status": "batched", "batch_id": str(res.inserted_id),
+                          "batched_at": iso(now_utc())}})
+            await audit(user, "VENDOR_PAYOUT_BATCH_CREATED", "vendor_payout_batch", str(res.inserted_id),
+                        {"vendor": batch["vendor_name"], "net": batch["net"], "count": batch["count"]})
+            created.append(clean(await db.vendor_payout_batches.find_one({"_id": res.inserted_id})))
+        return {"created": created, "skipped": skipped}
+
+    @api.get("/admin/vendor-payout-runs")
+    async def list_payout_runs(status: str = "", user: dict = Depends(pay_view)):
+        q = {"status": status} if status else {}
+        rows = await db.vendor_payout_batches.find(q).sort("created_at", -1).limit(500).to_list(500)
+        return {"items": [clean(r) for r in rows],
+                "totals": {"open": round(sum(r["net"] for r in rows if r["status"] == "open"), 2),
+                           "paid": round(sum(r["net"] for r in rows if r["status"] == "paid"), 2)}}
+
+    @api.get("/admin/vendor-payout-runs/{bid}/export")
+    async def export_payout_run(bid: str, user: dict = Depends(pay_view)):
+        b = await db.vendor_payout_batches.find_one({"_id": oid(bid, "batch")})
+        if not b:
+            raise HTTPException(status_code=404, detail="Payout batch not found.")
+        bank = b.get("bank", {})
+        head = "Beneficiary Name,Account Number,IFSC,Bank,Amount,Currency,Reference,Remarks\n"
+        cells = [bank.get("bank_account_name", ""), bank.get("bank_account_number", ""),
+                 bank.get("bank_ifsc", ""), bank.get("bank_name", ""), f"{b['net']:.2f}",
+                 b.get("currency", "INR"), b["batch_no"], f"Buddilio settlement {b['count']} booking(s)"]
+        line = ",".join('"' + str(c).replace('"', '""') + '"' for c in cells) + "\n"
+        await audit(user, "VENDOR_PAYOUT_BATCH_EXPORTED", "vendor_payout_batch", bid, {})
+        return deps["Response"](content=head + line, media_type="text/csv",
+                                headers={"Content-Disposition": f'attachment; filename="{b["batch_no"]}.csv"'})
+
+    @api.post("/admin/vendor-payout-runs/{bid}/paid")
+    async def mark_batch_paid(bid: str, payload: PaidIn, user: dict = Depends(pay_do)):
+        b = await db.vendor_payout_batches.find_one({"_id": oid(bid, "batch")})
+        if not b:
+            raise HTTPException(status_code=404, detail="Payout batch not found.")
+        if b["status"] == "paid":
+            raise HTTPException(status_code=400, detail="This batch is already settled.")
+        if not payload.utr.strip():
+            raise HTTPException(status_code=400, detail="Enter the bank UTR / transfer reference.")
+        paid_at = payload.paid_on or iso(now_utc())
+        await db.vendor_payout_batches.update_one({"_id": b["_id"]}, {"$set": {
+            "status": "paid", "utr": payload.utr.strip(), "note": payload.note,
+            "paid_at": paid_at, "paid_by": user["id"]}})
+        await db.vendor_settlements.update_many(
+            {"batch_id": bid}, {"$set": {"status": "paid", "utr": payload.utr.strip(), "paid_at": paid_at}})
+        await audit(user, "VENDOR_PAYOUT_BATCH_PAID", "vendor_payout_batch", bid,
+                    {"utr": payload.utr.strip(), "net": b["net"]})
+        v = await db.vendor_profiles.find_one({"_id": oid(b["vendor_id"])}, {"user_id": 1, "email": 1})
+        if v and v.get("user_id"):
+            await notify(v["user_id"], "Settlement transferred",
+                         f"{b['currency']} {b['net']:,.2f} has been transferred. Reference {payload.utr}.",
+                         "order", "/vendor/agreement")
+        return {"ok": True, "utr": payload.utr.strip(), "net": b["net"]}
+
+    @api.post("/admin/vendor-settlements/{sid}/paid")
+    async def mark_settlement_paid(sid: str, payload: PaidIn, user: dict = Depends(pay_do)):
+        s = await db.vendor_settlements.find_one({"_id": oid(sid, "settlement")})
+        if not s:
+            raise HTTPException(status_code=404, detail="Settlement not found.")
+        if s["status"] == "paid":
+            raise HTTPException(status_code=400, detail="Already settled.")
+        v = await db.vendor_profiles.find_one({"_id": oid(s["vendor_id"])}, {"payout_hold": 1,
+                                                                            "payout_hold_reason": 1})
+        if v and v.get("payout_hold"):
+            raise HTTPException(status_code=400,
+                                detail=f"Payouts are on hold for this vendor: "
+                                       f"{v.get('payout_hold_reason') or 'bank verification pending'}.")
+        if not payload.utr.strip():
+            raise HTTPException(status_code=400, detail="Enter the bank UTR / transfer reference.")
+        await db.vendor_settlements.update_one({"_id": s["_id"]}, {"$set": {
+            "status": "paid", "utr": payload.utr.strip(), "paid_at": payload.paid_on or iso(now_utc())}})
+        await audit(user, "VENDOR_SETTLEMENT_PAID", "vendor_settlement", sid,
+                    {"utr": payload.utr.strip(), "net": s.get("net")})
+        return {"ok": True}
+
+    # ---------------- vendor scorecards ----------------
+    @api.get("/admin/vendor-scorecards")
+    async def vendor_scorecards(user: dict = Depends(view)):
+        vendors = await db.vendor_profiles.find({}).limit(500).to_list(500)
+        out = []
+        for v in vendors:
+            uid = v.get("user_id", "")
+            events = await db.events.find({"partner_id": uid}, {"status": 1}).limit(500).to_list(500) if uid else []
+            cancelled = sum(1 for e in events if e.get("status") in ("cancelled", "rejected"))
+            revs = await db.reviews.find({"partner_id": uid}, {"rating": 1}).limit(1000).to_list(1000) if uid else []
+            rating = round(sum(r["rating"] for r in revs) / len(revs), 2) if revs else 0
+            complaints = await db.reports.count_documents({"target_id": uid}) if uid else 0
+            settled = await db.vendor_settlements.count_documents({"vendor_id": str(v["_id"])})
+            cancel_rate = round(cancelled / len(events) * 100, 1) if events else 0.0
+            score = 100.0
+            score -= min(cancel_rate * 1.5, 40)
+            score -= min(complaints * 8, 30)
+            if revs:
+                score -= max(0.0, (4.5 - rating)) * 12
+            elif not events:
+                score -= 10          # nothing to judge yet
+            docs_ok = await docs_complete(str(v["_id"]))
+            if not docs_ok:
+                score -= 10
+            if v.get("payout_hold"):
+                score -= 5
+            score = max(0, min(100, round(score)))
+            out.append({"vendor_id": str(v["_id"]), "legal_name": v.get("legal_name", ""),
+                        "vendor_kind": v.get("vendor_kind", ""), "status": v.get("status", ""),
+                        "events": len(events), "cancelled": cancelled, "cancel_rate": cancel_rate,
+                        "rating": rating, "reviews": len(revs), "complaints": complaints,
+                        "bookings_settled": settled, "documents_complete": docs_ok,
+                        "payout_hold": bool(v.get("payout_hold")), "score": score,
+                        "flag": "green" if score >= 80 else "amber" if score >= 60 else "red"})
+        out.sort(key=lambda r: r["score"])
+        return {"items": out}
+
+    # ---------------- monthly commission invoices ----------------
+    async def build_commission_invoice(vid: str, period: str, user_id: str = "system") -> dict | None:
+        """One invoice per vendor per YYYY-MM, from that month's settlements. Idempotent."""
+        v = await db.vendor_profiles.find_one({"_id": oid(vid)})
+        if not v:
+            return None
+        existing = await db.vendor_commission_invoices.find_one({"vendor_id": vid, "period": period})
+        if existing:
+            return clean(existing)
+        rows = await db.vendor_settlements.find(
+            {"vendor_id": vid, "created_at": {"$gte": f"{period}-01", "$lt": f"{period}-32"}}
+        ).limit(5000).to_list(5000)
+        if not rows:
+            return None
+        commission = round(sum(float(r.get("commission") or 0) for r in rows), 2)
+        platform_fee = round(sum(float(r.get("platform_fee") or 0) for r in rows), 2)
+        seq = await db.vendor_commission_invoices.count_documents({"period": period}) + 1
+        entity = ((await db.settings.find_one({}) or {}).get("vendor_entity") or {})
+        inv = {
+            "invoice_no": f"BUD-CI-{period}-{seq:04d}", "period": period, "vendor_id": vid,
+            "vendor_name": v.get("legal_name", ""), "vendor_email": v.get("email", ""),
+            "vendor_pan": v.get("pan", ""), "vendor_gstin": v.get("gstin", ""),
+            "vendor_address": v.get("registered_address", ""),
+            "currency": rows[0].get("currency", "INR"), "bookings": len(rows),
+            "gross": round(sum(float(r.get("gross") or 0) for r in rows), 2),
+            "vendor_settlement": round(sum(float(r.get("net") or 0) for r in rows), 2),
+            "commission": commission, "platform_fee": platform_fee,
+            "total": round(commission + platform_fee, 2),
+            "lines": [{"description": "Buddilio commission on bookings", "basis": f"{len(rows)} booking(s)",
+                       "amount": commission},
+                      {"description": "Platform charges", "basis": "as per schedule", "amount": platform_fee}],
+            "entity": entity, "issued_at": iso(now_utc()), "generated_by": user_id}
+        res = await db.vendor_commission_invoices.insert_one(inv)
+        if v.get("user_id"):
+            await notify(v["user_id"], f"Commission invoice {inv['invoice_no']}",
+                         f"Your {period} commission statement is ready to download.",
+                         "order", "/vendor/agreement")
+        return clean(await db.vendor_commission_invoices.find_one({"_id": res.inserted_id}))
+
+    deps["build_commission_invoice"] = build_commission_invoice
+
+    @api.post("/admin/vendor-commission-invoices/generate")
+    async def generate_commission_invoices(period: str = "", vendor_id: str = "",
+                                          user: dict = Depends(manage)):
+        period = (period or (now_utc().replace(day=1) - timedelta(days=1)).strftime("%Y-%m"))[:7]
+        ids = [vendor_id] if vendor_id else [str(v["_id"]) for v in await db.vendor_profiles.find(
+            {}, {"_id": 1}).limit(500).to_list(500)]
+        made = [inv for inv in [await build_commission_invoice(i, period, user["id"]) for i in ids] if inv]
+        await audit(user, "COMMISSION_INVOICES_GENERATED", "vendor_commission_invoice", "",
+                    {"period": period, "count": len(made)})
+        return {"period": period, "created": made}
+
+    @api.get("/admin/vendor-commission-invoices")
+    async def admin_commission_invoices(period: str = "", user: dict = Depends(view)):
+        q = {"period": period[:7]} if period else {}
+        rows = await db.vendor_commission_invoices.find(q).sort("invoice_no", -1).limit(500).to_list(500)
+        return {"items": [clean(r) for r in rows],
+                "total": round(sum(float(r.get("total") or 0) for r in rows), 2)}
+
+    @api.get("/vendor/commission-invoices")
+    async def my_commission_invoices(user: dict = Depends(get_current_user)):
+        v = await my_vendor(user)
+        rows = await db.vendor_commission_invoices.find({"vendor_id": str(v["_id"])}) \
+            .sort("period", -1).limit(200).to_list(200)
+        return {"items": [clean(r) for r in rows]}
+
+    @api.get("/vendor-commission-invoices/{iid}/pdf")
+    async def commission_invoice_pdf_route(iid: str, user: dict = Depends(get_current_user)):
+        inv = await db.vendor_commission_invoices.find_one({"_id": oid(iid, "invoice")})
+        if not inv:
+            raise HTTPException(status_code=404, detail="Invoice not found.")
+        if "vendors:view" not in perms_of(user):
+            mine = await db.vendor_profiles.find_one({"user_id": user["id"]}, {"_id": 1})
+            if not mine or str(mine["_id"]) != inv["vendor_id"]:
+                raise HTTPException(status_code=403, detail="That invoice isn't yours.")
+        entity = inv.get("entity") or ((await db.settings.find_one({}) or {}).get("vendor_entity") or {})
+        pdf = invoices.commission_invoice_pdf(clean(inv), entity)
+        return deps["Response"](content=bytes(pdf), media_type="application/pdf",
+                                headers={"Content-Disposition":
+                                         f'attachment; filename="{inv["invoice_no"]}.pdf"'})
 
     @api.get("/admin/vendor-profiles/{vid}/documents")
     async def admin_vendor_docs(vid: str, user: dict = Depends(view)):

@@ -20,6 +20,7 @@ import { Pages, SiteContent, CityGuides } from "@/components/ContentStudio";
 import { EmailTemplates } from "@/components/EmailTemplates";
 import { PlansAdmin } from "@/components/PlansAdmin";
 import { AgreementsAdmin } from "@/components/AgreementsAdmin";
+import { VendorPayouts } from "@/components/VendorPayouts";
 import { ProfileForm, EventForm } from "@/components/AdminForms";
 import { useAuth } from "@/context/AuthContext";
 
@@ -29,7 +30,8 @@ const NAV = [
   ["verification", "Verification", "verification:manage"],
   ["managers", "Console access", "team:manage"], ["events", "Events", "events:view"],
   ["memberships", "Memberships", "finance:manage"], ["products", "Products", "finance:manage"],  ["orders", "Orders", "finance:view"], ["payments", "Payments", "finance:view"],
-  ["payouts", "Payouts", "payouts:view"], ["coupons", "Coupons", "finance:manage"],
+  ["payouts", "Payouts", "payouts:view"], ["vendorpay", "Vendor settlements", "payouts:view"],
+  ["coupons", "Coupons", "finance:manage"],
   ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
   ["photos", "Photo wall", "moderation:manage"], ["companions", "Hangouts", "members:manage"],
   ["idchecks", "ID checks", "verification:manage"], ["providers", "Travel crew", "verification:manage"],
@@ -131,7 +133,7 @@ const Input = ({ label, ...p }) => (
 
 const GROUPS = [
   ["Overview", ["dashboard", "events", "settings"]],
-  ["Money", ["orders", "payments", "payouts", "coupons", "memberships", "products", "ledger"]],
+  ["Money", ["orders", "payments", "payouts", "vendorpay", "coupons", "memberships", "products", "ledger"]],
   ["Content", ["content", "pages", "sections", "guides", "emails", "places"]],
   ["People", ["users", "partners", "agreements", "managers", "companions", "team"]],
   ["Trust", ["verification", "idchecks", "providers", "reports", "reviews", "photos", "audit"]],
@@ -253,6 +255,7 @@ export default function Admin() {
           blank={{ code: "", discount_type: "percent", value: 10, min_order: 0, usage_limit: 100, members_only: false, expires_at: "", active: true }} />}
         {(active === "orders" || active === "payments") && <Orders payments={active === "payments"} />}
         {active === "payouts" && <Payouts />}
+        {active === "vendorpay" && <VendorPayouts />}
         {active === "reports" && <Reports />}
         {active === "reviews" && <ReviewsMod />}
         {active === "photos" && <PhotoModeration />}

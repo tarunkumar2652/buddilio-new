@@ -297,6 +297,8 @@ export const SiteContent = () => {
 export const CityGuides = () => {
   const [items, setItems] = useState(null);
   const [sel, setSel] = useState(null);
+  const [g, setG] = useState(null);
+  const [raw, setRaw] = useState(false);
   const [text, setText] = useState("");
 
   const load = useCallback(() => {
@@ -305,19 +307,41 @@ export const CityGuides = () => {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const pick = (it) => { setSel(it); setText(JSON.stringify(it.guide, null, 2)); };
+  const pick = (it) => {
+    setSel(it);
+    setG({ areas: [], venues: [], faqs: [], ...it.guide });
+    setText(JSON.stringify(it.guide, null, 2));
+  };
 
   const save = async () => {
-    let guide;
-    try { guide = JSON.parse(text); } catch { return toast.error("That isn't valid JSON."); }
-    try { await api.put(`/admin/city-guides/${sel.slug}`, { guide }); toast.success("Guide saved."); load(); }
-    catch (e) { toast.error(errMsg(e)); }
+    let guide = g;
+    if (raw) {
+      try { guide = JSON.parse(text); } catch { return toast.error("That isn't valid JSON."); }
+    }
+    try {
+      await api.put(`/admin/city-guides/${sel.slug}`, { guide });
+      toast.success("Guide saved."); load();
+    } catch (e) { toast.error(errMsg(e)); }
   };
 
   const reset = async () => {
-    try { const { data } = await api.delete(`/admin/city-guides/${sel.slug}`); setText(JSON.stringify(data.guide, null, 2)); toast.success("Back to the default."); load(); }
-    catch (e) { toast.error(errMsg(e)); }
+    try {
+      const { data } = await api.delete(`/admin/city-guides/${sel.slug}`);
+      setG({ areas: [], venues: [], faqs: [], ...data.guide });
+      setText(JSON.stringify(data.guide, null, 2));
+      toast.success("Back to the default."); load();
+    } catch (e) { toast.error(errMsg(e)); }
   };
+
+  const setArea = (i, j, val) => {
+    const areas = g.areas.map((a, x) => (x === i ? a.map((v, y) => (y === j ? val : v)) : a));
+    setG({ ...g, areas });
+  };
+  const setVenue = (i, key, val) => {
+    const venues = g.venues.map((v, x) => (x === i ? { ...v, [key]: val } : v));
+    setG({ ...g, venues });
+  };
+  const field = "mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm";
 
   if (!items) return <Spinner />;
 
@@ -333,16 +357,98 @@ export const CityGuides = () => {
         ))}
       </div>
       <div>
-        {!sel ? <Empty title="Pick a city" sub="Choose a city to edit its guide, FAQs and local tips." /> : (
-          <div className="rounded-2xl border border-slate-200 bg-white p-5" data-testid="guide-editor">
-            <p className="text-sm font-bold">{sel.city}</p>
-            <textarea rows={20} value={text} data-testid="guide-json" onChange={(e) => setText(e.target.value)}
-              className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50/60 p-3 font-mono text-xs" />
-            <div className="mt-3 flex gap-2">
+        {!sel ? <Empty title="Pick a city" sub="Choose a city to edit its guide, venues, FAQs and local tips." /> : (
+          <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5" data-testid="guide-editor">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold">{sel.city}</p>
+              <button onClick={() => { setRaw(!raw); setText(JSON.stringify(g, null, 2)); }}
+                data-testid="guide-toggle-raw"
+                className="rounded-full border border-slate-200 px-4 py-1.5 text-[11px] font-bold">
+                {raw ? "Use the form" : "Edit as JSON"}
+              </button>
+            </div>
+
+            {raw ? (
+              <textarea rows={20} value={text} data-testid="guide-json" onChange={(e) => setText(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50/60 p-3 font-mono text-xs" />
+            ) : (
+              <div className="space-y-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-xs font-bold text-slate-500">SEO title
+                    <input value={g.seo_title || ""} data-testid="guide-seo-title" className={field}
+                      onChange={(e) => setG({ ...g, seo_title: e.target.value })}
+                      placeholder={`Things to do in ${sel.city} — Buddilio`} /></label>
+                  <label className="block text-xs font-bold text-slate-500">SEO description
+                    <input value={g.seo_description || ""} data-testid="guide-seo-desc" className={field}
+                      onChange={(e) => setG({ ...g, seo_description: e.target.value })} /></label>
+                </div>
+                <label className="block text-xs font-bold text-slate-500">Intro
+                  <textarea rows={4} value={g.intro || ""} data-testid="guide-intro" className={field}
+                    onChange={(e) => setG({ ...g, intro: e.target.value })} /></label>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="block text-xs font-bold text-slate-500">When to go
+                    <textarea rows={3} value={g.when || ""} data-testid="guide-when" className={field}
+                      onChange={(e) => setG({ ...g, when: e.target.value })} /></label>
+                  <label className="block text-xs font-bold text-slate-500">Getting around
+                    <textarea rows={3} value={g.around || ""} data-testid="guide-around" className={field}
+                      onChange={(e) => setG({ ...g, around: e.target.value })} /></label>
+                  <label className="block text-xs font-bold text-slate-500">Local tip
+                    <textarea rows={3} value={g.tip || ""} data-testid="guide-tip" className={field}
+                      onChange={(e) => setG({ ...g, tip: e.target.value })} /></label>
+                </div>
+
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Areas</p>
+                  {(g.areas || []).map((a, i) => (
+                    <div key={i} className="mt-2 grid gap-2 sm:grid-cols-[1fr_2fr_1fr]" data-testid={`guide-area-${i}`}>
+                      <input value={a[0] || ""} placeholder="Area name" className={field}
+                        data-testid={`guide-area-name-${i}`} onChange={(e) => setArea(i, 0, e.target.value)} />
+                      <input value={a[1] || ""} placeholder="What it's good for" className={field}
+                        data-testid={`guide-area-blurb-${i}`} onChange={(e) => setArea(i, 1, e.target.value)} />
+                      <input value={a[2] || ""} placeholder="Photo URL" className={field}
+                        data-testid={`guide-area-photo-${i}`} onChange={(e) => setArea(i, 2, e.target.value)} />
+                    </div>
+                  ))}
+                  <button onClick={() => setG({ ...g, areas: [...(g.areas || []), ["", "", ""]] })}
+                    data-testid="guide-add-area"
+                    className="mt-2 rounded-full border border-slate-200 px-4 py-1.5 text-[11px] font-bold">Add area</button>
+                </div>
+
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Top venues</p>
+                  {(g.venues || []).map((v, i) => (
+                    <div key={i} className="mt-2 grid gap-2 sm:grid-cols-5" data-testid={`guide-venue-${i}`}>
+                      <input value={v.name || ""} placeholder="Name" className={field}
+                        data-testid={`guide-venue-name-${i}`} onChange={(e) => setVenue(i, "name", e.target.value)} />
+                      <input value={v.type || ""} placeholder="Type" className={field}
+                        data-testid={`guide-venue-type-${i}`} onChange={(e) => setVenue(i, "type", e.target.value)} />
+                      <input value={v.area || ""} placeholder="Area" className={field}
+                        data-testid={`guide-venue-area-${i}`} onChange={(e) => setVenue(i, "area", e.target.value)} />
+                      <input value={v.note || ""} placeholder="Why go" className={field}
+                        data-testid={`guide-venue-note-${i}`} onChange={(e) => setVenue(i, "note", e.target.value)} />
+                      <div className="flex gap-1">
+                        <input value={v.url || ""} placeholder="Link (optional)" className={field}
+                          data-testid={`guide-venue-url-${i}`} onChange={(e) => setVenue(i, "url", e.target.value)} />
+                        <button onClick={() => setG({ ...g, venues: g.venues.filter((_, x) => x !== i) })}
+                          data-testid={`guide-venue-remove-${i}`}
+                          className="mt-1.5 rounded-lg border border-slate-200 px-2 text-xs">✕</button>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={() => setG({ ...g, venues: [...(g.venues || []), { name: "", type: "", area: "", note: "", url: "" }] })}
+                    data-testid="guide-add-venue"
+                    className="mt-2 rounded-full border border-slate-200 px-4 py-1.5 text-[11px] font-bold">Add venue</button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2">
               <button onClick={save} data-testid="guide-save"
                 className="rounded-full bg-slate-900 px-6 py-2.5 text-sm font-bold text-white">Save guide</button>
               <button onClick={reset} data-testid="guide-reset"
                 className="rounded-full border border-slate-200 px-5 py-2.5 text-sm font-bold">Reset to default</button>
+              <a href={`/city/${sel.slug}`} target="_blank" rel="noreferrer" data-testid="guide-preview"
+                className="rounded-full border border-slate-200 px-5 py-2.5 text-sm font-bold">Preview page</a>
             </div>
           </div>
         )}

@@ -165,8 +165,8 @@ export const CityPage = () => {
 
   return (
     <div data-testid="city-page" data-city={d.slug}>
-      <SEO title={`Things to do in ${d.name} — events & people to go with`}
-        description={`Buddilio in ${d.name}: ${d.events_total} curated parties, dinners and nights out with ${d.members} verified members nearby. Book in ${d.currency} and never go alone.`} />
+      <SEO title={d.guide?.seo_title || `Things to do in ${d.name} — events & people to go with`}
+        description={d.guide?.seo_description || `Buddilio in ${d.name}: ${d.events_total} curated parties, dinners and nights out with ${d.members} verified members nearby. Book in ${d.currency} and never go alone.`} />
 
       <section className="relative overflow-hidden bg-brand-ink text-white">
         {d.hero && <img src={fileUrl(d.hero)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-35" />}
@@ -266,6 +266,31 @@ export const CityPage = () => {
                 <div key={label} className="rounded-2xl bg-brand-ink/[0.03] border border-slate-200 p-5">
                   <p className="overline">{label}</p>
                   <p className="mt-2 text-sm text-slate-600 leading-relaxed">{text}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {d.guide?.venues?.length > 0 && (
+          <section data-testid="city-venues">
+            <p className="overline">Where to go</p>
+            <h2 className="mt-1.5 text-2xl font-bold">Top places in {d.name}</h2>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {d.guide.venues.filter((v) => v.name).map((v, i) => (
+                <div key={i} className="rounded-2xl border border-slate-200 bg-white p-5" data-testid={`city-venue-${i}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-display font-bold">{v.name}</p>
+                    {v.type && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">{v.type}</span>}
+                  </div>
+                  {v.area && <p className="mt-1 text-xs font-semibold text-slate-400">{v.area}</p>}
+                  {v.note && <p className="mt-2 text-sm text-slate-600 leading-relaxed">{v.note}</p>}
+                  {v.url && (
+                    <a href={v.url} target="_blank" rel="noreferrer" data-testid={`city-venue-link-${i}`}
+                      className="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-brand-magenta">
+                      Visit site <ArrowRight className="h-3 w-3" />
+                    </a>
+                  )}
                 </div>
               ))}
             </div>

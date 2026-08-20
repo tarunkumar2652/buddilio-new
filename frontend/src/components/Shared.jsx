@@ -66,7 +66,9 @@ export const Stat = ({ label, value, sub, testid }) => (
 
 export const SEO = ({ title, description }) => {
   if (typeof document !== "undefined") {
-    document.title = title ? `${title} | Buddilio` : "Buddilio — Find your people for every experience";
+    document.title = title
+      ? (title.includes("Buddilio") ? title : `${title} | Buddilio`)
+      : "Buddilio — Find your people for every experience";
     let m = document.querySelector('meta[name="description"]');
     if (!m) { m = document.createElement("meta"); m.name = "description"; document.head.appendChild(m); }
     m.content = description || "Discover events, parties, dining and lifestyle experiences and find verified companions to go with.";

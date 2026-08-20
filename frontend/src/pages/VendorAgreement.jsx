@@ -495,15 +495,57 @@ const Settlements = ({ data }) => (
               <td className="px-4 py-3 text-right">₹{r.platform_fee?.toLocaleString()}</td>
               <td className="px-4 py-3 text-right font-semibold">₹{r.net?.toLocaleString()}</td>
               <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(r.due_on)}</td>
-              <td className="px-4 py-3"><Badge tone={r.status === "paid" ? "green" : "amber"}>{r.status}</Badge></td>
+              <td className="px-4 py-3">
+                <Badge tone={r.status === "paid" ? "green" : "amber"}>{r.status}</Badge>
+                {r.utr && <p className="mt-1 font-mono text-[10px] text-slate-400">UTR {r.utr}</p>}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       {!(data?.items || []).length && <p className="p-8 text-sm text-slate-500">No settlements yet.</p>}
     </div>
+    <CommissionInvoices />
   </div>
 );
+
+const CommissionInvoices = () => {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    api.get("/vendor/commission-invoices").then(({ data }) => setItems(data.items)).catch(() => setItems([]));
+  }, []);
+
+  const download = async (i) => {
+    try {
+      const res = await api.get(`/vendor-commission-invoices/${i.id}/pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${i.invoice_no}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  if (!items.length) return null;
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5" data-testid="vendor-commission-invoices">
+      <p className="font-bold">Commission invoices</p>
+      <p className="mt-1 text-sm text-slate-500">
+        Buddilio's monthly statement of commission and platform charges on your bookings.
+      </p>
+      <ul className="mt-3 divide-y divide-slate-100">
+        {items.map((i) => (
+          <li key={i.id} className="flex items-center justify-between gap-3 py-2.5" data-testid={`vendor-ci-${i.id}`}>
+            <span className="text-sm">
+              <b className="font-mono text-xs">{i.invoice_no}</b> · {i.period} · ₹{i.total?.toLocaleString()}
+            </span>
+            <button onClick={() => download(i)} data-testid={`vendor-ci-pdf-${i.id}`}
+              className="rounded-full border border-slate-200 px-4 py-1.5 text-[11px] font-bold">Download PDF</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
 
 const History = ({ data }) => (
   <div className="space-y-5" data-testid="vendor-history">
