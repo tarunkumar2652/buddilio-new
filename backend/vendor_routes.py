@@ -273,6 +273,10 @@ async def snapshot_booking(order: dict) -> Optional[dict]:
     return snap
 
 
+BANK_FIELDS = ["bank_account_name", "bank_account_number", "bank_ifsc", "bank_name", "bank_branch",
+               "bank_account_type", "bank_swift", "upi_id"]
+
+
 def register(deps: dict):
     """Wire the routes onto the shared API router."""
     D.update(deps)
@@ -311,12 +315,34 @@ def register(deps: dict):
         existing = await db.vendor_profiles.find_one({"user_id": user["id"]})
         body = payload.model_dump()
         body.update({"user_id": user["id"], "updated_at": iso(now_utc())})
+        bank_changed = bool(existing) and any(
+            (existing.get(f) or "") != (body.get(f) or "") for f in BANK_FIELDS)
         if existing:
             if existing.get("status") in ("approved", "suspended", "terminated"):
                 # Approved vendors can refresh contact details but not silently rewrite their legal identity.
                 for locked in ("legal_name", "pan", "gstin"):
                     body.pop(locked, None)
+            if bank_changed:
+                # A new bank account must be re-proved before the next transfer (spec: banking section).
+                body["bank_verification"] = {
+                    "status": "pending", "changed_at": iso(now_utc()),
+                    "previous": {f: existing.get(f, "") for f in BANK_FIELDS},
+                    "note": "New bank details await a fresh cancelled cheque or bank statement."}
+                body["payout_hold"] = True
+                body["payout_hold_reason"] = "Bank details changed — awaiting re-verification"
             await db.vendor_profiles.update_one({"_id": existing["_id"]}, {"$set": body})
+            if bank_changed:
+                await db.vendor_documents.update_many(
+                    {"vendor_id": str(existing["_id"]), "doc_type": {"$in": agr.BANK_PROOF_DOCS}},
+                    {"$set": {"status": "expired", "note": "Superseded — bank details changed.",
+                              "superseded_at": iso(now_utc())}})
+                await audit(user, "VENDOR_BANK_CHANGED", "vendor_profile", str(existing["_id"]),
+                            {"fields": [f for f in BANK_FIELDS
+                                        if (existing.get(f) or "") != (body.get(f) or "")]})
+                for admin in await db.users.find({"role": "admin"}, {"_id": 1}).to_list(20):
+                    await notify(str(admin["_id"]), "Vendor bank details changed",
+                                 f"{existing.get('legal_name', 'A vendor')} updated their bank account. "
+                                 "Payouts are on hold until fresh proof is verified.", "vendor", "/admin")
             doc = await db.vendor_profiles.find_one({"_id": existing["_id"]})
         else:
             body.update({"status": "draft", "created_at": iso(now_utc())})
@@ -324,7 +350,7 @@ def register(deps: dict):
             doc = await db.vendor_profiles.find_one({"_id": res.inserted_id})
             await audit(user, "VENDOR_CREATED", "vendor_profile", str(res.inserted_id),
                         {"legal_name": payload.legal_name})
-        return {"vendor": clean(doc)}
+        return {"vendor": clean(doc), "bank_reverification_required": bank_changed}
 
     @api.post("/vendor/profile/submit")
     async def submit_profile(user: dict = Depends(get_current_user)):
@@ -576,6 +602,45 @@ def register(deps: dict):
             await notify(v["user_id"], f"Vendor account {payload.status.replace('_', ' ')}",
                          payload.reason or "Open your vendor portal for details.", "vendor", "/vendor/agreement")
         return {"ok": True, "status": payload.status}
+
+    @api.post("/admin/vendor-profiles/{vid}/bank-verify")
+    async def bank_verify(vid: str, payload: DocReviewIn, user: dict = Depends(manage)):
+        """Clears (or keeps) the payout hold after a bank-detail change."""
+        v = await vendor_or_404(vid)
+        changed_at = (v.get("bank_verification") or {}).get("changed_at", "")
+        fresh = [d for d in await db.vendor_documents.find(
+            {"vendor_id": vid, "status": "approved", "doc_type": {"$in": agr.BANK_PROOF_DOCS}}).to_list(50)
+            if not changed_at or str(d.get("uploaded_at", "")) >= changed_at]
+        if payload.status == "approved" and not fresh:
+            raise HTTPException(status_code=400,
+                                detail="Approve a fresh cancelled cheque or bank statement first.")
+        approved = payload.status == "approved"
+        await db.vendor_profiles.update_one({"_id": v["_id"]}, {"$set": {
+            "bank_verification": {"status": payload.status, "note": payload.note,
+                                  "reviewed_at": iso(now_utc()), "reviewed_by": user["id"]},
+            "payout_hold": not approved,
+            "payout_hold_reason": "" if approved else (payload.note or "Bank verification pending")}})
+        await audit(user, "VENDOR_BANK_VERIFIED", "vendor_profile", vid, {"status": payload.status})
+        if v.get("user_id"):
+            await notify(v["user_id"],
+                         "Bank details verified" if approved else "Bank details need attention",
+                         payload.note or ("Your new account is verified — payouts resume from the next cycle."
+                                          if approved else "Please upload fresh bank proof."),
+                         "vendor", "/vendor/agreement")
+        return {"ok": True, "payout_hold": not approved}
+
+    @api.get("/admin/vendor-documents/expiring")
+    async def expiring_documents(days: int = 30, user: dict = Depends(view)):
+        limit = iso(now_utc() + timedelta(days=max(days, 1)))
+        rows = await db.vendor_documents.find(
+            {"doc_type": {"$in": agr.REQUIRED_DOCS + agr.BANK_PROOF_DOCS},
+             "expires_on": {"$gt": "", "$lte": limit}}).sort("expires_on", 1).to_list(200)
+        out = []
+        for r in rows:
+            v = await db.vendor_profiles.find_one({"_id": oid(r["vendor_id"])},
+                                                  {"legal_name": 1, "email": 1, "status": 1})
+            out.append({**clean(r), "vendor": clean(v) if v else None})
+        return {"items": out}
 
     @api.get("/admin/vendor-profiles/{vid}/documents")
     async def admin_vendor_docs(vid: str, user: dict = Depends(view)):

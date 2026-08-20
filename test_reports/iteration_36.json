@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 36 e2e: wrote /app/backend/tests/test_iteration36_bank_docs_city.py (21 tests, all pass) covering bank-change re-verification + payout hold enforcement, vendor document expiry cron, /admin/vendor-documents/expiring, city landing hosts/passes and /admin/pages missing_policy_pages. Re-ran iteration-35 regression (24/25 pass, 1 stale sitemap assertion). Frontend verified with Playwright: /city/mumbai city-hosts + city-passes (desktop + 390px) with working /discover and /passes links and JSON-LD, delhi-ncr omits the hosts block cleanly, vendor portal vendor-payout-hold banner + bank-change warning toast, admin Vendor agreements payout-hold badge + Verify bank button (correctly 400s without fresh approved bank proof), Pages tab with banner hidden and page-seed-policies idempotent (16 pages). SMOKE Vendor LLP demo data fully restored (original bank fields, payout_hold false, bank_verification approved, bank_proof approved, realistic service_description); all TEST_iter36 seed rows deleted.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/vendor-documents/expiring", "issue": "Endpoint works and is permission-gated but is not consumed anywhere in the frontend — admins have no screen listing upcoming document expiries."},
+      {"endpoint": "POST /api/vendor/profile", "issue": "Full-replace semantics: any client posting a partial VendorIn silently blanks omitted fields (and a blanked bank field then trips the payout hold). Consider PATCH-style merge or explicit required-field echo."},
+      {"endpoint": "expire_vendor_documents()", "issue": "N+1 vendor lookup per document and a hard 1000-doc cap; will silently skip work as vendor count grows. Batch the vendor fetch / paginate."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AgreementsAdmin (Vendor agreements tab)", "issue": "Dead-end flow: 'Verify bank' always returns 400 'Approve a fresh cancelled cheque or bank statement first' because no admin UI exists to review/approve vendor documents (PATCH /admin/vendor-documents/{did} and GET /admin/vendor-profiles/{vid}/documents are never called by the frontend). An admin therefore cannot clear a payout hold through the product — only via API. Reproduced live: badge vendor-payout-hold-<id> shown, click on vendor-bank-verify-<id> -> red toast, hold stays.", "selector": "[data-testid=vendor-bank-verify-6a86177c76111f3eb63d1598]", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "City landing -> hosts", "issue": "Anonymous visitors clicking 'Meet <city> hosts' are redirected to /login with no context or return-to city page; the section is public marketing copy so the destination should be public or the login should carry a redirect.", "affected_selectors": ["[data-testid=city-hosts-link]"]}
+    ],
+    "design_issues": [
+      {"screen": "/city/mumbai (390px + 1920px)", "issues": ["No layout defects found: hosts/passes cards, avatars, prices and CTAs all render inside bounds; host avatar is lazy-loaded so the card briefly shows a blank avatar slot before i.pravatar.cc resolves."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration36_bank_docs_city.py",
+    "/app/test_reports/pytest/iteration36_results.xml"
+  ],
+  "action_items": [
+    "HIGH: add a document review UI (approve/reject vendor documents) to the admin Vendor agreements tab so 'Verify bank' can actually be used; today the payout hold can only be cleared over the API.",
+    "MEDIUM: surface GET /api/admin/vendor-documents/expiring in the admin UI (e.g. an 'Expiring documents' panel) — the new endpoint has no consumer.",
+    "MINOR: /app/frontend/public/sitemap.xml has been re-added (a sitemapindex pointing at /api/sitemap.xml), which fails the existing regression test test_iteration35_sitemap_policies::TestSitemap::test_robots_declares_dynamic_sitemap. Either delete the static file again or intentionally update that assertion.",
+    "MINOR: give logged-out users a sensible destination (or redirect-back) for the city 'Meet <city> hosts' CTA."
+  ],
+  "critical_code_review_comments": [
+    "backend/server.py is 7621 lines — well past the 700-line guideline; expiry/cron, city and CMS blocks are good split candidates.",
+    "expire_vendor_documents() does one vendor_profiles lookup per document and caps at 1000 docs; batch the lookups and paginate before this runs in production.",
+    "Bank-change detection in vendor_routes.upsert_profile relies on the full VendorIn body; because Pydantic defaults fill omitted fields (e.g. bank_account_type='current'), a partial client payload can both wipe data and falsely trigger the payout hold.",
+    "bank_verify() only inspects vendor_documents status=='approved' — it does not check the proof was uploaded AFTER the bank change (superseded rows are set to 'expired', so this happens to work, but re-approving an old row via PATCH would also pass). Consider comparing uploaded_at to bank_verification.changed_at."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration36_bank_docs_city.py"],
+  "success_rate": {"backend": "100% (21/21 new; 24/25 iteration-35 regression)", "frontend": "92% (11/12 checks; admin bank-verify blocked by missing doc-approval UI)"},
+  "seed_data_creation": "Temporary only, all removed: TEST_iter36 Expiry Vendor + 2 vendor_documents (past + 7-day expiry), TEST_iter36 Expiring List Vendor + 1 doc (12-day expiry), one TEST_iter36 pending payout for the partner user. SMOKE Vendor LLP bank fields/payout_hold/bank_verification/doc statuses snapshotted and restored; service_description reset to 'Curated rooftop parties, dinners and lifestyle experiences across Delhi NCR.'",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123; cron bearer = WEBHOOK_CRON_SECRET from /app/backend/.env",
+  "context_for_next_testing_agent": "Run tests/test_iteration36_bank_docs_city.py as the regression for build 36; all SMOKE-vendor mutations are inside one class (TestBankChangeAndPayoutHold) so they stay sequential under --dist loadscope, and its class fixture snapshots+restores the vendor and deletes the TEST payout. Cron endpoints are fire-and-forget (asyncio.create_task) so sleep >=8s before asserting DB effects. Frontend login uses [data-testid=login-email/login-password/login-submit] (there is no button[type=submit]). Admin tabs: [data-testid=admin-tab-agreements|admin-tab-pages]. Agreement PDF is a JS blob download (button, no href) — assert it via GET /api/vendor-agreements/{aid}/pdf (returns %PDF-, ~12KB). Known open items: no admin doc-approval UI, expiring-docs endpoint unused, static /frontend/public/sitemap.xml re-added.",
+  "rca_of_the_issue": "Bank-verify dead end: server-side gate in vendor_routes.bank_verify requires an approved document whose doc_type is in agr.BANK_PROOF_DOCS, and a bank change sets every existing bank-proof row to 'expired'. The only way to approve the replacement proof is PATCH /api/admin/vendor-documents/{did}, which no React component calls (verified by grep across /app/frontend/src). So the UI path admin sees — 'payouts held' badge -> 'Verify bank' — can never succeed until a doc-review control is added."
+}

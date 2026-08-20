@@ -353,6 +353,16 @@ REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "250"))
 # ---------------- editable email templates ----------------
 # Every automated email lives here. Admins can override subject/title/body/button; {{vars}} stay dynamic.
 EMAIL_TEMPLATES: dict[str, dict] = {
+    "vendor_document_expiring": {
+        "label": "Vendor document expiring / expired", "group": "Vendors",
+        "vars": ["first_name", "document", "days", "expires_on", "portal_url"],
+        "subject": "Action needed: your {{document}} expires in {{days}} day(s)",
+        "title": "Keep your Buddilio listings live",
+        "body": "<p>Hi {{first_name}},</p><p>Your <b>{{document}}</b> on file expires on "
+                "<b>{{expires_on}}</b> ({{days}} day(s) away). Mandatory documents must stay current — "
+                "once one expires we pause your listings and hold settlements until a valid document is "
+                "uploaded and approved.</p>",
+        "cta_label": "Upload a current document", "cta_url": "{{portal_url}}"},
     "vendor_agreement_otp": {
         "label": "Vendor agreement acceptance OTP", "group": "Vendors",
         "vars": ["first_name", "otp", "agreement_number", "minutes"],
@@ -2422,6 +2432,20 @@ async def list_city_pages():
             "live_cities": sum(1 for i in items if i["live"])}
 
 
+async def city_hosts(city: str) -> dict:
+    """Public teaser for approved companions in a city — counts and rate range only."""
+    docs = await db.users.find({"role": "user", "status": "active", "verified": True,
+                                "companion.status": "approved", "companion.enabled": True,
+                                "companion.city": city},
+                               {"full_name": 1, "photo": 1, "companion": 1}).limit(50).to_list(50)
+    rates = [float((d.get("companion") or {}).get("hourly_rate") or 0) for d in docs]
+    rates = [r for r in rates if r > 0]
+    return {"count": len(docs), "from_rate": min(rates) if rates else 0,
+            "to_rate": max(rates) if rates else 0,
+            "faces": [{"name": short_name(d.get("full_name", "")), "photo": d.get("photo", "")}
+                      for d in docs if d.get("photo")][:6]}
+
+
 @api.get("/cities/{slug}")
 async def city_page(slug: str):
     city, country = find_city(slug)
@@ -2455,6 +2479,9 @@ async def city_page(slug: str):
         "organisers": await db.users.count_documents({"city": city, "role": "partner"}),
         "categories": sorted({e.get("category", "") for e in published if e.get("category")}),
         "guide": await city_guide(city),
+        "hosts": await city_hosts(city),
+        "passes": [clean(p) for p in await db.products.find(
+            {"active": True, "city": {"$in": [city, "Global", "All India"]}}).limit(4).to_list(4)],
         "faces": faces, "quotes": quotes,
         "waiting": await db.city_waitlist.count_documents({"city": city}),
         "nearby": [{"name": n, "slug": city_slug(n)} for n in country["cities"] if n != city][:6],
@@ -3325,6 +3352,12 @@ async def pay_payout(pid: str, body: dict, user: dict = Depends(require_perm("pa
         raise HTTPException(status_code=404, detail="Payout not found")
     if payout["status"] == "paid":
         raise HTTPException(status_code=400, detail="This payout is already settled.")
+    vendor = await db.vendor_profiles.find_one({"user_id": payout.get("partner_id", "")},
+                                              {"payout_hold": 1, "payout_hold_reason": 1})
+    if vendor and vendor.get("payout_hold"):
+        raise HTTPException(status_code=400,
+                            detail=f"Payouts are on hold for this vendor: "
+                                   f"{vendor.get('payout_hold_reason') or 'bank verification pending'}.")
     ref = body.get("reference") or "UTR" + uuid.uuid4().hex[:10].upper()
     await db.payouts.update_one({"_id": payout["_id"]},
                                 {"$set": {"status": "paid", "reference": ref, "paid_at": iso(now_utc())}})
@@ -4719,6 +4752,78 @@ async def send_verification_reminders() -> int:
     return sent
 
 
+async def expire_vendor_documents() -> dict:
+    """Reminds vendors 30/7/1 days before a mandatory document expires, then pauses them on expiry."""
+    import agreements as agr
+    mandatory = agr.REQUIRED_DOCS + agr.BANK_PROOF_DOCS
+    today = now_utc()
+    reminded, expired = 0, 0
+    rows = await db.vendor_documents.find(
+        {"doc_type": {"$in": mandatory}, "status": {"$in": ["approved", "pending"]},
+         "expires_on": {"$gt": ""}}).limit(1000).to_list(1000)
+    for doc in rows:
+        try:
+            due = datetime.fromisoformat(str(doc["expires_on"])[:10]).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        vendor = await db.vendor_profiles.find_one({"_id": ObjectId(doc["vendor_id"])}) \
+            if ObjectId.is_valid(doc["vendor_id"]) else None
+        if not vendor:
+            continue
+        label = doc["doc_type"].replace("_", " ")
+        days_left = (due.date() - today.date()).days
+        if days_left <= 0:
+            if doc["status"] != "expired":
+                await db.vendor_documents.update_one({"_id": doc["_id"]}, {"$set": {
+                    "status": "expired", "note": "Expired — upload a current document.",
+                    "expired_at": iso(now_utc())}})
+                await db.vendor_profiles.update_one({"_id": vendor["_id"]}, {"$set": {
+                    "status": "documents_required", "listings_paused": True,
+                    "status_reason": f"{label.title()} expired", "status_changed_at": iso(now_utc())}})
+                if vendor.get("user_id"):
+                    await notify(vendor["user_id"], "Listings paused — document expired",
+                                 f"Your {label} expired, so your Buddilio listings are paused. Upload a "
+                                 "current document to go live again.", "vendor", "/vendor/agreement")
+                await send_tpl("vendor_document_expiring", vendor.get("email", ""),
+                               {"first_name": first_name(vendor.get("contact_person", "")),
+                                "document": label.title(), "days": "0",
+                                "expires_on": str(doc["expires_on"])[:10],
+                                "portal_url": f"{FRONTEND_URL}/vendor/agreement"})
+                expired += 1
+            continue
+        if days_left in (30, 7, 1) and str(doc.get("reminded_for", "")) != str(days_left):
+            await db.vendor_documents.update_one({"_id": doc["_id"]},
+                                                 {"$set": {"reminded_for": str(days_left),
+                                                           "reminded_at": iso(now_utc())}})
+            if vendor.get("user_id"):
+                await notify(vendor["user_id"], f"{label.title()} expires in {days_left} day(s)",
+                             "Upload a current document so your listings stay live.", "vendor",
+                             "/vendor/agreement")
+            await send_tpl("vendor_document_expiring", vendor.get("email", ""),
+                           {"first_name": first_name(vendor.get("contact_person", "")),
+                            "document": label.title(), "days": str(days_left),
+                            "expires_on": str(doc["expires_on"])[:10],
+                            "portal_url": f"{FRONTEND_URL}/vendor/agreement"})
+            reminded += 1
+    logger.info(f"vendor documents — reminded {reminded}, expired {expired}")
+    return {"reminded": reminded, "expired": expired}
+
+
+@api.post("/cron/daily-maintenance")
+async def cron_daily_maintenance(_: None = Depends(cron_guard)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    asyncio.create_task(send_verification_reminders())
+    asyncio.create_task(expire_vendor_documents())
+    return {"ok": True, "queued": ["verification-reminders", "vendor-doc-expiry"]}
+
+
+@api.post("/cron/vendor-doc-expiry")
+async def cron_vendor_doc_expiry(_: None = Depends(cron_guard)):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    asyncio.create_task(expire_vendor_documents())
+    return {"ok": True, "queued": "vendor-doc-expiry"}
+
+
 @api.get("/admin/id-verifications")
 async def admin_id_verifications(status: str = "pending",
                                  user: dict = Depends(require_perm("verification:manage"))):
@@ -5344,7 +5449,11 @@ def clean_blocks(blocks: list) -> list:
 @api.get("/admin/pages")
 async def admin_pages(user: dict = Depends(require_perm("content:manage"))):
     docs = await db.cms_pages.find({}).sort("slug", 1).limit(200).to_list(200)
-    return {"items": [clean(d) for d in docs], "block_types": list(BLOCK_TYPES)}
+    from scripts.seed_policies import PAGES as POLICY_PAGES
+    have = {d["slug"] for d in docs}
+    missing = [p["slug"] for p in POLICY_PAGES if p["slug"] not in have]
+    return {"items": [clean(d) for d in docs], "block_types": list(BLOCK_TYPES),
+            "missing_policy_pages": missing}
 
 
 @api.post("/admin/pages")

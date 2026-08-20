@@ -83,6 +83,16 @@ export default function VendorAgreement() {
           {agreement.agreement_number} · v{agreement.version}</span>}
       </div>
 
+      {v?.payout_hold && (
+        <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-5" data-testid="vendor-payout-hold">
+          <p className="font-bold">Payouts are on hold</p>
+          <p className="mt-1 text-sm text-slate-600">
+            {v.payout_hold_reason || "Bank verification pending"}. Upload a fresh <b>cancelled cheque</b> or{" "}
+            <b>bank statement</b> in the Documents tab — settlements resume once Buddilio verifies it.
+          </p>
+        </div>
+      )}
+
       {awaiting && (
         <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5" data-testid="vendor-accept-banner">
           <p className="font-bold">
@@ -123,10 +133,13 @@ const Profile = ({ vendor, meta, onSaved }) => {
   const save = async (submit) => {
     setBusy(true);
     try {
-      await api.post("/vendor/profile", f);
+      const { data } = await api.post("/vendor/profile", f);
       if (submit) await api.post("/vendor/profile/submit");
-      toast.success(submit ? "Sent to Buddilio for review." : "Saved.");
-      onSaved();
+      if (data.bank_reverification_required) {
+        toast.warning("Bank details changed — upload a fresh cancelled cheque or bank statement. Payouts are held until verified.");
+      } else {
+        toast.success(submit ? "Sent to Buddilio for review." : "Saved.");
+      }      onSaved();
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
   };
 

@@ -88,6 +88,23 @@ class TestAdminNav:
 
 # ---------------- vendor meta + banking ----------------
 class TestVendorBanking:
+    @pytest.fixture(scope="class", autouse=True)
+    def restore_demo_vendor(self):
+        """These tests overwrite the SMOKE demo vendor (full-replace POST /vendor/profile);
+        snapshot the profile + document rows and put the demo data back afterwards."""
+        db = mongo()
+        v = db.vendor_profiles.find_one({"email": "partner@buddilio.com"})
+        assert v, "SMOKE vendor profile missing"
+        snap = {k: val for k, val in v.items() if k != "_id"}
+        docs = {str(d["_id"]): {k: val for k, val in d.items() if k != "_id"}
+                for d in db.vendor_documents.find({"vendor_id": str(v["_id"])})}
+        yield
+        db.vendor_profiles.replace_one({"_id": v["_id"]}, snap)
+        db.vendor_documents.delete_many({"vendor_id": str(v["_id"]),
+                                         "_id": {"$nin": [ObjectId(x) for x in docs]}})
+        for did, row in docs.items():
+            db.vendor_documents.replace_one({"_id": ObjectId(did)}, row, upsert=True)
+
     def test_meta_bank_fields(self, admin):
         r = admin.get(f"{BASE}/vendor-agreements/meta", timeout=30)
         assert r.status_code == 200, r.text[:300]

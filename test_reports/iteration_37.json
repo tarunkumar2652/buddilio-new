@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 37 verification of the post-36 fixes. Backend: 60/60 pass across test_iteration35_nav_banking.py, test_iteration35_sitemap_policies.py, test_iteration36_bank_docs_city.py and a new test_iteration37_doc_review.py (13 tests for PATCH /api/admin/vendor-documents/{did}, GET /admin/vendor-profiles/{vid}/documents, meta doc_types and GET /admin/vendor-documents/expiring incl. window/sort/RBAC/404/422 and no _id leakage). The iteration-36 bank test was updated to the new intended behaviour: re-approving a PRE-change bank proof no longer satisfies bank-verify (400) and a proof re-uploaded AFTER the change does. Frontend (Playwright, preview URL): full payout-hold clearing loop verified THROUGH THE UI — vendor changed bank branch in /vendor/agreement (toast + vendor-payout-hold banner), uploaded a fresh cancelled cheque via the Documents tab, admin saw vendor-payout-hold-<id>, opened vendor-docs-modal ('Review docs') listing every doc type with status/View/Approve/Reject and the vendor-docs-complete summary, approving the OLD bank_proof + Verify bank correctly failed with 'Approve a fresh cancelled cheque or bank statement first.' (hold stayed), then approving the FRESH cheque flipped the summary to 'complete' and Verify bank returned 'Bank details verified — payouts released.' with the hold badge and Verify-bank button disappearing; the previously held payout then paid (200, UTR reference). Reject->approve on a doc persists and refreshes the list. expiring-docs panel renders with vendor + doc type + date when a 12-day expiry is seeded and disappears when none exist. City CTA: logged out /city/mumbai city-hosts-link -> /register, member -> /discover; page renders at 1920 and 390px with zero horizontal overflow. Admin sidebar search + favourites still work. SMOKE Vendor LLP demo data restored (bank fields, payout_hold false, bank_verification approved, all docs approved, no TEST_ notes, test cheque row deleted, no TEST_ vendors/payouts left).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/vendor/profile", "issue": "Still full-replace: the UI posts the whole form so it is safe, but any partial client payload silently blanks omitted fields (this is why earlier test runs left the demo vendor with empty city/service_description). Consider PATCH-merge semantics."},
+      {"endpoint": "expire_vendor_documents()", "issue": "Unchanged from iteration 36: N+1 vendor lookup per document and a hard 1000-doc cap."},
+      {"endpoint": "GET /api/admin/vendor-documents/expiring", "issue": "Hard 200-row cap with no pagination and no filter on vendor status, so terminated/suspended vendors can crowd out live ones in the admin panel."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin -> Vendor agreements -> Review docs modal", "issues": ["Cosmetic: the modal lists all 11 doc types including 8 'missing' optional rows, so the two actionable rows require scrolling on a 1080px viewport; consider collapsing/ordering missing-optional docs last.", "No confirm step or free-text reason on Reject — it always sends the canned note 'Not acceptable — please upload a clearer document.'"]},
+      {"screen": "/city/mumbai (1920 + 390)", "issues": ["No layout defects; hosts + passes render inside bounds, no horizontal overflow."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration37_doc_review.py",
+    "/app/backend/tests/test_iteration36_bank_docs_city.py",
+    "/app/backend/tests/test_iteration35_nav_banking.py",
+    "/app/test_reports/pytest/iteration37_results.xml"
+  ],
+  "action_items": [
+    "No blocking defects found — all five iteration-37 fixes verified end-to-end.",
+    "OPTIONAL: allow the admin to type a rejection reason in DocsModal instead of the hard-coded note.",
+    "OPTIONAL: paginate/limit GET /admin/vendor-documents/expiring (200-row cap) and skip terminated vendors."
+  ],
+  "critical_code_review_comments": [
+    "bank_verify() freshness check compares ISO strings (uploaded_at >= bank_verification.changed_at) — correct today because both are written with iso(now_utc()) in the same UTC offset format, but it will silently mis-compare if any writer ever stores a non-UTC or date-only value. Prefer parsing to datetime.",
+    "DocsModal calls both load() and onSaved() after every review, i.e. two full admin-list refetches (meta + vendor-profiles + agreements + expiring) per click; debounce or refresh only on close.",
+    "Test hygiene fixed by me: test_iteration35_nav_banking.TestVendorBanking and test_iteration36 baseline now snapshot/restore the whole SMOKE vendor document — previously they left 'TEST Holder Name' and 'TEST_iter36 non-bank edit' permanently on demo data because POST /vendor/profile is full-replace.",
+    "backend/server.py is still ~7.6k lines; splitting remains recommended."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration37_doc_review.py",
+    "/app/backend/tests/test_iteration36_bank_docs_city.py",
+    "/app/backend/tests/test_iteration35_nav_banking.py"
+  ],
+  "success_rate": {"backend": "100% (60/60)", "frontend": "100% (all 14 UI checks passed)"},
+  "seed_data_creation": "Temporary only, all deleted: TEST_iter37 Docs Vendor + 3 docs, TEST_iter37 Expiring Vendor + 2 docs (pytest), TEST_iter37 Expiry Vendor + 1 doc expiring in 12 days (for the expiring-docs UI panel), one TEST_iter37 pending payout, and one cancelled-cheque document uploaded through the vendor UI for SMOKE Vendor LLP (row removed). SMOKE Vendor LLP restored: bank_account_name 'Smoke Events Pvt Ltd', account 123456789012, IFSC HDFC0001234, HDFC Bank / Cyber Hub, current, SWIFT HDFCINBB, upi buddilio@hdfcbank, city 'Delhi NCR', service_description 'Curated rooftop parties, dinners and lifestyle experiences across Delhi NCR.', payout_hold false, bank_verification approved, pan/address_proof/bank_proof all approved with empty notes.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123, arjun.sethi@example.com/User@123; cron bearer = WEBHOOK_CRON_SECRET in /app/backend/.env",
+  "context_for_next_testing_agent": "Regression set for build 37: tests/test_iteration35_nav_banking.py, test_iteration35_sitemap_policies.py, test_iteration36_bank_docs_city.py, test_iteration37_doc_review.py (60 tests, all green, run with -p no:randomly to keep the SMOKE-vendor class sequential). Both vendor-mutating classes now snapshot/restore the whole vendor_profiles doc + document rows, so demo data survives runs — do not add new SMOKE-vendor mutations outside those classes. UI flow for the payout hold: vendor /vendor/agreement -> [data-testid=vendor-tab-profile] -> vendor-bank-branch -> vendor-profile-save (triggers hold) -> vendor-tab-documents -> vendor-doc-type select + set_input_files on [data-testid=vendor-doc-upload] (accepts image/*, use a tiny PNG) -> admin /admin -> admin-tab-agreements -> vendor-docs-review-<vid> -> admin-doc-approve-<key> -> vendor-docs-close -> vendor-bank-verify-<vid>. SMOKE vendor id is 6a86177c76111f3eb63d1598. Toasts are sonner: read via [data-sonner-toast]. Remember to restore demo data if you mutate it.",
+  "rca_of_the_issue": "The single failing pre-existing assertion (test_approve_proof_then_verify_clears_hold_and_pays) was an outdated expectation, not a product bug: iteration 37 intentionally added the freshness rule in vendor_routes.bank_verify (uploaded_at must be >= bank_verification.changed_at), so re-approving the superseded pre-change proof now returns 400. The test was split into test_approving_stale_proof_does_not_clear_hold (expects 400) and test_fresh_proof_then_verify_clears_hold_and_pays (vendor re-uploads via POST /api/vendor/documents, which upserts by doc_type and refreshes uploaded_at, then admin approves and bank-verify succeeds and the held payout pays)."
+}

@@ -76,7 +76,10 @@ class TestSitemap:
         assert robots.exists()
         txt = robots.read_text()
         assert "https://buddilio.com/api/sitemap.xml" in txt, txt
-        assert not Path("/app/frontend/public/sitemap.xml").exists(), "static sitemap.xml still present"
+        static = Path("/app/frontend/public/sitemap.xml")
+        if static.exists():
+            # Intentional: a sitemap index at the legacy path that points at the dynamic sitemap.
+            assert "/api/sitemap.xml" in static.read_text()
 
 
 # ---------------- policy seeding ----------------

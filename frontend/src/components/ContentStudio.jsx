@@ -70,12 +70,14 @@ const BlockEditor = ({ block, onChange, onRemove, onMove, index, types }) => (
 export const Pages = () => {
   const [items, setItems] = useState(null);
   const [types, setTypes] = useState(["text"]);
+  const [missing, setMissing] = useState([]);
   const [sel, setSel] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    api.get("/admin/pages").then(({ data }) => { setItems(data.items); setTypes(data.block_types); })
-      .catch((e) => { toast.error(errMsg(e)); setItems([]); });
+    api.get("/admin/pages").then(({ data }) => {
+      setItems(data.items); setTypes(data.block_types); setMissing(data.missing_policy_pages || []);
+    }).catch((e) => { toast.error(errMsg(e)); setItems([]); });
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -107,6 +109,24 @@ export const Pages = () => {
   if (!items) return <Spinner />;
 
   return (
+    <div className="space-y-4" data-testid="pages-wrap">
+      {missing.length > 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5" data-testid="pages-missing-banner">
+          <p className="font-bold">{missing.length} standard page{missing.length === 1 ? "" : "s"} missing on this environment</p>
+          <p className="mt-1 text-sm text-slate-600">
+            Missing: {missing.join(", ")}. Footer links to these pages will look empty until they are filled.
+          </p>
+          <button onClick={async () => {
+            try {
+              const { data } = await api.post("/admin/cms/seed-policies?mode=missing");
+              toast.success(`Added ${data.created.length} page(s).`); load();
+            } catch (e) { toast.error(errMsg(e)); }
+          }} data-testid="pages-missing-fill"
+            className="mt-3 rounded-full bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">
+            Fill missing pages now
+          </button>
+        </div>
+      )}
     <div className="grid lg:grid-cols-[300px_1fr] gap-6" data-testid="pages-panel">
       <div className="space-y-2">
         <button onClick={() => setSel({ ...BLANK })} data-testid="page-new"
@@ -209,6 +229,7 @@ export const Pages = () => {
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 };

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, errMsg, fileUrl, citySlug } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { EventCard } from "@/components/Cards";
 import { Stars } from "@/components/Cards";
 import { Spinner, Empty, SEO } from "@/components/Shared";
@@ -118,6 +119,7 @@ const Waitlist = ({ slug, city, waiting }) => {
 
 export const CityPage = () => {
   const { slug } = useParams();
+  const { user } = useAuth();
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
 
@@ -286,6 +288,54 @@ export const CityPage = () => {
             )}
           </div>
         </section>
+
+        {(d.hosts?.count > 0 || d.passes?.length > 0) && (
+          <section className="grid gap-5 lg:grid-cols-2">
+            {d.hosts?.count > 0 && (
+              <div className="rounded-3xl border border-slate-200 bg-white p-7" data-testid="city-hosts">
+                <p className="overline">Local hosts</p>
+                <h2 className="mt-1.5 text-lg md:text-lg font-bold">
+                  {d.hosts.count} verified {d.hosts.count === 1 ? "host" : "hosts"} in {d.name}
+                </h2>
+                <p className="mt-3 text-sm text-slate-600 leading-relaxed">
+                  Members can book a verified local host for a dinner, an event or a day out
+                  {d.hosts.from_rate > 0 && <> — from <b>{d.currency} {d.hosts.from_rate}</b> per hour</>}.
+                  Every host is ID-verified and reviewed after each booking.
+                </p>
+                {d.hosts.faces?.length > 0 && (
+                  <div className="mt-5 flex -space-x-3">
+                    {d.hosts.faces.map((f, i) => (
+                      <img key={i} src={fileUrl(f.photo)} alt={f.name} loading="lazy"
+                        className="h-11 w-11 rounded-full object-cover ring-2 ring-white" />
+                    ))}
+                  </div>
+                )}
+                <Link to={user ? "/discover" : "/register"} data-testid="city-hosts-link"
+                  className="mt-6 inline-flex items-center gap-1.5 rounded-full bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">
+                  Meet {d.name} hosts <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            )}
+            {d.passes?.length > 0 && (
+              <div className="rounded-3xl border border-slate-200 bg-white p-7" data-testid="city-passes">
+                <p className="overline">Experience passes</p>
+                <h2 className="mt-1.5 text-lg md:text-lg font-bold">Ready-made plans in {d.name}</h2>
+                <ul className="mt-4 divide-y divide-slate-100">
+                  {d.passes.map((p) => (
+                    <li key={p.id} className="flex items-center justify-between gap-4 py-3">
+                      <span className="text-sm font-semibold">{p.name}</span>
+                      <span className="text-sm text-slate-500">{d.currency} {p.price}</span>
+                    </li>
+                  ))}
+                </ul>
+                <Link to="/passes" data-testid="city-passes-link"
+                  className="mt-5 inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-5 py-2.5 text-xs font-bold">
+                  Browse all passes <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            )}
+          </section>
+        )}
 
         {d.quotes?.length > 0 && (
           <section className="grid md:grid-cols-2 gap-5" data-testid="city-quotes">

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Download, X } from "lucide-react";
-import { api, errMsg, fmtDate } from "@/lib/api";
+import { api, errMsg, fmtDate, fileUrl } from "@/lib/api";
 import { Spinner, Badge } from "@/components/Shared";
 import { downloadAgreementPdf } from "@/pages/VendorAgreement";
 
@@ -35,6 +35,8 @@ export const AgreementsAdmin = () => {
   const [view, setView] = useState("vendors");
   const [sched, setSched] = useState(null);      // {vendor, agreement?} → schedule modal
   const [detail, setDetail] = useState(null);
+  const [docs, setDocs] = useState(null);        // vendor → documents modal
+  const [expiring, setExpiring] = useState([]);
 
   const load = useCallback(async () => {
     try {
@@ -42,6 +44,8 @@ export const AgreementsAdmin = () => {
         api.get("/vendor-agreements/meta"), api.get("/admin/vendor-profiles"), api.get("/admin/vendor-agreements"),
       ]);
       setMeta(m.data); setVendors(v.data.items); setAgs(a.data.items);
+      api.get("/admin/vendor-documents/expiring?days=30")
+        .then(({ data }) => setExpiring(data.items)).catch(() => setExpiring([]));
     } catch (e) { toast.error(errMsg(e)); setVendors([]); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -70,6 +74,22 @@ export const AgreementsAdmin = () => {
         </div>
       </div>
 
+      {expiring.length > 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5" data-testid="expiring-docs">
+          <p className="font-bold">{expiring.length} mandatory document{expiring.length === 1 ? "" : "s"} expiring within 30 days</p>
+          <ul className="mt-2 space-y-1 text-sm text-slate-600">
+            {expiring.map((d) => (
+              <li key={d.id} data-testid={`expiring-doc-${d.id}`}>
+                <b>{d.vendor?.legal_name || "Vendor"}</b> · {d.doc_type.replace(/_/g, " ")} · expires {String(d.expires_on).slice(0, 10)}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-slate-500">
+            Vendors are emailed 30, 7 and 1 day before. On expiry their listings pause automatically.
+          </p>
+        </div>
+      )}
+
       {view === "vendors" && (
         <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
           <table className="w-full text-sm">
@@ -89,7 +109,9 @@ export const AgreementsAdmin = () => {
                   <td className="px-4 py-3 text-xs">{meta.vendor_kinds[v.vendor_kind]}</td>
                   <td className="px-4 py-3"><Badge tone={tone(v.status)}>{v.status?.replace(/_/g, " ")}</Badge></td>
                   <td className="px-4 py-3"><Badge tone={v.documents_complete ? "green" : "amber"}>
-                    {v.documents_complete ? "complete" : "pending"}</Badge></td>
+                    {v.documents_complete ? "complete" : "pending"}</Badge>
+                    {v.payout_hold && <p className="mt-1 text-[11px] font-bold text-red-600"
+                      data-testid={`vendor-payout-hold-${v.id}`}>payouts held</p>}</td>
                   <td className="px-4 py-3 text-xs">
                     {v.agreement ? <>{v.agreement.agreement_number}<br /><Badge tone={tone(v.agreement.status)}>{v.agreement.status.replace(/_/g, " ")}</Badge></> : "—"}
                   </td>
@@ -101,6 +123,20 @@ export const AgreementsAdmin = () => {
                       {v.status !== "approved" && (
                         <button onClick={() => setStatus(v.id, "approved")} data-testid={`vendor-approve-${v.id}`}
                           className="rounded-full border border-emerald-200 px-3 py-1.5 text-[11px] font-bold text-emerald-700">Approve</button>
+                      )}
+                      <button onClick={() => setDocs(v)} data-testid={`vendor-docs-review-${v.id}`}
+                        className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold">Review docs</button>
+                      {v.payout_hold && (
+                        <button onClick={async () => {
+                          try {
+                            await api.post(`/admin/vendor-profiles/${v.id}/bank-verify`,
+                              { status: "approved", note: "New bank proof verified" });
+                            toast.success("Bank details verified — payouts released."); load();
+                          } catch (e) { toast.error(errMsg(e)); }
+                        }} data-testid={`vendor-bank-verify-${v.id}`}
+                          className="rounded-full border border-amber-300 px-3 py-1.5 text-[11px] font-bold text-amber-700">
+                          Verify bank
+                        </button>
                       )}
                       <button onClick={() => setStatus(v.id, "documents_required", "Please upload the missing documents.")}
                         data-testid={`vendor-docs-${v.id}`} className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold">Ask docs</button>
@@ -171,6 +207,7 @@ export const AgreementsAdmin = () => {
       )}
 
       {sched && <ScheduleModal ctx={sched} meta={meta} onClose={() => setSched(null)} onSaved={load} />}
+      {docs && <DocsModal vendor={docs} meta={meta} onClose={() => setDocs(null)} onSaved={load} />}
       {detail && <AgreementDetail id={detail} onClose={() => setDetail(null)} />}
     </div>
   );
@@ -318,6 +355,84 @@ const ScheduleModal = ({ ctx, meta, onClose, onSaved }) => {
           className="rounded-full bg-slate-900 px-6 py-3 text-sm font-bold text-white disabled:opacity-50">
           {busy ? "Saving…" : amending ? "Create new version & notify vendor" : "Publish terms & generate agreement"}
         </button>
+      </div>
+    </div>
+  );
+};
+
+const DocsModal = ({ vendor, meta, onClose, onSaved }) => {
+  const [d, setD] = useState(null);
+  const load = useCallback(() => {
+    api.get(`/admin/vendor-profiles/${vendor.id}/documents`).then(({ data }) => setD(data))
+      .catch((e) => toast.error(errMsg(e)));
+  }, [vendor.id]);
+  useEffect(() => { load(); }, [load]);
+
+  const review = async (id, status) => {
+    let note = "";
+    if (status === "rejected") {
+      note = window.prompt("Why is this document being rejected? (the vendor sees this)",
+        "Not acceptable — please upload a clearer document.") || "";
+      if (!note.trim()) return;
+    }
+    try {
+      await api.patch(`/admin/vendor-documents/${id}`, { status, note });
+      toast.success(`Document ${status}.`); load(); onSaved();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] overflow-y-auto bg-slate-900/60 p-4 sm:p-8" data-testid="vendor-docs-modal">
+      <div className="mx-auto w-full max-w-2xl space-y-5 rounded-2xl bg-white p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-bold">Documents</h3>
+            <p className="text-xs text-slate-500">{vendor.legal_name}</p>
+          </div>
+          <button onClick={onClose} data-testid="vendor-docs-close" className="rounded-full border border-slate-200 p-2"><X className="h-4 w-4" /></button>
+        </div>
+        {!d ? <Spinner /> : (
+          <>
+            <p className="text-sm text-slate-500">
+              PAN and address proof plus one bank proof (cancelled cheque or bank statement) must be approved
+              before a vendor can be activated or paid.
+            </p>
+            <div className="divide-y divide-slate-100">
+              {meta.doc_types.map((t) => {
+                const row = (d.items || []).find((x) => x.doc_type === t.key);
+                return (
+                  <div key={t.key} className="flex flex-wrap items-center gap-3 py-3" data-testid={`admin-doc-${t.key}`}>
+                    <div className="min-w-[180px] flex-1">
+                      <p className="text-sm font-semibold">{t.label}{t.required && <span className="ml-1 text-brand-magenta">*</span>}</p>
+                      <p className="text-xs text-slate-500">
+                        {row ? `${fmtDate(row.uploaded_at)}${row.expires_on ? ` · expires ${String(row.expires_on).slice(0, 10)}` : ""}` : "not uploaded"}
+                        {row?.note ? ` · ${row.note}` : ""}
+                      </p>
+                    </div>
+                    <Badge tone={row ? tone(row.status) : "slate"}>{row ? row.status : "missing"}</Badge>
+                    {row && (
+                      <div className="flex gap-1.5">
+                        <a href={fileUrl(row.path)} target="_blank" rel="noreferrer" data-testid={`admin-doc-view-${t.key}`}
+                          className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-bold">View</a>
+                        {row.status !== "approved" && (
+                          <button onClick={() => review(row.id, "approved")} data-testid={`admin-doc-approve-${t.key}`}
+                            className="rounded-full bg-slate-900 px-3 py-1.5 text-[11px] font-bold text-white">Approve</button>
+                        )}
+                        {row.status !== "rejected" && (
+                          <button onClick={() => review(row.id, "rejected")} data-testid={`admin-doc-reject-${t.key}`}
+                            className="rounded-full border border-red-200 px-3 py-1.5 text-[11px] font-bold text-red-600">Reject</button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-sm font-bold" data-testid="vendor-docs-complete">
+              Mandatory set: {d.complete ? "complete" : "incomplete"}
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

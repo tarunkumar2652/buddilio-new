@@ -13,11 +13,11 @@ crons:
     endpoint: "{{BASE_URL}}/api/cron/payout-reminders"
     method: POST
     enabled: true
-  - name: verification-reminders
-    description: "Nudges members who started an ID check but never uploaded their documents (daily 11:00 IST)"
+  - name: daily-maintenance
+    description: "Daily: ID-check nudges plus vendor document expiry reminders and auto-pause (11:00 IST)"
     cron: "30 5 * * *"
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
-    endpoint: "{{BASE_URL}}/api/cron/verification-reminders"
+    endpoint: "{{BASE_URL}}/api/cron/daily-maintenance"
     method: POST
     enabled: true
   - name: rating-nudges

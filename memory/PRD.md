@@ -16,39 +16,44 @@ Gurugram-122505, Haryana · no GST · grievance officer Manish.
 - Rich HTML (bleach-sanitised) content rendering across public surfaces.
 - Modern design refresh (`design_guidelines.json`) + dynamic membership plans (`PlansAdmin.jsx`).
 - Vendor agreement & commercial management module (`agreements.py`, `vendor_routes.py`,
-  `VendorAgreement.jsx`, `AgreementsAdmin.jsx`): onboarding, documents, versioned commercial
-  schedules, agreement generation, email-OTP acceptance, executed PDF, amendments, snapshots,
-  settlements, audit.
-- Legal/policy corpus seeded (`scripts/seed_policies.py`), footer groups, 21+ signup consents,
-  CMS versioning + policy acceptance.
-- **2026-06-19** Admin sidebar scrolls with the page (no longer frozen); footer duplicate
-  "Safety Centre" removed and legal text made legible.
-- **2026-06-19** Admin sidebar **search** (Enter opens first match) and **favourites** pinned per
-  admin account (`GET/PUT /api/me/admin-nav`).
-- **2026-06-19** Vendor **banking details for payment transfer** (holder, bank, branch, account no,
-  account type, IFSC, SWIFT, UPI) + **cancelled cheque OR bank statement** as the mandatory bank
-  proof; banking annexure in the agreement text and PDF; shown in admin agreement detail.
-- **2026-06-19** Content depth for thin pages (cookies, cities, insights, trust, grievance);
-  admin action **POST /api/admin/cms/seed-policies?mode=missing** + Pages button
-  "Fill missing policy pages" (never overwrites existing pages); **dynamic sitemap** at
-  `/api/sitemap.xml` (pages, cities, published events), robots.txt + sitemap index updated.
-- Verified by testing agent: `/app/test_reports/iteration_35.json` — backend 25/25, frontend 10/10.
+  `VendorAgreement.jsx`, `AgreementsAdmin.jsx`).
+- Legal/policy corpus (`scripts/seed_policies.py`), footer groups, 21+ signup consents, CMS versioning.
+- **2026-06-19** Admin sidebar scrolls with the page; footer duplicate "Safety Centre" removed and
+  legal text made legible.
+- **2026-06-19** Admin sidebar **search** + **favourites** per admin account (`/api/me/admin-nav`).
+- **2026-06-19** Vendor **banking details for payment transfer** + **cancelled cheque OR bank
+  statement** as mandatory proof; banking annexure in agreement text and PDF.
+- **2026-06-19** Content for thin policy pages; admin **"Fill missing policy pages"**
+  (`POST /api/admin/cms/seed-policies?mode=missing`) + warning banner listing missing pages;
+  **dynamic sitemap** `/api/sitemap.xml` (pages, cities, published events) + robots/sitemap index.
+- **2026-06-20** **Bank-change re-verification**: editing any bank field supersedes the old bank
+  proof, sets `payout_hold`, notifies admins, blocks `POST /admin/payouts/{id}/pay`; cleared via
+  `POST /admin/vendor-profiles/{vid}/bank-verify` only with proof uploaded AFTER the change.
+- **2026-06-20** **Admin document review UI** (Vendor agreements → "Review docs"): approve/reject
+  every vendor document with reason, mandatory-set summary.
+- **2026-06-20** **Document expiry automation**: `expire_vendor_documents()` emails 30/7/1 days out
+  (`vendor_document_expiring` template), then expires the doc, sets vendor `documents_required` and
+  pauses listings. Runs from the `daily-maintenance` cron (`/api/cron/daily-maintenance`, also
+  `/api/cron/vendor-doc-expiry`). Admin "expiring documents" panel + `/admin/vendor-documents/expiring`.
+- **2026-06-20** **City landing pages** enriched: local hosts teaser (count, rate range, avatars) and
+  experience passes alongside events, guide, FAQ, JSON-LD; hosts CTA is auth-aware.
+- Verified: `/app/test_reports/iteration_37.json` — backend 60/60, frontend all flows, no blocking issues.
 
 ## Known gaps / backlog
-P0 (user-facing next)
-- Production content: after redeploy, run Admin → Pages → "Fill missing policy pages" on
-  buddilio.com so live footer pages get content (preview and production have separate databases).
+P0
+- After deploying, run Admin → Pages → "Fill missing policy pages" on buddilio.com (separate database).
 P1
-- Vendor module gaps documented in `/app/memory/vendor_spec_review.md`: bank-change re-verification
-  flow, document expiry automation, real payout execution/UTR, vendor commission invoices, TDS,
-  per-service commercial schedules UI, renewal automation, vendor scorecard/SLA.
-- Legal review of all policy + agreement text by an Indian legal professional before production
-  reliance.
+- Vendor gaps in `/app/memory/vendor_spec_review.md`: real payout execution/UTR, vendor commission
+  invoices, TDS, per-service commercial schedules UI, renewal automation, vendor scorecard/SLA.
+- Legal review of policy + agreement text by an Indian legal professional before production reliance.
 P2
-- Certified e-sign (currently email OTP by design).
-- `server.py` is ~7.5k lines — candidate for modularisation.
+- `POST /api/vendor/profile` is full-replace — consider PATCH-merge.
+- `expire_vendor_documents()` does an N+1 vendor lookup and caps at 1000 docs; `/admin/vendor-documents/expiring`
+  caps at 200 rows with no pagination.
+- Certified e-sign (currently email OTP by design). `server.py` ~7.6k lines — modularisation candidate.
 
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.
-- Admin sidebar is intentionally non-sticky (user's choice).
+- Admin sidebar is intentionally non-sticky (user's choice). Max 5 platform crons — daily work is
+  bundled into `daily-maintenance`.
