@@ -357,11 +357,11 @@ REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "250"))
 # Every automated email lives here. Admins can override subject/title/body/button; {{vars}} stay dynamic.
 EMAIL_TEMPLATES: dict[str, dict] = {
     "pass_reminder": {
-        "label": "Pass reminder (day before)", "group": "Payments",
+        "label": "Pass reminder (before the event)", "group": "Payments",
         "vars": ["first_name", "item", "code", "when", "where", "qr_url", "pass_url"],
-        "subject": "Tomorrow: {{item}} — your pass code is {{code}}",
-        "title": "Your Buddilio Pass for tomorrow",
-        "body": "<p>Hi {{first_name}},</p><p><b>{{item}}</b> is tomorrow, {{when}} at {{where}}.</p>"
+        "subject": "Coming up: {{item}} — your pass code is {{code}}",
+        "title": "Your Buddilio Pass",
+        "body": "<p>Hi {{first_name}},</p><p><b>{{item}}</b> is coming up — {{when}} at {{where}}.</p>"
                 "<p>Show this QR at the door, or just read out your code.</p>"
                 "<p style='text-align:center'><img src='{{qr_url}}' alt='Pass QR' width='160' height='160'/>"
                 "<br/><b style='font-size:20px;letter-spacing:2px'>{{code}}</b></p>"
@@ -2463,6 +2463,28 @@ async def event_check_in(event_id: str, user: dict = Depends(get_current_user)):
             "valid": sum(1 for r in items if r["status"] == "valid")}
 
 
+@api.get("/partner/events/{event_id}/check-in.csv")
+async def event_check_in_csv(event_id: str, user: dict = Depends(get_current_user)):
+    """Door list as a CSV the organiser can keep after the night."""
+    data = await event_check_in(event_id, user)
+    cols = ["code", "guest", "guests", "status", "arrived_at", "checked_in_by", "order_no"]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+    writer.writeheader()
+    for p in data["items"]:
+        writer.writerow({"code": p["code"], "guest": p.get("user_name", ""),
+                         "guests": p.get("quantity", 1), "status": p["status"],
+                         "arrived_at": str(p.get("redeemed_at") or "")[:16].replace("T", " "),
+                         "checked_in_by": p.get("redeemed_by_name", ""),
+                         "order_no": p.get("order_no", "")})
+    writer.writerow({})
+    writer.writerow({"code": "TOTAL", "guest": data["event"]["title"],
+                     "guests": data["guests"], "status": f"{data['arrived']} arrived"})
+    name = "".join(ch if ch.isalnum() else "-" for ch in data["event"]["title"].lower())[:40]
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="door-{name}.csv"'})
+
+
 CANCEL_TIERS = [(7, 30), (2, 50), (0, 100)]   # days notice -> % deducted (minimum 30%)
 
 
@@ -3072,7 +3094,8 @@ async def cron_monthly_prize(_: None = Depends(cron_guard)):
 async def cron_city_openings(_: None = Depends(cron_guard)):
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     asyncio.create_task(open_city_waitlists())
-    return {"ok": True, "queued": "city-openings"}
+    asyncio.create_task(send_pass_reminders())
+    return {"ok": True, "queued": ["city-openings", "pass-reminders"]}
 
 
 def city_slug(name: str) -> str:
@@ -5628,10 +5651,17 @@ async def send_membership_renewal_reminders() -> int:
 
 
 async def send_pass_reminders() -> int:
-    """Emails the QR voucher the day before, so nobody hunts for their code at the door."""
-    day = (now_utc() + timedelta(days=1)).strftime("%Y-%m-%d")
+    """Emails the QR voucher a configurable number of hours before the event (default 12)."""
+    s = await db.settings.find_one({}, {"pass_reminder_hours": 1}) or {}
+    try:
+        hours = int(s.get("pass_reminder_hours") or 12)
+    except (TypeError, ValueError):
+        hours = 12
+    hours = min(max(hours, 1), 168)
+    now = now_utc()
     rows = await db.passes.find({"status": "valid", "kind": "event",
-                                 "starts_at": {"$gte": day, "$lt": day + "T99"},
+                                 "starts_at": {"$gte": iso(now),
+                                               "$lte": iso(now + timedelta(hours=hours))},
                                  "reminded": {"$ne": True}}).limit(1000).to_list(1000)
     sent = 0
     for p in rows:
@@ -5647,8 +5677,8 @@ async def send_pass_reminders() -> int:
                         "where": p.get("city") or "the venue",
                         "qr_url": f"{FRONTEND_URL.rstrip('/')}/api/passes/{p['code']}/qr.png",
                         "pass_url": pass_verify_url(p["code"])})
-        await notify(p["user_id"], "Your pass is ready for tomorrow",
-                     f"{p['item_name']} is tomorrow. Show code {p['code']} or the QR at the door.",
+        await notify(p["user_id"], "Your pass is ready",
+                     f"{p['item_name']} is coming up. Show code {p['code']} or the QR at the door.",
                      "reminder", "/orders", email=False)
         sent += 1
     logger.info(f"pass reminders sent: {sent}")

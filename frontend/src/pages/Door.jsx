@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Camera, CameraOff, CheckCircle2, QrCode, Users, XCircle } from "lucide-react";
+import { Camera, CameraOff, CheckCircle2, Download, QrCode, Users, XCircle } from "lucide-react";
 import { api, errMsg } from "@/lib/api";
 import { SEO, Spinner, Empty, Badge } from "@/components/Shared";
 
@@ -19,6 +19,7 @@ export default function Door() {
   const [eventId, setEventId] = useState("");
   const [door, setDoor] = useState(null);
   const [code, setCode] = useState("");
+  const [q, setQ] = useState("");
   const [last, setLast] = useState(null);
   const [scanning, setScanning] = useState(false);
   const scanner = useRef(null);
@@ -57,6 +58,16 @@ export default function Door() {
     } finally { setTimeout(() => { busy.current = false; }, 1200); }
   }, [loadDoor]);
 
+  const exportCsv = async () => {
+    try {
+      const res = await api.get(`/partner/events/${eventId}/check-in.csv`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url; a.download = `door-${eventId}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   const stop = useCallback(async () => {
     setScanning(false);
     if (scanner.current) {
@@ -82,6 +93,9 @@ export default function Door() {
   useEffect(() => () => { if (scanner.current) scanner.current.stop().catch(() => {}); }, []);
 
   if (!events) return <Spinner />;
+  const needle = q.trim().toLowerCase();
+  const shown = !door ? [] : door.items.filter((p) =>
+    !needle || `${p.user_name || ""} ${p.code}`.toLowerCase().includes(needle));
   return (
     <div className="mx-auto max-w-3xl px-4 sm:px-6 py-8 pb-28" data-testid="door-page">
       <SEO title="Door check-in" />
@@ -141,9 +155,15 @@ export default function Door() {
               <Users className="mr-1 inline h-3.5 w-3.5" />{door.arrived} of {door.guests} arrived
             </span>
             <button onClick={loadDoor} data-testid="door-refresh" className={`${PILL} border border-slate-200`}>Refresh</button>
+            <button onClick={exportCsv} data-testid="door-export" className={`${PILL} border border-slate-200`}>
+              <Download className="mr-1.5 inline h-4 w-4" />Export CSV
+            </button>
           </div>
+          <input value={q} onChange={(e) => setQ(e.target.value)} data-testid="door-search"
+            placeholder="Search a name or code…"
+            className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
           <div className="mt-3 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white">
-            {door.items.length ? door.items.map((p) => (
+            {shown.length ? shown.map((p) => (
               <div key={p.code} className="flex items-center justify-between gap-3 p-4" data-testid={`door-guest-${p.code}`}>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-slate-900">{p.user_name || "Guest"}</p>
@@ -156,7 +176,8 @@ export default function Door() {
                   {p.status === "redeemed" ? "arrived" : p.status}
                 </Badge>
               </div>
-            )) : <p className="p-6 text-sm text-slate-500">No passes for this event yet.</p>}
+            )) : <p className="p-6 text-sm text-slate-500" data-testid="door-list-empty">
+              {door.items.length ? "No guest matches that search." : "No passes for this event yet."}</p>}
           </div>
         </div>
       )}

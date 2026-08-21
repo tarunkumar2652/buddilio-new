@@ -79,6 +79,11 @@ Gurugram-122505, Haryana · no GST · grievance officer Manish.
 - **2026-06-21** **Day-before pass reminder**: `send_pass_reminders()` in the `daily-maintenance` cron
   emails the QR + code for events starting tomorrow, once per pass (`passes.reminded`), using the new
   editable `pass_reminder` email template.
+- **2026-06-21** **Door extras + reminder timing**: door list search box (name or code), `GET
+  /api/partner/events/{id}/check-in.csv` CSV export with a totals row, and the pass reminder window is
+  now the admin setting `pass_reminder_hours` (default 12, clamped 1-168h) instead of "the day
+  before". Reminders run from the `pass-reminders` cron every 2 hours (which also carries the old
+  city-openings work, keeping the 5-cron limit).
 - **2026-06-21** Fixes from iteration 42: `cancellation_deduction()` no longer 500s for past-dated
   events (tier fallback 100%), door list staff check uses `events:view` (`events:manage` never
   existed), admin cancellation/refund dialogs format money in the order's currency, member cancel

@@ -841,6 +841,8 @@ function Settings() {
       ))}
       <Input label="free messages per week (members with no plan)" type="number" data-testid="setting-free_messages_per_week"
         value={s.free_messages_per_week ?? 5} onChange={(e) => setS({ ...s, free_messages_per_week: Number(e.target.value) })} />
+      <Input label="pass reminder — hours before the event (default 12)" type="number" data-testid="setting-pass_reminder_hours"
+        value={s.pass_reminder_hours ?? 12} onChange={(e) => setS({ ...s, pass_reminder_hours: Number(e.target.value) })} />
       {[["require_email_verification", "Require email verification"], ["auto_approve_events", "Auto-approve partner events"]].map(([k, l]) => (
         <label key={k} className="flex items-center gap-2 text-sm"><input type="checkbox" data-testid={`setting-${k}`} checked={!!s[k]} onChange={(e) => setS({ ...s, [k]: e.target.checked })} />{l}</label>
       ))}
