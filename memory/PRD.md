@@ -35,9 +35,23 @@ Gurugram-122505, Haryana · no GST · grievance officer Manish.
   list and per-city SEO title/description, rendered on `/city/<slug>` (`city-venues`).
 - Verified: `/app/test_reports/iteration_38.json` — backend 79/79, all frontend flows, no blocking issues.
 
+- **2026-06-21** **PayPal integration** (`backend/paypal.py`): one-time payments with **guest card
+  checkout** (`landing_page=BILLING`, no PayPal login needed) and **PayPal subscriptions** for
+  memberships (product+plan created once per plan, cached per env). Membership page offers both
+  "Pay by card — N days" and "Subscribe with PayPal (auto-renews)". Cancel-auto-renewal endpoint
+  `POST /api/me/membership/cancel`. Return pages `/payments/paypal/return` and
+  `/payments/paypal/subscription-return`. Webhook `/api/webhook/paypal` **fails closed** without
+  `PAYPAL_WEBHOOK_ID` and re-verifies each capture with PayPal before fulfilling.
+  **PayPal is in LIVE mode** (`PAYPAL_ENV=live`, USD); sandbox keys kept as `PAYPAL_SANDBOX_*`.
+  Verified: `/app/backend/tests/test_iteration39_paypal.py` 28/28 plus report iteration_39.
+
 ## Known gaps / backlog
 P0
 - After deploying, run Admin → Pages → "Fill missing policy pages" on buddilio.com (separate database).
+- Create the PayPal **live webhook** (`https://buddilio.com/api/webhook/paypal`) and set
+  `PAYPAL_WEBHOOK_ID` — until then renewals/cancellations are only picked up when the member returns
+  to the site, and the webhook intentionally fulfils nothing.
+- Do one real low-value live PayPal purchase after deploy to confirm the end-to-end capture.
 P1
 - Vendor gaps in `/app/memory/vendor_spec_review.md`: TDS/withholding, per-service commercial
   schedules UI, agreement renewal automation, bank-file formats beyond the generic CSV.

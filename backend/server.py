@@ -35,6 +35,7 @@ from geo import COUNTRY_SEED, EXTRA_CURRENCIES, ID_DOC_TYPES
 from travel import PROVIDER_ROLES, TRIP_ACTIVITIES, TRAVEL_TERMS
 from invoices import invoice_pdf, template_for
 import agreements as agr
+import paypal
 from city_guides import guide_for, auto_guide
 import ai
 
@@ -1620,6 +1621,8 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
 
 
 async def mark_failed(order: dict, reason: str = ""):
+    if order.get("payment_status") == "failed":
+        return
     await db.orders.update_one({"_id": order["_id"]},
                                {"$set": {"payment_status": "failed", "order_status": "failed",
                                          "failure_reason": reason}})
@@ -1733,6 +1736,8 @@ async def payment_config():
     kid = os.environ.get("RAZORPAY_KEY_ID", "")
     conf = await currency_config()
     return {"razorpay_live": bool(kid and razorpay_client()), "razorpay_key_id": kid,
+            "paypal_enabled": paypal.enabled(), "paypal_currency": paypal.CURRENCY,
+            "subscriptions_via": "paypal" if paypal.enabled() else "",
             "stripe_enabled": bool(os.environ.get("STRIPE_API_KEY")),
             "base_currency": "INR", "currencies": [{"code": k, **v} for k, v in conf.items()],
             "methods": {"INR": ["upi", "card", "netbanking", "wallet"], "other": ["card"]}}
@@ -1834,6 +1839,246 @@ async def stripe_webhook(request: Request):
         await settle_stripe_session(res.session_id, "paid", res.session_id)
     elif res.event_type in ("checkout.session.expired", "checkout.session.async_payment_failed"):
         await settle_stripe_session(res.session_id, "failed")
+    return {"status": "ok"}
+
+
+class PayPalOrderIn(BaseModel):
+    order_id: str
+    origin_url: str = ""
+    paypal_order_id: str = ""
+
+
+class PayPalSubIn(BaseModel):
+    plan_id: str
+    origin_url: str = ""
+
+
+class PayPalActivateIn(BaseModel):
+    subscription_id: str
+
+
+def as_oid(value: str, label: str = "record") -> ObjectId:
+    if not ObjectId.is_valid(value or ""):
+        raise HTTPException(status_code=400, detail=f"That {label} id is not valid.")
+    return ObjectId(value)
+
+
+@api.get("/payments/paypal/config")
+async def paypal_config():
+    return {"enabled": paypal.enabled(), "currency": paypal.CURRENCY,
+            "env": os.environ.get("PAYPAL_ENV", "sandbox")}
+
+
+async def paypal_usd(order: dict) -> float:
+    """PayPal charges in USD; convert from the order's base amount when needed."""
+    if order.get("currency") == paypal.CURRENCY:
+        return round(float(order.get("charge_total") or order["total"]), 2)
+    rates = await fx_rates()
+    return max(round(float(order["total"]) * float(rates.get(paypal.CURRENCY, 0.012)), 2), 1.0)
+
+
+@api.post("/payments/paypal/order")
+async def create_paypal_order(body: PayPalOrderIn, user: dict = Depends(get_current_user)):
+    if not paypal.enabled():
+        raise HTTPException(status_code=400, detail="PayPal isn't configured yet.")
+    order = await db.orders.find_one({"_id": as_oid(body.order_id, "order"), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order["payment_status"] == "paid":
+        raise HTTPException(status_code=400, detail="This order is already paid.")
+    origin = (body.origin_url or FRONTEND_URL).rstrip("/")
+    amount = await paypal_usd(order)
+    try:
+        res = await paypal.create_order(
+            amount, str(order["_id"]), order.get("item_name", "Buddilio order"),
+            f"{origin}/payments/paypal/return?order={order['_id']}",
+            f"{origin}/checkout?kind={order['kind']}&id={order.get('ref_id', '')}")
+    except paypal.PayPalError as exc:
+        raise HTTPException(status_code=502, detail=paypal.message_of(exc))
+    await db.orders.update_one({"_id": order["_id"]}, {"$set": {
+        "gateway": "paypal", "gateway_order_id": res["id"],
+        "charge_currency_paypal": paypal.CURRENCY, "charge_total_paypal": amount}})
+    return {"paypal_order_id": res["id"], "approve_url": paypal.approve_link(res),
+            "amount": amount, "currency": paypal.CURRENCY}
+
+
+@api.post("/payments/paypal/capture")
+async def capture_paypal_order(body: PayPalOrderIn, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"_id": as_oid(body.order_id, "order"), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order["payment_status"] == "paid":
+        return {"order": clean(order), "already": True}
+    pp_id = body.paypal_order_id or order.get("gateway_order_id", "")
+    try:
+        res = await paypal.capture_order(pp_id)
+    except paypal.PayPalError as exc:
+        await mark_failed(order, f"paypal {paypal.message_of(exc)}")
+        raise HTTPException(status_code=400, detail=paypal.member_message(exc))
+    if res.get("status") != "COMPLETED":
+        await mark_failed(order, f"paypal {res.get('status')}")
+        raise HTTPException(status_code=400, detail="PayPal did not complete this payment.")
+    cap = (((res.get("purchase_units") or [{}])[0].get("payments") or {}).get("captures") or [{}])[0]
+    return {"order": await fulfil_order(order, cap.get("id") or pp_id, "paypal")}
+
+
+# ---- PayPal subscriptions (memberships) ----
+async def paypal_plan_for(plan: dict) -> str:
+    """Creates the PayPal product + billing plan once per membership plan, then reuses it."""
+    days = int(plan.get("duration_days") or 365)
+    interval, count = ("YEAR", 1) if days >= 300 else ("MONTH", max(round(days / 30), 1))
+    rates = await fx_rates()
+    usd = round(float(plan.get("price_usd") or float(plan["price"]) * float(rates.get(paypal.CURRENCY, 0.012))), 2)
+    saved = plan.get("paypal") or {}
+    env = os.environ.get("PAYPAL_ENV", "sandbox").lower()
+    if (saved.get("plan_id") and saved.get("price") == usd and saved.get("interval") == interval
+            and saved.get("env") == env):
+        return saved["plan_id"]
+    product_id = saved.get("product_id") if saved.get("env") == env else ""
+    product_id = product_id or await paypal.ensure_product(
+        f"Buddilio {plan['name']}", plan.get("description", "Buddilio membership"))
+    plan_id = await paypal.create_plan(product_id, plan["name"], usd, interval, count)
+    await db.membership_plans.update_one({"_id": plan["_id"]}, {"$set": {"paypal": {
+        "product_id": product_id, "plan_id": plan_id, "price": usd, "interval": interval,
+        "interval_count": count, "env": env, "created_at": iso(now_utc())}}})
+    return plan_id
+
+
+@api.post("/payments/paypal/subscription")
+async def start_paypal_subscription(body: PayPalSubIn, user: dict = Depends(get_current_user)):
+    if not paypal.enabled():
+        raise HTTPException(status_code=400, detail="PayPal isn't configured yet.")
+    plan = await db.membership_plans.find_one({"_id": as_oid(body.plan_id, "plan"), "active": True})
+    if not plan:
+        raise HTTPException(status_code=404, detail="That membership plan isn't available.")
+    origin = (body.origin_url or FRONTEND_URL).rstrip("/")
+    try:
+        pp_plan = await paypal_plan_for(plan)
+        res = await paypal.create_subscription(
+            pp_plan, user["email"], user.get("full_name", ""),
+            f"{origin}/payments/paypal/subscription-return",
+            f"{origin}/membership", custom_id=user["id"])
+    except paypal.PayPalError as exc:
+        raise HTTPException(status_code=502, detail=paypal.message_of(exc))
+    await db.paypal_subscriptions.update_one({"subscription_id": res["id"]}, {"$set": {
+        "subscription_id": res["id"], "user_id": user["id"], "plan_id": str(plan["_id"]),
+        "plan_name": plan["name"], "paypal_plan_id": pp_plan, "status": res.get("status", "APPROVAL_PENDING"),
+        "created_at": iso(now_utc())}}, upsert=True)
+    return {"subscription_id": res["id"], "approve_url": paypal.approve_link(res)}
+
+
+async def activate_paypal_membership(subscription_id: str) -> dict:
+    """Turns an approved PayPal subscription into an active Buddilio membership. Idempotent."""
+    sub = await db.paypal_subscriptions.find_one({"subscription_id": subscription_id})
+    if not sub:
+        raise HTTPException(status_code=404, detail="We couldn't find that subscription.")
+    try:
+        live = await paypal.get_subscription(subscription_id)
+    except paypal.PayPalError as exc:
+        raise HTTPException(status_code=502, detail=paypal.message_of(exc))
+    status = live.get("status", "")
+    await db.paypal_subscriptions.update_one({"_id": sub["_id"]}, {"$set": {
+        "status": status, "synced_at": iso(now_utc()),
+        "next_billing": (live.get("billing_info") or {}).get("next_billing_time", "")}})
+    if status not in ("ACTIVE", "APPROVED"):
+        return {"status": status, "membership": None}
+    plan = await db.membership_plans.find_one({"_id": ObjectId(sub["plan_id"])})
+    uid = sub["user_id"]
+    existing = await db.user_memberships.find_one({"paypal_subscription_id": subscription_id,
+                                                  "status": "active"})
+    if existing:
+        return {"status": status, "membership": clean(existing)}
+    amount = float(((live.get("billing_info") or {}).get("last_payment") or {})
+                   .get("amount", {}).get("value") or (plan.get("paypal") or {}).get("price") or 0)
+    order = {"order_no": "BUD" + uuid.uuid4().hex[:8].upper(), "user_id": uid,
+             "user_email": sub.get("user_email", ""), "kind": "membership", "ref_id": sub["plan_id"],
+             "item_name": f"{plan['name']} membership", "quantity": 1,
+             "subtotal": amount, "discount": 0.0, "tax": 0.0, "total": amount,
+             "tax_percent": 0.0, "tax_label": "No tax", "credit_applied": 0.0, "charge_credit": 0.0,
+             "coupon": "", "currency": paypal.CURRENCY, "fx_rate": 1.0,
+             "base_currency": paypal.CURRENCY, "charge_subtotal": amount, "charge_discount": 0.0,
+             "charge_tax": 0.0, "charge_total": amount,
+             "payment_status": "pending", "order_status": "created", "refund_status": "none",
+             "gateway": "paypal", "gateway_order_id": subscription_id, "transaction_id": "",
+             "created_at": iso(now_utc())}
+    res = await db.orders.insert_one(order)
+    saved = await db.orders.find_one({"_id": res.inserted_id})
+    await fulfil_order(saved, subscription_id, "paypal")
+    await db.user_memberships.update_one(
+        {"order_id": str(res.inserted_id)},
+        {"$set": {"paypal_subscription_id": subscription_id, "auto_renews": True}})
+    member = await db.user_memberships.find_one({"order_id": str(res.inserted_id)})
+    return {"status": status, "membership": clean(member) if member else None}
+
+
+@api.post("/payments/paypal/subscription/activate")
+async def confirm_paypal_subscription(body: PayPalActivateIn, user: dict = Depends(get_current_user)):
+    sub = await db.paypal_subscriptions.find_one({"subscription_id": body.subscription_id,
+                                                  "user_id": user["id"]})
+    if not sub:
+        raise HTTPException(status_code=404, detail="We couldn't find that subscription.")
+    return await activate_paypal_membership(sub["subscription_id"])
+
+
+@api.post("/me/membership/cancel")
+async def cancel_my_membership(user: dict = Depends(get_current_user)):
+    member = await membership_active(user["id"])
+    if not member:
+        raise HTTPException(status_code=400, detail="You don't have an active membership.")
+    sub_id = member.get("paypal_subscription_id", "")
+    if sub_id:
+        try:
+            await paypal.cancel_subscription(sub_id, "Cancelled from the Buddilio membership page")
+        except paypal.PayPalError as exc:
+            raise HTTPException(status_code=502, detail=paypal.message_of(exc))
+        await db.paypal_subscriptions.update_one({"subscription_id": sub_id},
+                                                {"$set": {"status": "CANCELLED",
+                                                          "cancelled_at": iso(now_utc())}})
+    await db.user_memberships.update_one({"_id": ObjectId(member["id"])}, {"$set": {
+        "auto_renews": False, "cancelled_at": iso(now_utc())}})
+    return {"ok": True, "ends_at": member.get("ends_at", ""),
+            "message": "Auto-renewal is off. Your benefits stay active until the end of the paid period."}
+
+
+@app.post("/api/webhook/paypal")
+async def paypal_webhook(request: Request):
+    body = await request.json()
+    event = body.get("event_type", "")
+    resource = body.get("resource") or {}
+    if not os.environ.get("PAYPAL_WEBHOOK_ID"):
+        # Fail closed: without a webhook id we cannot prove PayPal sent this, so never fulfil on it.
+        logger.warning(f"paypal webhook {event} ignored — PAYPAL_WEBHOOK_ID not configured")
+        return {"status": "unverified"}
+    if not await paypal.verify_webhook(request.headers, body):
+        logger.warning(f"paypal webhook {event} failed signature verification")
+        return {"status": "invalid"}
+    try:
+        if event in ("BILLING.SUBSCRIPTION.ACTIVATED", "PAYMENT.SALE.COMPLETED",
+                     "BILLING.SUBSCRIPTION.UPDATED"):
+            sub_id = resource.get("id") if event.startswith("BILLING") else resource.get("billing_agreement_id")
+            if sub_id:
+                await activate_paypal_membership(sub_id)
+        elif event in ("BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.EXPIRED",
+                       "BILLING.SUBSCRIPTION.SUSPENDED"):
+            sub_id = resource.get("id", "")
+            await db.paypal_subscriptions.update_one({"subscription_id": sub_id},
+                                                    {"$set": {"status": event.rsplit(".", 1)[-1]}})
+            await db.user_memberships.update_many({"paypal_subscription_id": sub_id},
+                                                  {"$set": {"auto_renews": False}})
+        elif event == "PAYMENT.CAPTURE.COMPLETED":
+            ref = resource.get("custom_id", "")
+            capture_id = resource.get("id", "")
+            if ref and ObjectId.is_valid(ref) and capture_id:
+                order = await db.orders.find_one({"_id": ObjectId(ref)})
+                if order and order["payment_status"] != "paid":
+                    # Confirm the capture with PayPal itself before releasing anything.
+                    pp = await paypal.get_order(order.get("gateway_order_id", ""))
+                    if pp.get("status") == "COMPLETED":
+                        await fulfil_order(order, capture_id, "paypal")
+                    else:
+                        logger.warning(f"paypal capture {capture_id} not COMPLETED at PayPal — skipped")
+    except Exception as exc:
+        logger.warning(f"paypal webhook {event} handling failed: {exc}")
     return {"status": "ok"}
 
 

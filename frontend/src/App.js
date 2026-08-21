@@ -16,7 +16,7 @@ import { Events, EventDetail } from "@/pages/Events";
 import { Discover, PublicProfile, MyProfile } from "@/pages/Discover";
 import Messages from "@/pages/Messages";
 import { Membership, Passes, Checkout } from "@/pages/Commerce";
-import { PaymentSuccess, PaymentCancel } from "@/pages/Payment";
+import { PaymentSuccess, PaymentCancel, PayPalReturn, PayPalSubscriptionReturn } from "@/pages/Payment";
 import { CmsPage, Safety } from "@/pages/Content";
 import Referrals from "@/pages/Referrals";
 import Concierge from "@/pages/Concierge";
@@ -91,6 +91,8 @@ function Shell() {
           <Route path="/u/:id" element={<PublicProfile />} />
           <Route path="/payment/success" element={<PaymentSuccess />} />
           <Route path="/payment/cancel" element={<PaymentCancel />} />
+          <Route path="/payments/paypal/return" element={<Protected><PayPalReturn /></Protected>} />
+          <Route path="/payments/paypal/subscription-return" element={<Protected><PayPalSubscriptionReturn /></Protected>} />
 
           <Route path="/welcome" element={<Protected><Welcome /></Protected>} />
           <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />

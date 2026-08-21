@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 39 — PayPal (sandbox) integration tested end to end. New suite /app/backend/tests/test_iteration39_paypal.py: 23 passed, 5 failed (all 5 are one real defect: raw-dict bodies return 500 instead of 4xx). Regression suites 35/36/37/38 all green (79 passed). Real PayPal sandbox calls were exercised: config endpoints, one-time order creation (INR->USD, sandbox approve_url, order stamped gateway=paypal), capture guard on an unapproved order (400 ORDER_NOT_APPROVED, order marked failed not paid), capture of an already-paid order ({already:true}), PAYMENT.CAPTURE.COMPLETED webhook fulfilment + idempotent replay (payments/invoice/ledger verified), subscription creation with product+plan created once for Premium Monthly and REUSED on the 2nd call, 365-day plan -> YEAR / 30-day -> MONTH, paypal_subscriptions row APPROVAL_PENDING, activation guard (no membership for a non-active subscription), 404s for unknown/other-user subscriptions, BILLING.SUBSCRIPTION.ACTIVATED + CANCELLED webhook paths, and /me/membership/cancel (400 without membership; auto_renews=false + cancelled_at + correct copy with an active membership). Frontend (desktop 1920 + mobile 390): membership PayPal notes on all 3 paid plans with exact copy, plan CTA redirects to https://www.sandbox.paypal.com/webapps/billing/subscriptions, checkout pay-paypal-btn redirects to https://www.sandbox.paypal.com/checkoutnow, simulated INR path still pays an order end-to-end and lands on /orders, both PayPal return pages render, are auth-protected, and show graceful failure / 'slow' states. No mobile overflow.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/webhook/paypal", "issue": "PAYPAL_WEBHOOK_ID is unset, so signature verification is skipped and ANY unauthenticated caller can POST {event_type:'PAYMENT.CAPTURE.COMPLETED', resource:{custom_id:<order_id>}} and get a pending order fulfilled (paid + invoice + membership/entitlement) with zero money collected. Verified live in preview. Acceptable for preview but must be blocked before production: require PAYPAL_WEBHOOK_ID (fail closed) and/or re-fetch the capture from PayPal before fulfilling.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/payments/paypal/order | /capture | /subscription", "issue": "Bodies are raw `dict` and indexed directly (body['order_id'], ObjectId(...)). Missing key or non-ObjectId string -> 500 Internal Server Error instead of 400/422. 5 parametrised tests cover this (TestPayPalInputValidation). Fix with Pydantic models + ObjectId validation.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/payments/paypal/capture", "issue": "mark_failed() is not idempotent — the return page fired capture twice (React effect double-invoke) and 2 identical 'failed' payments rows were written for one order."},
+      {"endpoint": "POST /api/payments/paypal/capture", "issue": "The 400 detail leaks PayPal developer copy verbatim to the end user: \"Payer has not yet approved the Order for payment. Please redirect the payer to the 'rel':'approve' url returned as part of the HATEOAS links...\". paypal.message_of() should map known codes (ORDER_NOT_APPROVED, INSTRUMENT_DECLINED) to member-facing text."},
+      {"endpoint": "paypal_usd()", "issue": "Hardcoded fallback FX rate 0.012 when fx_rates() lacks USD — silent wrong pricing risk; log/raise instead."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Payment.jsx PayPalReturn", "issue": "The failure copy says 'Your order is still waiting in your account, so you can try again' but the backend has already marked that order payment_status=failed, so it is not retryable from /orders. Copy and state disagree.", "selector": "[data-testid=paypal-failed]", "priority": "MEDIUM"},
+      {"component": "Payment.jsx PayPalReturn", "issue": "Capture is called twice on mount (two 400s in console, two failed payments rows). Guard the effect with a ref so it runs once.", "selector": "[data-testid=paypal-return-page]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/membership (desktop + 390px)", "issues": ["plan-paypal-note-* uses text-slate-400 (#94a3b8) at 11px on the WHITE Basic / Premium Monthly cards — contrast ~2.5:1, fails WCAG AA. The ternary picks slate-400 for both branches; use text-slate-500/600 on light cards.", "Basic plan feature list shows both '5 messages a week' and 'Send 5 messages a week' (duplicated benefit) — pre-existing."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration39_paypal.py",
+    "/app/test_reports/pytest/iteration39_paypal.xml",
+    "/app/test_reports/pytest/iteration39_regression.xml"
+  ],
+  "action_items": [
+    "Add Pydantic request models (or explicit 400s) to /payments/paypal/order, /capture and /subscription — malformed bodies currently 500.",
+    "Harden /api/webhook/paypal: fail closed when PAYPAL_WEBHOOK_ID is missing in production, and/or verify the capture with PayPal before fulfilling (forged webhook currently fulfils an order for free).",
+    "Make mark_failed idempotent and guard PayPalReturn's capture effect so it fires once.",
+    "Map PayPal error codes to member-facing copy instead of surfacing the raw HATEOAS instruction text.",
+    "Raise the contrast of plan-paypal-note-* on the light membership cards (slate-400 -> slate-500/600)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 7,858 lines — the PayPal block (config/order/capture/subscription/activate/cancel/webhook, ~200 lines) should move into its own router module like vendor_routes.py.",
+    "activate_paypal_membership raises HTTPException from inside the webhook handler; it works only because the handler wraps everything in try/except and swallows it into a warning log — a genuine PayPal 502 during webhook activation is therefore silently lost with no retry/dead-letter.",
+    "paypal.CURRENCY is captured at import time from the env; changing PAYPAL_CURRENCY needs a backend restart (fine, but membership_plans.paypal price/interval caching keys off it and stale plans would silently be reused).",
+    "Commerce.jsx only renders cancel-membership-btn when mine.paypal_subscription_id exists, so a member whose membership came from the simulated/Stripe path has no UI cancel even though /me/membership/cancel supports it."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration39_paypal.py"],
+  "success_rate": {"backend": "82% (23/28 new PayPal tests; 79/79 regression tests pass — the 5 failures are the single input-validation defect)", "frontend": "100% of the requested PayPal UI flows passed"},
+  "seed_data_creation": "One throwaway TEST_pp_*@example.com member per run (auto-purged by conftest). PayPal sandbox artefacts: a product + billing plan was created ONCE for the real 'Premium Monthly' plan (stored under membership_plans.paypal, MONTH/23.99 USD) — no throwaway membership_plans documents were created, and Basic/Premium Annual reused their existing PayPal plans. ~6 APPROVAL_PENDING sandbox subscriptions were created (they cannot be deleted/cancelled while unapproved); the pending_sub fixture now reuses an existing pending row to limit future churn.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "/app/memory/test_credentials.md used as-is (admin@buddilio.com/Admin@123, arjun.sethi@example.com/User@123). File is complete and accurate.",
+  "context_for_next_testing_agent": "Run `pytest tests/test_iteration39_paypal.py` from /app/backend (pytest.ini forces -n 2 --dist loadscope, so cross-CLASS state must go through a fixture, not module globals — the pending_sub fixture reuses an APPROVAL_PENDING paypal_subscriptions row instead of hitting PayPal again). The 5 expected failures are TestPayPalInputValidation (500 instead of 4xx) — they should turn green once Pydantic models are added. No PayPal sandbox BUYER account exists, so approval/capture success and real membership activation are still UNTESTED; everything is verified up to the redirect and through webhooks. Membership cancel with a live PayPal subscription id (the branch that calls PayPal's cancel API) is also untested — only the no-subscription branch was exercised via a seeded user_memberships row.",
+  "rca_of_the_issue": "Input-validation 500s: the three PayPal endpoints declare `body: dict` and immediately do body['order_id'] / ObjectId(body['plan_id']), so a KeyError or bson InvalidId escapes as an unhandled exception -> 500. Webhook exposure: paypal.verify_webhook() returns False when PAYPAL_WEBHOOK_ID is unset, and the handler only rejects unverified events when that env var IS set, so with it unset every event is trusted and PAYMENT.CAPTURE.COMPLETED fulfils any pending order whose id is passed as resource.custom_id (reproduced: a hand-rolled POST to /api/webhook/paypal marked a pending order paid and generated its invoice/ledger rows)."
+}

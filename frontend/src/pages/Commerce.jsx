@@ -35,11 +35,25 @@ export function Membership() {
   const nav = useNavigate();
   const [plans, setPlans] = useState(null);
   const [mine, setMine] = useState(null);
+  const [cfg, setCfg] = useState({});
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     api.get("/plans").then(({ data }) => setPlans(data.items)).catch(() => setPlans([]));
+    api.get("/payments/config").then(({ data }) => setCfg(data)).catch(() => {});
     if (user) api.get("/me/membership").then(({ data }) => setMine(data.membership)).catch(() => {});
   }, [user]);
+
+  const cancel = async () => {
+    if (!window.confirm("Turn off auto-renewal? Your benefits stay active until the end of the paid period.")) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post("/me/membership/cancel");
+      toast.success(data.message);
+      const { data: m } = await api.get("/me/membership");
+      setMine(m.membership);
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+  };
 
   if (!plans) return <Spinner />;
 
@@ -49,9 +63,19 @@ export function Membership() {
     return ov ? `${symbol}${Number(ov).toLocaleString()}` : fmt(p.price);
   };
 
-  const pick = (p) => {
+  const pick = async (p, mode = "card") => {
     if (!user) return nav("/login");
     if (p.price === 0) return toast.success("You're already on Basic — it's free for every member.");
+    if (mode === "subscribe" && cfg.subscriptions_via === "paypal") {
+      setBusy(true);
+      try {
+        const { data } = await api.post("/payments/paypal/subscription",
+          { plan_id: p.id, origin_url: window.location.origin });
+        if (!data.approve_url) throw new Error("PayPal did not return a checkout link.");
+        window.location.href = data.approve_url;
+        return;
+      } catch (e) { toast.error(errMsg(e) || e.message); setBusy(false); return; }
+    }
     nav(`/checkout?kind=membership&id=${p.id}`);
   };
 
@@ -68,6 +92,17 @@ export function Membership() {
             <p className="text-xl font-display font-bold mt-1">{mine.plan_name}</p>
           </div>
           <p className="text-sm text-slate-400">Renews / expires {new Date(mine.ends_at).toLocaleDateString(undefined)}</p>
+          {mine.paypal_subscription_id && mine.auto_renews !== false && (
+            <button onClick={cancel} disabled={busy} data-testid="cancel-membership-btn"
+              className="rounded-full border border-white/30 px-5 py-2.5 text-xs font-bold disabled:opacity-60">
+              Cancel auto-renewal
+            </button>
+          )}
+          {mine.auto_renews === false && (
+            <p className="text-xs font-bold text-amber-300" data-testid="membership-cancelled-note">
+              Auto-renewal is off — benefits run until {new Date(mine.ends_at).toLocaleDateString(undefined)}
+            </p>
+          )}
         </div>
       )}
 
@@ -88,10 +123,23 @@ export function Membership() {
             <ul className="mt-6 space-y-2.5 text-sm" data-testid={`plan-features-${p.id}`}>
               {planFeatures(p).map((b) => <li key={b} className="flex gap-2"><Check className="h-4 w-4 shrink-0 mt-0.5" />{b}</li>)}
             </ul>
-            <button onClick={() => pick(p)} data-testid={`plan-cta-${p.id}`}
-              className={`mt-8 w-full rounded-full py-3.5 text-sm font-bold ${i === 2 ? "bg-white text-slate-900" : "bg-slate-900 text-white"}`}>
-              {p.price === 0 ? "Included free" : `Get ${p.name}`}
+            <button onClick={() => pick(p, "card")} disabled={busy} data-testid={`plan-cta-${p.id}`}
+              className={`mt-8 w-full rounded-full py-3.5 text-sm font-bold disabled:opacity-60 ${i === 2 ? "bg-white text-slate-900" : "bg-slate-900 text-white"}`}>
+              {p.price === 0 ? "Included free" : `Pay by card — ${p.duration_days} days`}
             </button>
+            {p.price > 0 && cfg.subscriptions_via === "paypal" && (
+              <>
+                <button onClick={() => pick(p, "subscribe")} disabled={busy} data-testid={`plan-subscribe-${p.id}`}
+                  className={`mt-3 w-full rounded-full border-2 py-3.5 text-sm font-bold disabled:opacity-60 ${i === 2 ? "border-white/40 text-white" : "border-[#003087] bg-[#ffc439] text-[#003087]"}`}>
+                  {busy ? "Opening PayPal…" : "Subscribe with PayPal (auto-renews)"}
+                </button>
+                <p className={`mt-2 text-[11px] ${i === 2 ? "text-slate-300" : "text-slate-500"}`} data-testid={`plan-paypal-note-${p.id}`}>
+                  Card payment needs no PayPal account and covers {p.duration_days} days.
+                  Subscribing renews automatically in {cfg.paypal_currency || "USD"} and needs a PayPal
+                  account — cancel any time.
+                </p>
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -251,6 +299,15 @@ export function Checkout() {
     } catch (e) { toast.error(errMsg(e)); setBusy(false); }
   };
 
+  const payPayPal = async () => {
+    setBusy(true);
+    try {
+      const { data } = await api.post("/payments/paypal/order", { order_id: order.id, origin_url: window.location.origin });
+      if (!data.approve_url) throw new Error("PayPal did not return a checkout link.");
+      window.location.href = data.approve_url;
+    } catch (e) { toast.error(errMsg(e) || e.message); setBusy(false); }
+  };
+
   const paySim = async (simulate) => {
     setBusy(true);
     try {
@@ -265,6 +322,7 @@ export function Checkout() {
   const isINR = currency === "INR";
   const canRazorpay = isINR && cfg.razorpay_live;
   const canStripe = !isINR && cfg.stripe_enabled;
+  const canPaypal = cfg.paypal_enabled;
 
   return (
     <div className="mx-auto max-w-3xl px-4 sm:px-6 py-10 pb-28" data-testid="checkout-page">
@@ -398,6 +456,12 @@ export function Checkout() {
             <button onClick={() => paySim("failure")} disabled={busy} data-testid="pay-failure-btn"
               className="rounded-full border border-slate-200 py-3.5 text-sm font-bold text-slate-500">Simulate failed payment</button>
           </div>
+        )}
+        {canPaypal && (
+          <button onClick={payPayPal} disabled={busy} data-testid="pay-paypal-btn"
+            className="mt-3 w-full rounded-full border-2 border-[#003087] bg-[#ffc439] py-3.5 text-sm font-bold text-[#003087] transition-transform hover:scale-[1.01] disabled:opacity-60">
+            {busy ? "Opening PayPal…" : "Pay with PayPal"}
+          </button>
         )}
       </div>
       <Link to="/orders" className="mt-6 inline-block text-sm font-bold border-b-2 border-slate-900 pb-0.5">View my orders</Link>
