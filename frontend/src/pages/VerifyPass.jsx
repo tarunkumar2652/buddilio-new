@@ -185,6 +185,10 @@ export default function VerifyPass() {
       <p className="mt-3 flex items-center gap-2 text-xs text-slate-400">
         <QrCode className="h-4 w-4" /> Tip: your phone camera opens this page straight from the guest's QR.
       </p>
+      <p className="mt-3 text-xs text-slate-500">
+        Running the door for an event? Open <Link to="/door" data-testid="verify-door-link"
+          className="font-bold text-slate-900 underline">door check-in</Link> to scan QRs back to back and see who has arrived.
+      </p>
     </div>
   );
 }

@@ -189,9 +189,32 @@ def approve_link(res: dict) -> str:
 
 
 # ---------------- webhooks ----------------
-async def verify_webhook(headers: Any, body: dict) -> bool:
+WEBHOOK_EVENTS = [
+    "BILLING.SUBSCRIPTION.ACTIVATED", "BILLING.SUBSCRIPTION.UPDATED",
+    "BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.EXPIRED",
+    "BILLING.SUBSCRIPTION.SUSPENDED", "BILLING.SUBSCRIPTION.PAYMENT.FAILED",
+    "PAYMENT.SALE.COMPLETED", "PAYMENT.CAPTURE.COMPLETED", "PAYMENT.CAPTURE.REFUNDED",
+]
+
+
+async def list_webhooks() -> list[dict]:
+    res = await _call("GET", "/v1/notifications/webhooks")
+    return res.get("webhooks", [])
+
+
+async def create_webhook(url: str) -> dict:
+    return await _call("POST", "/v1/notifications/webhooks", {
+        "url": url, "event_types": [{"name": e} for e in WEBHOOK_EVENTS]})
+
+
+async def replace_webhook_events(webhook_id: str) -> dict:
+    return await _call("PATCH", f"/v1/notifications/webhooks/{webhook_id}", [
+        {"op": "replace", "path": "/event_types", "value": [{"name": e} for e in WEBHOOK_EVENTS]}])
+
+
+async def verify_webhook(headers: Any, body: dict, webhook_id: str = "") -> bool:
     """PayPal verifies the signature for us when a webhook id is configured."""
-    webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+    webhook_id = webhook_id or os.environ.get("PAYPAL_WEBHOOK_ID", "")
     if not webhook_id:
         return False
     try:

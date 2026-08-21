@@ -356,6 +356,18 @@ REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "250"))
 # ---------------- editable email templates ----------------
 # Every automated email lives here. Admins can override subject/title/body/button; {{vars}} stay dynamic.
 EMAIL_TEMPLATES: dict[str, dict] = {
+    "pass_reminder": {
+        "label": "Pass reminder (day before)", "group": "Payments",
+        "vars": ["first_name", "item", "code", "when", "where", "qr_url", "pass_url"],
+        "subject": "Tomorrow: {{item}} — your pass code is {{code}}",
+        "title": "Your Buddilio Pass for tomorrow",
+        "body": "<p>Hi {{first_name}},</p><p><b>{{item}}</b> is tomorrow, {{when}} at {{where}}.</p>"
+                "<p>Show this QR at the door, or just read out your code.</p>"
+                "<p style='text-align:center'><img src='{{qr_url}}' alt='Pass QR' width='160' height='160'/>"
+                "<br/><b style='font-size:20px;letter-spacing:2px'>{{code}}</b></p>"
+                "<p>Carry a government photo ID. The pass works once and stops working if the "
+                "booking is cancelled.</p>",
+        "cta_label": "Open my pass", "cta_url": "{{pass_url}}"},
     "order_refunded": {
         "label": "Order refunded", "group": "Payments",
         "vars": ["first_name", "item", "order_no", "amount", "orders_url"],
@@ -2106,16 +2118,76 @@ async def cancel_my_membership(user: dict = Depends(get_current_user)):
             "message": "Auto-renewal is off. Your benefits stay active until the end of the paid period."}
 
 
+async def paypal_webhook_id() -> str:
+    """Env wins; otherwise the id created from Admin -> Payments is stored in settings."""
+    if os.environ.get("PAYPAL_WEBHOOK_ID"):
+        return os.environ["PAYPAL_WEBHOOK_ID"]
+    s = await db.settings.find_one({}, {"paypal_webhook_id": 1}) or {}
+    return s.get("paypal_webhook_id", "")
+
+
+def paypal_webhook_url() -> str:
+    return f"{FRONTEND_URL.rstrip('/')}/api/webhook/paypal"
+
+
+@api.get("/admin/paypal/webhook")
+async def paypal_webhook_status(user: dict = Depends(require_perm("finance:manage"))):
+    wanted = paypal_webhook_url()
+    out = {"env": os.environ.get("PAYPAL_ENV", "sandbox"), "url": wanted,
+           "webhook_id": await paypal_webhook_id(), "from_env": bool(os.environ.get("PAYPAL_WEBHOOK_ID")),
+           "events": paypal.WEBHOOK_EVENTS, "registered": [], "matches": False, "error": ""}
+    if not paypal.enabled():
+        out["error"] = "PayPal keys are not configured."
+        return out
+    try:
+        hooks = await paypal.list_webhooks()
+    except paypal.PayPalError as exc:
+        out["error"] = paypal.message_of(exc)
+        return out
+    out["registered"] = [{"id": h.get("id"), "url": h.get("url"),
+                          "events": [e.get("name") for e in h.get("event_types", [])]} for h in hooks]
+    out["matches"] = any(h.get("url") == wanted and h.get("id") == out["webhook_id"] for h in hooks)
+    return out
+
+
+@api.post("/admin/paypal/webhook/setup")
+async def paypal_webhook_setup(user: dict = Depends(require_perm("finance:manage"))):
+    """Creates (or reuses) the PayPal webhook for this site and stores its id."""
+    if not paypal.enabled():
+        raise HTTPException(status_code=400, detail="PayPal keys are not configured.")
+    wanted = paypal_webhook_url()
+    try:
+        hooks = await paypal.list_webhooks()
+        existing = next((h for h in hooks if h.get("url") == wanted), None)
+        if existing:
+            await paypal.replace_webhook_events(existing["id"])
+            hook_id, created = existing["id"], False
+        else:
+            hook_id, created = (await paypal.create_webhook(wanted))["id"], True
+    except paypal.PayPalError as exc:
+        raise HTTPException(status_code=502, detail=paypal.message_of(exc))
+    s = await db.settings.find_one({})
+    await db.settings.update_one({"_id": s["_id"]}, {"$set": {"paypal_webhook_id": hook_id}})
+    await audit(user, "paypal.webhook_setup", "settings", str(s["_id"]),
+                {"webhook_id": hook_id, "url": wanted, "created": created})
+    logger.info(f"paypal webhook {'created' if created else 'reused'}: {hook_id} -> {wanted}")
+    return {"webhook_id": hook_id, "url": wanted, "created": created,
+            "events": paypal.WEBHOOK_EVENTS,
+            "message": ("Webhook created — renewals and cancellations now update on their own."
+                        if created else "Webhook already existed; its event list was refreshed.")}
+
+
 @app.post("/api/webhook/paypal")
 async def paypal_webhook(request: Request):
     body = await request.json()
     event = body.get("event_type", "")
     resource = body.get("resource") or {}
-    if not os.environ.get("PAYPAL_WEBHOOK_ID"):
+    webhook_id = await paypal_webhook_id()
+    if not webhook_id:
         # Fail closed: without a webhook id we cannot prove PayPal sent this, so never fulfil on it.
         logger.warning(f"paypal webhook {event} ignored — PAYPAL_WEBHOOK_ID not configured")
         return {"status": "unverified"}
-    if not await paypal.verify_webhook(request.headers, body):
+    if not await paypal.verify_webhook(request.headers, body, webhook_id):
         logger.warning(f"paypal webhook {event} failed signature verification")
         return {"status": "invalid"}
     try:
@@ -2381,7 +2453,7 @@ async def event_check_in(event_id: str, user: dict = Depends(get_current_user)):
     ev = await db.events.find_one({"_id": as_oid(event_id, "event")})
     if not ev:
         raise HTTPException(status_code=404, detail="Event not found.")
-    if ev.get("partner_id") != user["id"] and "events:manage" not in perms_of(user):
+    if ev.get("partner_id") != user["id"] and "events:view" not in perms_of(user):
         raise HTTPException(status_code=403, detail="That event isn't yours.")
     rows = await db.passes.find({"kind": "event", "ref_id": event_id}).limit(1000).to_list(1000)
     items = [clean(r) for r in rows]
@@ -2409,7 +2481,7 @@ async def cancellation_deduction(order: dict) -> tuple[float, int, str]:
             days = (datetime.fromisoformat(str(start).replace("Z", "+00:00")) - now_utc()).days
         except ValueError:
             days = 999
-    pct = next(p for d, p in CANCEL_TIERS if days >= d)
+    pct = next((p for d, p in CANCEL_TIERS if days >= d), 100)
     label = ("more than 7 days" if days >= 7 else "2-7 days" if days >= 2 else "under 48 hours")
     return round(paid * (100 - pct) / 100, 2), pct, f"Cancelled {label} before the booking."
 
@@ -5555,16 +5627,45 @@ async def send_membership_renewal_reminders() -> int:
     return sent
 
 
+async def send_pass_reminders() -> int:
+    """Emails the QR voucher the day before, so nobody hunts for their code at the door."""
+    day = (now_utc() + timedelta(days=1)).strftime("%Y-%m-%d")
+    rows = await db.passes.find({"status": "valid", "kind": "event",
+                                 "starts_at": {"$gte": day, "$lt": day + "T99"},
+                                 "reminded": {"$ne": True}}).limit(1000).to_list(1000)
+    sent = 0
+    for p in rows:
+        user = await db.users.find_one({"_id": ObjectId(p["user_id"])}, {"full_name": 1, "email": 1})
+        if not user:
+            continue
+        await db.passes.update_one({"_id": p["_id"]}, {"$set": {"reminded": True,
+                                                               "reminded_at": iso(now_utc())}})
+        await send_tpl("pass_reminder", user.get("email", ""),
+                       {"first_name": first_name(user.get("full_name", "")),
+                        "item": p["item_name"], "code": p["code"],
+                        "when": str(p.get("starts_at") or "")[:16].replace("T", " at "),
+                        "where": p.get("city") or "the venue",
+                        "qr_url": f"{FRONTEND_URL.rstrip('/')}/api/passes/{p['code']}/qr.png",
+                        "pass_url": pass_verify_url(p["code"])})
+        await notify(p["user_id"], "Your pass is ready for tomorrow",
+                     f"{p['item_name']} is tomorrow. Show code {p['code']} or the QR at the door.",
+                     "reminder", "/orders", email=False)
+        sent += 1
+    logger.info(f"pass reminders sent: {sent}")
+    return sent
+
+
 @api.post("/cron/daily-maintenance")
 async def cron_daily_maintenance(_: None = Depends(cron_guard)):
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     asyncio.create_task(send_verification_reminders())
     asyncio.create_task(expire_vendor_documents())
     asyncio.create_task(send_membership_renewal_reminders())
+    asyncio.create_task(send_pass_reminders())
     if now_utc().day == 1:
         asyncio.create_task(generate_monthly_commission_invoices())
     return {"ok": True, "queued": ["verification-reminders", "vendor-doc-expiry",
-                                   "membership-renewal-reminders"]}
+                                   "membership-renewal-reminders", "pass-reminders"]}
 
 
 async def generate_monthly_commission_invoices() -> dict:

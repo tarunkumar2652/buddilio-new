@@ -28,7 +28,7 @@ export const RefundDialog = ({ order, onClose, onDone }) => {
       const { data } = await api.post(`/admin/orders/${order.id}/refund`,
         { amount: Number(amount), reason, override_policy: override });
       toast.success(data.refund_status === "partial"
-        ? `Partial refund done — ${money(data.refunded_amount)} refunded so far.`
+        ? `Partial refund done — ${money(data.refunded_amount, order.currency)} refunded so far.`
         : "Full refund processed.");
       onDone();
       onClose();
@@ -41,10 +41,10 @@ export const RefundDialog = ({ order, onClose, onDone }) => {
         <p className="text-xs font-bold uppercase tracking-widest text-brand-magenta">Refund</p>
         <h3 className="mt-1 text-lg font-black text-slate-900">#{order.order_no} · {order.item_name}</h3>
         <dl className="mt-4 space-y-2 rounded-2xl bg-slate-50 p-4 text-sm">
-          {[["Paid", money(paid)],
-            ["Already refunded", money(already)],
+          {[["Paid", money(paid, order.currency)],
+            ["Already refunded", money(already, order.currency)],
             ["Deduction", quote.deduction_percent != null ? `${quote.deduction_percent}%` : "—"],
-            ["Policy allows now", isMembership ? "Non-refundable" : money(allowed)]].map(([k, v]) => (
+            ["Policy allows now", isMembership ? "Non-refundable" : money(allowed, order.currency)]].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-3">
                 <dt className="text-slate-500">{k}</dt><dd className="font-bold text-slate-900">{v}</dd>
               </div>
@@ -102,10 +102,11 @@ const SettleDialog = ({ order, onClose, onDone }) => {
         <h3 className="mt-1 text-lg font-black text-slate-900">#{order.order_no} · {order.item_name}</h3>
         <dl className="mt-4 space-y-2 rounded-2xl bg-slate-50 p-4 text-sm">
           {[["Member", order.user_name || "—"],
-            ["Paid", money(order.charge_total || order.total)],
+            ["Paid", money(order.charge_total || order.total, order.currency)],
             ["Deduction", `${c.deduction_percent || 0}%`],
-            ["Quoted refundable", money(c.refundable || 0)],
+            ["Quoted refundable", money(c.refundable || 0, order.currency)],
             ["Member prefers", c.prefer === "credit" ? "Credit (+10%)" : "Refund to card"],
+            ["Currency", (order.currency || "INR").toUpperCase()],
             ["Member's reason", c.reason || "—"]].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-3">
                 <dt className="text-slate-500">{k}</dt><dd className="font-bold text-slate-900 text-right">{v}</dd>
@@ -164,7 +165,7 @@ export const Cancellations = () => {
                 {o.user_name} · {o.kind} · requested {fmtDate(o.cancellation?.requested_at)}
               </p>
               <p className="mt-1 text-xs font-semibold text-amber-700">
-                {o.cancellation?.deduction_percent}% deducted · {money(o.cancellation?.refundable || 0)} refundable
+                {o.cancellation?.deduction_percent}% deducted · {money(o.cancellation?.refundable || 0, o.currency)} refundable
                 {o.kind === "membership" ? " · membership fee is non-refundable" : ""}
               </p>
             </div>

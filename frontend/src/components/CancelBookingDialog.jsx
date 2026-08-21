@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, errMsg } from "@/lib/api";
 import { Spinner } from "@/components/Shared";
@@ -9,15 +9,17 @@ const fm = (c, v) => `${c === "INR" ? "₹" : `${c || ""} `}${Number(v || 0).toL
 /** Member cancellation sheet — shows the deduction breakdown before anything is cancelled. */
 export const CancelBookingDialog = ({ order, onClose, onDone }) => {
   const [q, setQ] = useState(null);
+  const [err, setErr] = useState("");
   const [prefer, setPrefer] = useState("refund");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  const loadQuote = useCallback(() => {
+    setErr("");
     api.get(`/me/orders/${order.id}/cancellation-quote`).then(({ data }) => setQ(data))
-      .catch((e) => { toast.error(errMsg(e)); onClose(); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      .catch((e) => setErr(errMsg(e) || "We couldn't work out your refund just now."));
   }, [order.id]);
+  useEffect(() => { loadQuote(); }, [loadQuote]);
 
   const submit = async () => {
     setBusy(true);
@@ -36,7 +38,18 @@ export const CancelBookingDialog = ({ order, onClose, onDone }) => {
         onClick={(e) => e.stopPropagation()}>
         <p className="text-xs font-bold uppercase tracking-widest text-brand-magenta">Cancel booking</p>
         <h3 className="mt-1 text-lg font-black text-slate-900">{order.item_name}</h3>
-        {!q ? <div className="py-8"><Spinner /></div> : (
+        {err ? (
+          <div data-testid="cancel-error">
+            <p className="mt-3 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{err}</p>
+            <p className="mt-2 text-xs text-slate-500">
+              Nothing has been cancelled. Try again, or write to support and we'll sort it out.
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button onClick={loadQuote} data-testid="cancel-retry" className={`${PILL} flex-1 bg-slate-900 text-white`}>Try again</button>
+              <button onClick={onClose} data-testid="cancel-dismiss" className={`${PILL} border border-slate-200`}>Close</button>
+            </div>
+          </div>
+        ) : !q ? <div className="py-8"><Spinner /></div> : (
           <>
             <p className="mt-2 text-sm text-slate-500">{q.reason}</p>
             <dl className="mt-4 space-y-2 rounded-2xl bg-slate-50 p-4 text-sm" data-testid="cancel-breakdown">

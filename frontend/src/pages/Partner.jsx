@@ -129,6 +129,7 @@ export default function PartnerDashboard() {
                   <button onClick={() => submitExisting(ev.id)} data-testid={`submit-event-${ev.id}`} className="rounded-full bg-slate-900 text-white px-4 py-2 text-xs font-bold inline-flex items-center gap-1"><Send className="h-3 w-3" />Submit</button>
                 )}
                 {ev.status === "published" && <Link to={`/events/${ev.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">View</Link>}
+                {ev.status === "published" && <Link to={`/door?event=${ev.id}`} data-testid={`door-event-${ev.id}`} className="rounded-full bg-brand-magenta text-white px-4 py-2 text-xs font-bold">Door check-in</Link>}
               </div>
             </div>
           )) : <Empty title="No events yet" sub="Create your first experience — admin approves it before it goes live."

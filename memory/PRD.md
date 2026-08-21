@@ -65,12 +65,32 @@ Gurugram-122505, Haryana · no GST · grievance officer Manish.
   Verified: `/app/test_reports/iteration_41.json` — backend 21/21, all frontend flows; the policy
   ceiling, admin cancellation screen and styled dialogs were added afterwards from its action items.
 
+- **2026-06-21** **PayPal webhook self-setup**: `GET /api/admin/paypal/webhook` (status + webhooks
+  registered on the account) and `POST /api/admin/paypal/webhook/setup` create/reuse the webhook for
+  `{FRONTEND_URL}/api/webhook/paypal` and store its id in `settings.paypal_webhook_id`
+  (env `PAYPAL_WEBHOOK_ID` still wins). Card lives in **Admin → Payments** (`PaypalWebhook.jsx`).
+  Subscribes to 9 events (subscription activated/updated/cancelled/expired/suspended/payment-failed,
+  sale + capture completed, capture refunded). Webhook handler still fails closed without an id.
+  Setup must be clicked **in production** — running it in preview would register the preview URL.
+- **2026-06-21** **Organiser door check-in** (`frontend/src/pages/Door.jsx`, route `/door?event=<id>`):
+  camera QR scan (`html5-qrcode`) plus manual code entry, live "x of y arrived" counter and per-guest
+  arrival list from `GET /api/partner/events/{id}/check-in` (organiser or `events:view` staff).
+  Linked from Partner dashboard published events and from `/verify`.
+- **2026-06-21** **Day-before pass reminder**: `send_pass_reminders()` in the `daily-maintenance` cron
+  emails the QR + code for events starting tomorrow, once per pass (`passes.reminded`), using the new
+  editable `pass_reminder` email template.
+- **2026-06-21** Fixes from iteration 42: `cancellation_deduction()` no longer 500s for past-dated
+  events (tier fallback 100%), door list staff check uses `events:view` (`events:manage` never
+  existed), admin cancellation/refund dialogs format money in the order's currency, member cancel
+  sheet has an inline error + retry.
+  Verified: `/app/test_reports/iteration_42.json` plus targeted re-checks of every fix above.
+
 ## Known gaps / backlog
 P0
 - After deploying, run Admin → Pages → "Fill missing policy pages" on buddilio.com (separate database).
-- Create the PayPal **live webhook** (`https://buddilio.com/api/webhook/paypal`) and set
-  `PAYPAL_WEBHOOK_ID` — until then renewals/cancellations are only picked up when the member returns
-  to the site, and the webhook intentionally fulfils nothing.
+- Create the PayPal **live webhook**: after publishing, open Admin → Payments on buddilio.com and hit
+  **Connect webhook** (registers `https://buddilio.com/api/webhook/paypal` and saves the id). Until
+  then renewals/cancellations are only picked up when the member returns to the site.
 - Do one real low-value live PayPal purchase after deploy to confirm the end-to-end capture.
 P1
 - Vendor gaps in `/app/memory/vendor_spec_review.md`: TDS/withholding, per-service commercial

@@ -1,0 +1,54 @@
+{
+  "summary": "Iteration 42: tested the PayPal webhook admin card (read-only + permissions only — setup NEVER executed since PayPal is LIVE), the fail-closed /api/webhook/paypal handler, organiser door check-in (backend + mobile 390px UI with manual code entry), the day-before pass reminder cron, and regression on iteration-41 refund/cancellation policy work. Backend: 26/28 pytest checks pass (/app/backend/tests/test_iteration42_webhook_door_reminder.py, seed /app/backend/tests/i42_seed.py — NOTE: must run with -n 0, the xdist default in pytest.ini makes each worker re-seed). Two genuine defects found: (1) GET /api/me/orders/{id}/cancellation-quote returns 500 for any event booking whose event start date is in the past (StopIteration in cancellation_deduction) — the member cancel sheet never opens, only a generic 'Something went wrong' toast; (2) the door list gates staff on a permission string 'events:manage' that does not exist in PERMISSIONS, so no admin/staff can ever open another organiser's door list. Door flows (valid check-in, counter update, duplicate 'Already used', unknown code) all work on mobile; admin Payments webhook card and Cancellations & refunds + settle dialog render correctly on desktop. All seeded orders/passes cleaned up.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/me/orders/{oid}/cancellation-quote", "issue": "500 Internal Server Error for event orders whose event already started. cancellation_deduction() computes days = (starts_at - now).days which is negative for past events, and `next(p for d, p in CANCEL_TIERS if days >= d)` raises StopIteration (CANCEL_TIERS lowest tier is d=0). Repro: member arjun.sethi@example.com, order 6a7b73e34a13de566dbd112d (event 18 days in the past) -> 500; UI: /orders -> 'Cancel booking' -> sheet closes with generic error toast. Both of this member's paid event bookings are affected (100%). Fix: clamp days (e.g. max(days, 0)) or add a fallback tier.", "priority": "HIGH"},
+      {"endpoint": "GET /api/partner/events/{id}/check-in", "issue": "Staff fallback is dead code: the check is `\"events:manage\" not in perms_of(user)` but 'events:manage' is not in PERMISSIONS (only events:view / events:moderate exist), so even the super admin (ALL_PERMISSIONS) gets 403 'That event isn't yours.' on another organiser's event. Docstring promises 'organiser of this event (or staff)'. Use events:view / events:moderate.", "priority": "MEDIUM"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Partner.jsx 'Door check-in' link", "issue": "Link is a plain <Link to=\"/door\"> with no event context, so /door always defaults to the first published event. Clicking the door link on the 7th event row (6a7b6458314aa84df39b86f3) landed on 'DIFC Rooftop Jazz' (6a7cc7045fed9266ef613262) — organiser must hunt through a 16-item dropdown. Pass ?event={id} (or router state) and have Door.jsx honour it.", "selector": "[data-testid^=\"door-event-\"]", "priority": "MEDIUM"},
+      {"component": "Cancellations.jsx / settle + refund dialogs", "issue": "money() is called without the order currency, so it falls back to the global base currency: a USD-charged order (charge_total 100 USD) is displayed as '₹100 paid / ₹30 refundable' in the admin cancellations row and settle dialog. Payments are USD-only now — pass order.currency like CancelBookingDialog does.", "selector": "[data-testid=\"admin-cancellations\"], [data-testid=\"settle-dialog\"]", "priority": "MEDIUM"},
+      {"component": "CancelBookingDialog", "issue": "No error state: when the quote call fails the sheet closes instantly with a generic toast, giving the member no explanation or retry (currently triggered by the 500 above).", "selector": "[data-testid=\"cancel-dialog\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/door (mobile 390px)", "issues": ["The floating 'Ask Buddy' chat bubble sits on top of the arrivals list and partially covers the status badge of a guest row (e.g. 'valid' at ~x=335) — bump the list's bottom padding / z-index or hide the bubble on /door."]},
+      {"screen": "Admin -> Payments (1920px)", "issues": ["Card renders correctly ('PAYPAL WEBHOOK · LIVE', 'Not connected — PayPal events are ignored until you connect it', notification URL shown). No 'Webhooks registered on this PayPal account' section appears because PayPal returned an empty list with no error — consider showing 'PayPal reports 0 webhooks on this account' instead of nothing."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration42_webhook_door_reminder.py",
+    "/app/backend/tests/i42_seed.py",
+    "/app/test_reports/pytest/i42_results.xml"
+  ],
+  "action_items": [
+    "Fix cancellation_deduction() StopIteration for past-dated events (500 on /api/me/orders/{id}/cancellation-quote) — blocks member cancellation entirely for those bookings.",
+    "Replace the non-existent 'events:manage' permission in GET /api/partner/events/{id}/check-in with events:view/events:moderate so staff can actually open a door list.",
+    "Make the partner 'Door check-in' link carry the event id (e.g. /door?event={id}) and have Door.jsx preselect it.",
+    "Pass the order currency to money() in Cancellations.jsx (row, settle dialog, refund dialog) — USD orders currently render as ₹.",
+    "Give CancelBookingDialog an inline error/retry state instead of closing on quote failure.",
+    "Minor: keep the Ask-Buddy bubble off the /door arrivals list on mobile."
+  ],
+  "critical_code_review_comments": [
+    "/api/admin/paypal/webhook leaks no secrets (verified against PAYPAL_CLIENT_SECRET / PAYPAL_SANDBOX_CLIENT_SECRET values and key names) and is correctly gated on finance:manage; setup is gated too (member/partner/anon all rejected).",
+    "/api/webhook/paypal correctly fails closed: forged PAYMENT.CAPTURE.COMPLETED (with a real order custom_id) and forged BILLING.SUBSCRIPTION.ACTIVATED both return {'status':'unverified'} and mutate nothing.",
+    "send_pass_reminders() marks reminded/reminded_at before sending, so the second cron run is a no-op — verified idempotent; cron requires the bearer secret (401/403 without it).",
+    "refund_ceiling()/refund_order() behave: membership refund blocked ('non-refundable'), override without reason blocked, refund above the cancellation quote blocked (quoted 30 of 100), amount > order total blocked, member gets 403.",
+    "pytest.ini enables xdist; session-scoped seed fixtures re-run per worker and clobber each other — future iterations should seed via an autouse session fixture keyed per worker or run with -n 0 (documented in the test file)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration42_webhook_door_reminder.py",
+    "/app/backend/tests/i42_seed.py",
+    "/app/test_reports/iteration_42.json"
+  ],
+  "success_rate": {"backend": "93% (26/28)", "frontend": "85%"},
+  "seed_data_creation": "Seeded one paid USD event order (item_name TEST_I42_DOOR) with a pending cancellation quote (70% deduction, 30 refundable) plus three event passes (door check-in, UI check-in, reminder) for arjun.sethi@example.com on partner@buddilio.com's event 6a7b6458314aa84df39b86f7. All removed afterwards (verified 0 leftover orders/passes). No PayPal calls that mutate the LIVE account were made; the webhook setup endpoint was never executed as admin and no PayPal approval was completed.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "/app/memory/test_credentials.md — admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123, arjun.sethi@example.com/User@123 all worked (no captcha shown on first attempt).",
+  "context_for_next_testing_agent": "Run the i42 suite with `python -m pytest tests/test_iteration42_webhook_door_reminder.py -n 0` (xdist breaks the session seed). Only two tests should fail once the cancellation-quote 500 and the events:manage permission bug are fixed. Camera scanning on /door was not tested (headless); manual code entry covers the same redeem path. Do NOT click [data-testid=\"paypal-webhook-setup\"] or complete a PayPal approval — PAYPAL_ENV=live. Regression items from iteration 41 (policy ceiling on refunds, admin cancellations screen, settle dialog, member cancel sheet for non-event orders) are all working.",
+  "rca_of_the_issue": "cancellation_deduction(): CANCEL_TIERS = [(7,30),(2,50),(0,100)] is scanned with `next(p for d,p in CANCEL_TIERS if days >= d)`. For an event that already started, timedelta.days is negative, no tier matches, and the bare generator raises StopIteration which FastAPI surfaces as a 500 (traceback confirmed in /var/log/supervisor/backend.err.log). The frontend CancelBookingDialog catches the error, toasts 'Something went wrong' and closes, so the member can never cancel. Separately, GET /api/partner/events/{id}/check-in compares against 'events:manage', a permission key absent from PERMISSIONS/ALL_PERMISSIONS, so the staff bypass can never evaluate true."
+}

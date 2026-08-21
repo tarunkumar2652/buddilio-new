@@ -18,6 +18,7 @@ import Messages from "@/pages/Messages";
 import { Membership, Passes, Checkout } from "@/pages/Commerce";
 import { PaymentSuccess, PaymentCancel, PayPalReturn, PayPalSubscriptionReturn } from "@/pages/Payment";
 import VerifyPass from "@/pages/VerifyPass";
+import Door from "@/pages/Door";
 import { CmsPage, Safety } from "@/pages/Content";
 import Referrals from "@/pages/Referrals";
 import Concierge from "@/pages/Concierge";
@@ -94,6 +95,7 @@ function Shell() {
           <Route path="/payment/cancel" element={<PaymentCancel />} />
           <Route path="/verify" element={<VerifyPass />} />
           <Route path="/verify/:code" element={<VerifyPass />} />
+          <Route path="/door" element={<Protected><Door /></Protected>} />
           <Route path="/payments/paypal/return" element={<Protected><PayPalReturn /></Protected>} />
           <Route path="/payments/paypal/subscription-return" element={<Protected><PayPalSubscriptionReturn /></Protected>} />
 

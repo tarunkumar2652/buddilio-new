@@ -23,6 +23,7 @@ import { AgreementsAdmin } from "@/components/AgreementsAdmin";
 import { VendorPayouts } from "@/components/VendorPayouts";
 import { ProfileForm, EventForm } from "@/components/AdminForms";
 import { Cancellations, RefundDialog } from "@/components/Cancellations";
+import { PaypalWebhook } from "@/components/PaypalWebhook";
 import { useAuth } from "@/context/AuthContext";
 
 const NAV = [
@@ -495,6 +496,7 @@ function Orders({ payments }) {
   if (!items) return <Spinner />;
   return (
     <div data-testid="admin-orders">
+      {payments && <PaypalWebhook />}
       <div className="flex gap-2">
         {["", "paid", "pending", "failed"].map((s) => (
           <button key={s || "all"} onClick={() => setStatus(s)} data-testid={`admin-order-filter-${s || "all"}`}
