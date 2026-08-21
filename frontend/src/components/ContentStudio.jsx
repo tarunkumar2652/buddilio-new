@@ -144,6 +144,17 @@ export const Pages = () => {
           className="w-full rounded-full border border-slate-200 px-4 py-2.5 text-xs font-bold">
           Fill missing policy pages
         </button>
+        <button onClick={async () => {
+          if (!window.confirm("Refresh ALL standard policy/information pages with Buddilio's full content? Your current version of each page is archived in version history first, and any wording you added yourself will be replaced.")) return;
+          try {
+            const { data } = await api.post("/admin/cms/seed-policies?mode=all");
+            toast.success(`Refreshed ${data.updated.length + data.created.length} page(s).`);
+            load();
+          } catch (e) { toast.error(errMsg(e)); }
+        }} data-testid="page-refresh-policies"
+          className="w-full rounded-full border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs font-bold text-amber-800">
+          Refresh all standard pages (overwrites)
+        </button>
         {items.map((p) => (
           <button key={p.id} onClick={() => setSel({ ...BLANK, ...p, blocks: p.blocks || [] })}
             data-testid={`page-select-${p.slug}`}
