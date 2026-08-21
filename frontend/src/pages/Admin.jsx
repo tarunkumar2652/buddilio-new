@@ -22,6 +22,7 @@ import { PlansAdmin } from "@/components/PlansAdmin";
 import { AgreementsAdmin } from "@/components/AgreementsAdmin";
 import { VendorPayouts } from "@/components/VendorPayouts";
 import { ProfileForm, EventForm } from "@/components/AdminForms";
+import { Cancellations, RefundDialog } from "@/components/Cancellations";
 import { useAuth } from "@/context/AuthContext";
 
 const NAV = [
@@ -30,6 +31,7 @@ const NAV = [
   ["verification", "Verification", "verification:manage"],
   ["managers", "Console access", "team:manage"], ["events", "Events", "events:view"],
   ["memberships", "Memberships", "finance:manage"], ["products", "Products", "finance:manage"],  ["orders", "Orders", "finance:view"], ["payments", "Payments", "finance:view"],
+  ["cancellations", "Cancellations & refunds", "finance:manage"],
   ["payouts", "Payouts", "payouts:view"], ["vendorpay", "Vendor settlements", "payouts:view"],
   ["coupons", "Coupons", "finance:manage"],
   ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
@@ -133,7 +135,7 @@ const Input = ({ label, ...p }) => (
 
 const GROUPS = [
   ["Overview", ["dashboard", "events", "settings"]],
-  ["Money", ["orders", "payments", "payouts", "vendorpay", "coupons", "memberships", "products", "ledger"]],
+  ["Money", ["orders", "payments", "cancellations", "payouts", "vendorpay", "coupons", "memberships", "products", "ledger"]],
   ["Content", ["content", "pages", "sections", "guides", "emails", "places"]],
   ["People", ["users", "partners", "agreements", "managers", "companions", "team"]],
   ["Trust", ["verification", "idchecks", "providers", "reports", "reviews", "photos", "audit"]],
@@ -254,6 +256,7 @@ export default function Admin() {
           fields={[["code", "text"], ["discount_type", "text"], ["value", "number"], ["min_order", "number"], ["usage_limit", "number"], ["members_only", "bool"], ["expires_at", "text"], ["active", "bool"]]}
           blank={{ code: "", discount_type: "percent", value: 10, min_order: 0, usage_limit: 100, members_only: false, expires_at: "", active: true }} />}
         {(active === "orders" || active === "payments") && <Orders payments={active === "payments"} />}
+        {active === "cancellations" && <Cancellations />}
         {active === "payouts" && <Payouts />}
         {active === "vendorpay" && <VendorPayouts />}
         {active === "reports" && <Reports />}
@@ -488,10 +491,7 @@ function Orders({ payments }) {
   }, [status]);
   useEffect(() => { load(); }, [load]);
 
-  const refund = async (id) => {
-    try { await api.post(`/admin/orders/${id}/refund`); toast.success("Refund processed"); load(); }
-    catch (e) { toast.error(errMsg(e)); }
-  };
+  const [refunding, setRefunding] = useState(null);
   if (!items) return <Spinner />;
   return (
     <div data-testid="admin-orders">
@@ -514,11 +514,16 @@ function Orders({ payments }) {
                 <td className="px-4 py-3 text-xs">{o.kind}</td>
                 <td className="px-4 py-3 font-semibold">{money(o.total)}</td>
                 <td className="px-4 py-3"><Badge tone={statusTone(o.payment_status)}>{o.payment_status}</Badge></td>
-                <td className="px-4 py-3 text-xs">{o.refund_status}</td>
+                <td className="px-4 py-3 text-xs">
+                  {o.refund_status}
+                  {Number(o.refunded_amount || 0) > 0 && <p className="text-[10px] text-slate-400">{money(o.refunded_amount)} back</p>}
+                </td>
                 <td className="px-4 py-3">
                   {payments ? <span className="text-xs text-slate-500">{o.transaction_id || "—"}</span>
-                    : o.payment_status === "paid" && o.refund_status === "none" ? (
-                      <button onClick={() => refund(o.id)} data-testid={`refund-${o.id}`} className="rounded-full border border-red-200 text-red-600 px-3 py-1.5 text-[11px] font-bold">Refund</button>
+                    : o.payment_status === "paid" && o.refund_status !== "refunded" ? (
+                      <button onClick={() => setRefunding(o)} data-testid={`refund-${o.id}`} className="rounded-full border border-red-200 text-red-600 px-3 py-1.5 text-[11px] font-bold">
+                        {o.refund_status === "partial" ? "Refund more" : "Refund"}
+                      </button>
                     ) : <span className="text-xs text-slate-400">—</span>}
                 </td>
               </tr>
@@ -527,6 +532,7 @@ function Orders({ payments }) {
         </table>
         {!items.length && <p className="p-6 text-sm text-slate-500">No orders.</p>}
       </div>
+      {refunding && <RefundDialog order={refunding} onClose={() => setRefunding(null)} onDone={load} />}
     </div>
   );
 }

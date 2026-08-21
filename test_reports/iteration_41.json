@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 41 e2e testing of the built-in captcha (register + progressive login), Buddilio Pass QR voucher (issue/QR/PDF/verify/redeem/void), cancellation & refund rules, and the simulated-payment block. Backend: 21/21 pytest cases pass (/app/backend/tests/test_iteration41_captcha_pass_refund.py). Frontend: register captcha flow, login progressive captcha, member passes section (QR + PDF download), public /verify (not-found / valid / redeem / already-used / void) and member cancellation flow all verified at 1920 and 390 widths. No critical defects found; two design/UX gaps and one policy-enforcement gap reported.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/orders/{oid}/refund", "issue": "Does not enforce the cancellation policy: membership orders (documented as NON-refundable) and amounts above the quoted refundable (min 30% deduction) can still be refunded in full by an admin. Only the member-facing quote/cancel path applies the tiers. Add a policy guard or an explicit 'override policy' flag + audit reason."},
+      {"endpoint": "POST /api/auth/register", "issue": "Per-IP register rate limit is 5/hour and counts failed attempts too. Behind shared NAT/corporate proxies (x-forwarded-for first hop) legitimate signups can be blocked. Consider counting only successful registrations, or a higher limit."},
+      {"endpoint": "POST /api/auth/login (guard)", "issue": "When the progressive captcha is first demanded the error is 'Your verification expired. Please answer the new question.' although the user never saw a question. Friendlier: 'Please answer the quick human check below.'"},
+      {"endpoint": "emailer (Resend)", "issue": "Pre-existing: notification emails to admin@buddilio.com / *@example.com fail with Resend 422 'Undeliverable recipient' (noisy backend logs during cancellation/refund tests). Not blocking."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Member orders (/orders) cancellation flow", "issues": ["Cancellation uses native window.confirm/window.confirm/window.prompt chain (3 browser dialogs) to show the deduction quote, credit choice and reason. For a paid-money flow this should be a styled modal with the breakdown (paid / deduction % / refundable / credit +10%) and a radio choice, per the app's shadcn design language.", "A cancelled order still shows a green 'paid' badge; the amber 'Cancelled · 30% deducted · settlement pending' text is the only status hint. Consider an amber/red status pill."]},
+      {"screen": "Admin console", "issues": ["There is NO admin UI for the cancellation/refund approval queue: GET /api/admin/cancellations and POST /api/admin/orders/{id}/settle-cancellation are backend-only. Admin can only use the generic 'Refund' button (also a window.prompt) in the Orders tab, with no visibility of the quoted refundable amount or the member's refund-vs-credit preference."]},
+      {"screen": "Captcha component (register/login)", "issues": ["If GET /api/captcha fails the question box stays on 'Loading…' forever with no error/retry hint (catch sets q=null). Add an inline error + 'try again' state."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration41_captcha_pass_refund.py",
+    "/app/backend/tests/i41_ui_seed.py",
+    "/app/test_reports/pytest/i41.xml"
+  ],
+  "action_items": [
+    "Enforce (or explicitly override with audit) the cancellation policy in POST /api/admin/orders/{oid}/refund: block membership refunds and amounts above the quoted refundable.",
+    "Build the admin cancellation/refund approval screen wired to /api/admin/cancellations + /settle-cancellation (currently unreachable from the UI).",
+    "Replace the window.confirm/prompt cancellation dialogs (member) and the refund prompt (admin) with proper modals.",
+    "Add an error/retry state to Captcha.jsx when /api/captcha fails instead of an endless 'Loading…'.",
+    "Reword the first progressive-login captcha message ('verification expired' is confusing) and reconsider the 5/hour per-IP register limit for shared IPs."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 8371 lines — captcha/auth, passes, cancellation/refund and payments should be split into routers (passes_routes.py, refunds_routes.py) for maintainability.",
+    "refund_order() is called internally from settle_cancellation() with a constructed RefundIn; it re-checks nothing about the cancellation quote, so the 30/50/100% tiers are advisory only on the admin side.",
+    "guard() inserts a bot_hits row before checking the limit, so the counter includes the current attempt window boundary; harmless but worth a comment/index on {ip, action, at} to keep the count query fast.",
+    "issue_pass() collision loop uses `for attempt in range(6)` without a fallback if all 6 codes collide (code would leak from the loop); add an else: raise for safety.",
+    "clean() correctly strips MongoDB _id in /me/passes, /passes/{code}/check and cancellation responses — verified in tests."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration41_captcha_pass_refund.py",
+    "/app/backend/tests/i41_ui_seed.py"
+  ],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "100% of tested flows (register captcha, login progressive captcha, passes list/QR/PDF, verify+redeem+double-redeem+void, cancellation)"},
+  "seed_data_creation": "Temporary paid orders + passes inserted directly into Mongo (item_name TEST_pass_item / TEST_UI_PASS) and 3 throwaway users (test_cap_*, test_ui_*). ALL removed afterwards (passes 0 left, seeded orders deleted, users deleted, bot_hits/login_attempts/captchas cleared). Pre-existing 'TEST Override *' orders from iteration ~34 remain in the DB (not mine).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Used /app/memory/test_credentials.md: member arjun.sethi@example.com / User@123, admin admin@buddilio.com / Admin@123. No real PayPal charge attempted.",
+  "context_for_next_testing_agent": "Verified in this iteration: GET /api/captcha (single-use, unique ids, 3 challenge styles: 'a+b', letter count, last-four-letters); register rejects wrong/empty captcha ('That verification answer wasn't right') and honeypot 'website' ('looked automated'); register succeeds with correct answer; clean login needs NO captcha and sets the httpOnly access_token cookie; captcha appears from the 3rd attempt after 2 failures and login then succeeds; wrong password with a valid captcha still returns 401. Payments: POST /api/payments/verify always 400 'Simulated payments are disabled', /api/payments/config -> simulation_enabled=false, paypal_enabled=true, and no user-facing route flips a pending order to paid. Passes: code format BUD-XXXX-99, /me/passes, qr.png (PNG), pdf (owner only, 403/401 for others), public /check, redeem once (2nd -> 'Already used on <when> by <who>'), unknown code -> {found:false}, cancelled order -> pass void. Cancellation: quote deduction >=30% (tiers 30/50/100), membership -> 100% deduction / 0 refundable, duplicate cancel 400, member gets 403 on /admin/orders/{id}/refund and /settle-cancellation, admin settle-as-credit sets refund_status=credited and rejects amounts > paid. To seed a paid order + pass for UI work run `python /app/backend/tests/i41_ui_seed.py` and clean with `--clean`. Note: newly seeded passes sort to the bottom of /orders — click data-testid='passes-toggle-all' first. Clear db.bot_hits before repeated register tests (5/hour per IP).",
+  "rca_of_the_issue": "No functional defect found in the increment. The one real gap is architectural: cancellation/refund policy (min 30% deduction, membership non-refundable) is computed in cancellation_deduction() and only applied on the member quote/cancel path; the admin refund endpoint (/admin/orders/{oid}/refund) accepts any amount up to the full paid total for any kind including membership, and the admin-side cancellation queue has no UI, so approval currently happens through a generic prompt-based refund with no policy guard."
+}

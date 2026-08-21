@@ -6,6 +6,7 @@ import { api, errMsg } from "@/lib/api";
 import { useCurrency } from "@/context/CurrencyContext";
 import { ImageUpload } from "@/components/ImageUpload";
 import { SEO } from "@/components/Shared";
+import { Captcha } from "@/components/Captcha";
 import { ShieldCheck } from "lucide-react";
 
 const Field = ({ label, ...p }) => (
@@ -72,16 +73,23 @@ export function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
   const [form, setForm] = useState({ email: "", password: "" });
+  const [cap, setCap] = useState({ captcha_id: "", captcha_answer: "" });
+  const [hp, setHp] = useState("");
+  const [needCap, setNeedCap] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
-      const u = await login(form.email, form.password);
+      const u = await login(form.email, form.password, { ...cap, website: hp });
       toast.success(`Welcome back, ${u.full_name.split(" ")[0]}`);
       nav(u.role === "admin" ? "/admin" : u.role === "partner" ? "/partner" : "/dashboard");
-    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+    } catch (err) {
+      const msg = errMsg(err);
+      if (/verification|automated|attempts/i.test(msg)) setNeedCap(true);
+      toast.error(msg);
+    } finally { setBusy(false); }
   };
 
   return (
@@ -92,7 +100,13 @@ export function Login() {
           value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
         <Field label="Password" type="password" required data-testid="login-password"
           value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+        {needCap && (
+          <div data-testid="login-captcha-wrap">
+            <Captcha value={cap} onChange={setCap} honeypot={hp} onHoneypot={setHp} testid="login-captcha" />
+          </div>
+        )}
         <Link to="/forgot-password" className="block text-xs font-semibold text-slate-500 hover:text-slate-900" data-testid="forgot-link">
+
           Forgot your password?
         </Link>
         <button disabled={busy} data-testid="login-submit" className={BTN}>
@@ -124,6 +138,9 @@ export function Register() {
     referral_code: params.get("ref") || "",
   });
   const [inviter, setInviter] = useState(null);
+  const [cap, setCap] = useState({ captcha_id: "", captcha_answer: "" });
+  const [hp, setHp] = useState("");
+  const [capKey, setCapKey] = useState(0);
 
   useEffect(() => {
     const ref = params.get("ref");
@@ -151,12 +168,13 @@ export function Register() {
   const submit = async () => {
     if (!f.is_adult || !f.accept_terms || !f.accept_privacy || !f.accept_guidelines)
       return toast.error("Please confirm all four statements to continue.");
+    if (!cap.captcha_answer.trim()) return toast.error("Please answer the human check.");
     setBusy(true);
     try {
-      const u = await register(f);
+      const u = await register({ ...f, ...cap, website: hp });
       toast.success("Welcome to Buddilio!");
       nav(u.role === "partner" ? "/partner" : "/dashboard");
-    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+    } catch (e) { toast.error(errMsg(e)); setCapKey((k) => k + 1); } finally { setBusy(false); }
   };
 
   return (
@@ -273,6 +291,8 @@ export function Register() {
                 <span className="text-slate-600">{l}</span>
               </label>
             ))}
+            <Captcha key={capKey} value={cap} onChange={setCap} honeypot={hp} onHoneypot={setHp}
+              testid="reg-captcha" />
           </div>
         )}
 

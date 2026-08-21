@@ -435,7 +435,8 @@ export function Checkout() {
           <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" />
           {canStripe ? "Secured by Stripe. You'll be taken to a hosted payment page; we confirm the payment on our server before releasing your order."
             : canRazorpay ? "Secured by Razorpay. UPI, cards, net banking and wallets, all verified server-side."
-            : "Local INR checkout via Razorpay (UPI, cards, net banking) is wired up and awaiting live keys, so INR runs in simulation mode. Cards in every other currency go through Stripe. Payments are always verified server-side."}
+            : canPaypal ? "Pay by debit or credit card through PayPal — no PayPal account needed. Every payment is verified on our server before your order is released."
+            : "No payment method is available right now. Please contact support so we can complete this booking for you."}
         </p>
         {canStripe ? (
           <button onClick={payStripe} disabled={busy} data-testid="pay-stripe-btn"
@@ -447,20 +448,20 @@ export function Checkout() {
             className="mt-6 w-full rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
             {busy ? "Opening secure checkout…" : `Pay ${amt(order.charge_total)} with Razorpay`}
           </button>
-        ) : (
+        ) : cfg.simulation_enabled ? (
           <div className="mt-6 grid sm:grid-cols-2 gap-3">
             <button onClick={() => paySim("success")} disabled={busy} data-testid="pay-success-btn"
               className="rounded-full bg-slate-900 text-white py-3.5 text-sm font-bold disabled:opacity-60">
-              {busy ? "Processing…" : `Pay ${amt(order.charge_total)}`}
+              {busy ? "Processing…" : `Pay ${amt(order.charge_total)} (test mode)`}
             </button>
             <button onClick={() => paySim("failure")} disabled={busy} data-testid="pay-failure-btn"
               className="rounded-full border border-slate-200 py-3.5 text-sm font-bold text-slate-500">Simulate failed payment</button>
           </div>
-        )}
+        ) : null}
         {canPaypal && (
           <button onClick={payPayPal} disabled={busy} data-testid="pay-paypal-btn"
-            className="mt-3 w-full rounded-full border-2 border-[#003087] bg-[#ffc439] py-3.5 text-sm font-bold text-[#003087] transition-transform hover:scale-[1.01] disabled:opacity-60">
-            {busy ? "Opening PayPal…" : "Pay with PayPal"}
+            className="mt-6 w-full rounded-full border-2 border-[#003087] bg-[#ffc439] py-3.5 text-sm font-bold text-[#003087] transition-transform hover:scale-[1.01] disabled:opacity-60">
+            {busy ? "Opening PayPal…" : `Pay ${amt(order.charge_total)} by card or PayPal`}
           </button>
         )}
       </div>

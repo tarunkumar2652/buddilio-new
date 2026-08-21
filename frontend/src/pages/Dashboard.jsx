@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, money } from "@/lib/api";
+import { api, money, errMsg } from "@/lib/api";
+import { MyPasses } from "@/pages/VerifyPass";
+import { CancelBookingDialog } from "@/components/CancelBookingDialog";
+import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { EventCard, PersonCard } from "@/components/Cards";
 import { AiPicks } from "@/components/AiPicks";
@@ -174,12 +177,32 @@ export function SavedEvents() {
 
 export function Orders() {
   const [items, setItems] = useState(null);
-  useEffect(() => { api.get("/me/orders").then(({ data }) => setItems(data.items)).catch(() => setItems([])); }, []);
+  const [busy, setBusy] = useState("");
+  const [cancelling, setCancelling] = useState(null);
+  const load = () => api.get("/me/orders").then(({ data }) => setItems(data.items)).catch(() => setItems([]));
+  useEffect(() => { load(); }, []);
+
+  const retry = async (o) => {
+    if (busy) return;
+    setBusy(o.id);
+    try {
+      await api.post(`/me/orders/${o.id}/retry`);
+      const { data } = await api.post("/payments/paypal/order",
+        { order_id: o.id, origin_url: window.location.origin });
+      if (data.approve_url) { window.location.href = data.approve_url; return; }
+      throw new Error("PayPal did not return a checkout link.");
+    } catch (e) { toast.error(errMsg(e) || e.message); setBusy(""); }
+  };
+
   if (!items) return <Spinner />;
   return (
     <div className="mx-auto max-w-5xl px-4 sm:px-6 py-10 pb-28" data-testid="orders-page">
       <SEO title="My orders" />
       <h1 className="text-3xl font-bold">My orders</h1>
+      <div className="mt-8">
+        <p className="overline">My passes</p>
+        <div className="mt-3"><MyPasses /></div>
+      </div>
       <div className="mt-8 space-y-4">
         {items.length ? items.map((o) => (
           <div key={o.id} className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-wrap items-center justify-between gap-4" data-testid={`order-row-${o.id}`}>
@@ -195,10 +218,32 @@ export function Orders() {
                   : money(o.total)}
               </p>
               <div className="mt-1 flex gap-1.5 justify-end">
-                <Badge tone={o.payment_status === "paid" ? "green" : o.payment_status === "failed" ? "red" : "amber"}>{o.payment_status}</Badge>
+                <span data-testid={`order-status-${o.id}`}>
+                  {o.cancellation
+                    ? <Badge tone="amber">cancelled</Badge>
+                    : <Badge tone={o.payment_status === "paid" ? "green" : o.payment_status === "failed" ? "red" : "amber"}>{o.payment_status}</Badge>}
+                </span>
                 {o.refund_status !== "none" && <Badge tone="red">{o.refund_status}</Badge>}
               </div>
-              <div className="mt-2 flex gap-3 justify-end">
+              <div className="mt-2 flex flex-wrap gap-3 justify-end">
+                {o.payment_status !== "paid" && (
+                  <button onClick={() => retry(o)} disabled={busy === o.id} data-testid={`order-retry-${o.id}`}
+                    className="rounded-full bg-slate-900 px-4 py-1.5 text-[11px] font-bold text-white disabled:opacity-60">
+                    {busy === o.id ? "Opening…" : "Retry payment"}
+                  </button>
+                )}
+                {o.payment_status === "paid" && !o.cancellation && o.refund_status === "none" && (
+                  <button onClick={() => setCancelling(o)} data-testid={`order-cancel-${o.id}`}
+                    className="rounded-full border border-slate-200 px-4 py-1.5 text-[11px] font-bold text-slate-600">
+                    Cancel booking
+                  </button>
+                )}
+                {o.cancellation && (
+                  <span className="text-[11px] font-bold text-amber-600" data-testid={`order-cancelled-${o.id}`}>
+                    Cancelled · {o.cancellation.deduction_percent}% deducted
+                    {o.cancellation.status === "settled" ? " · settled" : " · settlement pending"}
+                  </span>
+                )}
                 <Link to={`/invoice/${o.id}`} data-testid={`order-invoice-${o.id}`} className="text-xs font-bold hover:underline">View invoice</Link>
                 <button onClick={() => downloadInvoicePdf(o.id, o.order_no)} data-testid={`order-invoice-pdf-${o.id}`}
                   className="text-xs font-bold text-pink-700 hover:underline">{o.payment_status === "paid" ? "Receipt PDF" : "Invoice PDF"}</button>
@@ -208,6 +253,7 @@ export function Orders() {
         )) : <Empty title="No orders yet" sub="Passes and memberships you buy will show up here."
           action={<Link to="/passes" className="rounded-full bg-slate-900 text-white px-5 py-2.5 text-sm font-bold">Browse passes</Link>} />}
       </div>
+      {cancelling && <CancelBookingDialog order={cancelling} onClose={() => setCancelling(null)} onDone={load} />}
     </div>
   );
 }

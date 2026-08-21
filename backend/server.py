@@ -36,6 +36,8 @@ from travel import PROVIDER_ROLES, TRIP_ACTIVITIES, TRAVEL_TERMS
 from invoices import invoice_pdf, template_for
 import agreements as agr
 import paypal
+import passes
+import botguard
 from city_guides import guide_for, auto_guide
 import ai
 
@@ -354,6 +356,25 @@ REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "250"))
 # ---------------- editable email templates ----------------
 # Every automated email lives here. Admins can override subject/title/body/button; {{vars}} stay dynamic.
 EMAIL_TEMPLATES: dict[str, dict] = {
+    "order_refunded": {
+        "label": "Order refunded", "group": "Payments",
+        "vars": ["first_name", "item", "order_no", "amount", "orders_url"],
+        "subject": "Refund of {{amount}} for {{item}}",
+        "title": "Your refund is on its way",
+        "body": "<p>Hi {{first_name}},</p><p>We've refunded <b>{{amount}}</b> for <b>{{item}}</b> "
+                "(order {{order_no}}). It reaches your original payment method in 5-7 working days, "
+                "depending on your bank.</p>",
+        "cta_label": "View my orders", "cta_url": "{{orders_url}}"},
+    "membership_expiring": {
+        "label": "Membership expiring", "group": "Payments",
+        "vars": ["first_name", "plan_name", "ends_on", "days", "membership_url"],
+        "subject": "Your {{plan_name}} membership ends in {{days}} days",
+        "title": "Keep your Buddilio benefits running",
+        "body": "<p>Hi {{first_name}},</p><p>Your <b>{{plan_name}}</b> membership ends on "
+                "<b>{{ends_on}}</b>. Renew now to keep unlimited messaging, member pricing and "
+                "priority access to events — it takes a minute and you can pay by card without a "
+                "PayPal account.</p>",
+        "cta_label": "Renew my membership", "cta_url": "{{membership_url}}"},
     "vendor_document_expiring": {
         "label": "Vendor document expiring / expired", "group": "Vendors",
         "vars": ["first_name", "document", "days", "expires_on", "portal_url"],
@@ -759,6 +780,9 @@ class RegisterIn(BaseModel):
     gender: str
     city: str
     bio: str = ""
+    captcha_id: str = ""
+    captcha_answer: str = ""
+    website: str = ""          # honeypot — real people never fill this
     photo: str = ""
     interests: List[str] = []
     event_categories: List[str] = []
@@ -776,6 +800,9 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+    captcha_id: str = ""
+    captcha_answer: str = ""
+    website: str = ""
 
 
 class GoogleSessionIn(BaseModel):
@@ -936,8 +963,38 @@ def age_from_dob(dob: str) -> int:
         return 0
 
 
+@api.get("/captcha")
+async def get_captcha():
+    """Issues a short human challenge; the answer never leaves the server."""
+    doc = botguard.new_challenge()
+    await db.captchas.insert_one({**doc, "used": False, "created_at": iso(now_utc())})
+    return {"captcha_id": doc["id"], "question": doc["question"]}
+
+
+async def guard(request: Request, action: str, captcha_id: str, answer: str, honeypot: str = ""):
+    """Rate limit + honeypot + challenge. Raises the right 4xx for humans."""
+    if honeypot.strip():
+        raise HTTPException(status_code=400, detail="That request looked automated. Please try again.")
+    ip = botguard.client_ip(request)
+    limit, minutes = botguard.LIMITS.get(action, (10, 60))
+    since = iso(now_utc() - timedelta(minutes=minutes))
+    hits = await db.bot_hits.count_documents({"ip": ip, "action": action, "at": {"$gte": since}})
+    await db.bot_hits.insert_one({"ip": ip, "action": action, "at": iso(now_utc())})
+    if hits >= limit:
+        raise HTTPException(status_code=429,
+                            detail=f"Too many attempts from this device. Please try again in {minutes} minutes.")
+    doc = await db.captchas.find_one({"id": captcha_id, "used": False})
+    if not doc or doc["expires_at"] < iso(now_utc()):
+        raise HTTPException(status_code=400,
+                            detail="Please answer the quick human check shown below and try again.")
+    if not botguard.check_answer(doc, answer):
+        raise HTTPException(status_code=400, detail="That verification answer wasn't right. Please try again.")
+    await db.captchas.update_one({"_id": doc["_id"]}, {"$set": {"used": True, "used_at": iso(now_utc())}})
+
+
 @api.post("/auth/register")
 async def register(payload: RegisterIn, response: Response, request: Request):
+    await guard(request, "register", payload.captcha_id, payload.captcha_answer, payload.website)
     email = payload.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
@@ -984,6 +1041,11 @@ async def login(payload: LoginIn, request: Request, response: Response):
     email = payload.email.lower().strip()
     ident = f"email:{email}"
     att = await db.login_attempts.find_one({"identifier": ident})
+    if att and att.get("count", 0) >= 2:
+        # Only ask a human question once someone is clearly guessing.
+        await guard(request, "login", payload.captcha_id, payload.captcha_answer, payload.website)
+    elif payload.website.strip():
+        raise HTTPException(status_code=400, detail="That request looked automated. Please try again.")
     if att and att.get("count", 0) >= 5 and att.get("locked_until", "") > iso(now_utc()):
         raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
     user = await db.users.find_one({"email": email})
@@ -1547,7 +1609,7 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
     discount = 0.0
     coupon = None
     member = await membership_active(user["id"])
-    if member and payload.kind in ("product", "event"):
+    if member and member.get("plan_id") and payload.kind in ("product", "event"):
         mp = await db.membership_plans.find_one({"_id": ObjectId(member["plan_id"])})
         if mp and mp.get("discount_percent"):
             discount += round(subtotal * mp["discount_percent"] / 100, 2)
@@ -1664,6 +1726,7 @@ async def fulfil_order(order: dict, txn: str, gateway: str = "razorpay_sim") -> 
                               "order_id": str(order["_id"]), "created_at": iso(now_utc())}},
             upsert=True)
     await award_referral(uid, order)
+    await issue_pass(order)
     receipt = (f"<p><b>{order['item_name']}</b></p>"
                f"<p>Order <b>#{order['order_no']}</b><br/>Amount paid: "
                f"<b>{fmt_money(order.get('charge_total', order['total']), order.get('currency'))}</b>"
@@ -1739,6 +1802,9 @@ async def payment_config():
             "paypal_enabled": paypal.enabled(), "paypal_currency": paypal.CURRENCY,
             "subscriptions_via": "paypal" if paypal.enabled() else "",
             "stripe_enabled": bool(os.environ.get("STRIPE_API_KEY")),
+            "simulation_enabled": (not (razorpay_client() or os.environ.get("STRIPE_API_KEY")
+                                        or paypal.enabled()))
+            and os.environ.get("ALLOW_SIMULATED_PAYMENTS", "").lower() in ("1", "true", "yes"),
             "base_currency": "INR", "currencies": [{"code": k, **v} for k, v in conf.items()],
             "methods": {"INR": ["upi", "card", "netbanking", "wallet"], "other": ["card"]}}
 
@@ -2175,7 +2241,11 @@ async def razorpay_webhook(request: Request):
 
 @api.post("/payments/verify")
 async def verify_payment(payload: VerifyPaymentIn, user: dict = Depends(get_current_user)):
-    """Simulation path — used until live Razorpay keys are configured."""
+    """Simulation path — only allowed when NO real gateway is configured and it's explicitly enabled."""
+    real_gateway = bool(razorpay_client() or os.environ.get("STRIPE_API_KEY") or paypal.enabled())
+    if real_gateway or os.environ.get("ALLOW_SIMULATED_PAYMENTS", "").lower() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=400,
+                            detail="Simulated payments are disabled. Please pay with a real payment method.")
     order = await db.orders.find_one({"_id": ObjectId(payload.order_id), "user_id": user["id"]})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -2187,6 +2257,302 @@ async def verify_payment(payload: VerifyPaymentIn, user: dict = Depends(get_curr
     txn = payload.gateway_payment_id or "pay_" + uuid.uuid4().hex[:14]
     out = await fulfil_order(order, txn, "razorpay_sim")
     return {"status": "paid", "order": out}
+
+
+async def issue_pass(order: dict) -> dict | None:
+    """Issues the QR voucher for a paid booking. One pass per order, idempotent."""
+    if order["kind"] not in ("event", "product", "hangout", "travel"):
+        return None
+    existing = await db.passes.find_one({"order_id": str(order["_id"])})
+    if existing:
+        return clean(existing)
+    user = await db.users.find_one({"_id": ObjectId(order["user_id"])}, {"full_name": 1, "email": 1})
+    city, starts_at, vendor_name = "", "", ""
+    if order["kind"] == "event" and ObjectId.is_valid(order.get("ref_id", "")):
+        ev = await db.events.find_one({"_id": ObjectId(order["ref_id"])},
+                                      {"city": 1, "starts_at": 1, "partner_name": 1, "venue": 1})
+        if ev:
+            city = ev.get("venue") or ev.get("city", "")
+            starts_at = ev.get("starts_at", "")
+            vendor_name = ev.get("partner_name", "")
+    for attempt in range(6):
+        code = passes.new_code()
+        if not await db.passes.find_one({"code": code}):
+            break
+    doc = {"code": code, "order_id": str(order["_id"]), "order_no": order["order_no"],
+           "user_id": order["user_id"], "user_name": user.get("full_name", "") if user else "",
+           "kind": order["kind"], "ref_id": order.get("ref_id", ""), "item_name": order["item_name"],
+           "quantity": order.get("quantity", 1), "city": city, "starts_at": starts_at,
+           "vendor_name": vendor_name,
+           "amount_label": fmt_money(order.get("charge_total", order["total"]), order.get("currency")),
+           "status": "valid", "redeemed_at": "", "redeemed_by": "", "redeemed_by_name": "",
+           "created_at": iso(now_utc())}
+    res = await db.passes.insert_one(doc)
+    return clean(await db.passes.find_one({"_id": res.inserted_id}))
+
+
+def pass_verify_url(code: str) -> str:
+    return f"{FRONTEND_URL.rstrip('/')}/verify/{code}"
+
+
+@api.post("/admin/passes/backfill")
+async def backfill_passes(user: dict = Depends(require_perm("finance:manage"))):
+    """Issues passes for paid bookings made before passes existed."""
+    made = 0
+    rows = await db.orders.find({"payment_status": "paid",
+                                 "kind": {"$in": ["event", "product", "hangout", "travel"]}}) \
+        .limit(2000).to_list(2000)
+    for order in rows:
+        if await issue_pass(order):
+            made += 1
+    return {"checked": len(rows), "passes": await db.passes.count_documents({}), "issued_now": made}
+
+
+@api.get("/me/passes")
+async def my_passes(user: dict = Depends(get_current_user)):
+    rows = await db.passes.find({"user_id": user["id"]}).sort("created_at", -1).limit(100).to_list(100)
+    return {"items": [clean(r) for r in rows]}
+
+
+@api.get("/passes/{code}/qr.png")
+async def pass_qr(code: str):
+    doc = await db.passes.find_one({"code": code.upper()})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That pass code doesn't exist.")
+    return Response(content=passes.qr_png(pass_verify_url(doc["code"])), media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@api.get("/passes/{code}/pdf")
+async def pass_pdf_download(code: str, user: dict = Depends(get_current_user)):
+    doc = await db.passes.find_one({"code": code.upper()})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That pass code doesn't exist.")
+    if doc["user_id"] != user["id"] and "finance:view" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="That pass isn't yours.")
+    pdf = passes.pass_pdf(clean(doc), pass_verify_url(doc["code"]))
+    return Response(content=bytes(pdf), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{doc["code"]}.pdf"'})
+
+
+@api.get("/passes/{code}/check")
+async def check_pass(code: str):
+    """Public read-only check — shows validity without exposing personal details."""
+    doc = await db.passes.find_one({"code": code.upper()})
+    if not doc:
+        return {"found": False}
+    return {"found": True, "code": doc["code"], "status": doc["status"], "kind": doc["kind"],
+            "item_name": doc["item_name"], "quantity": doc.get("quantity", 1),
+            "guest_initials": "".join(p[0] for p in (doc.get("user_name") or "G").split()[:2]).upper(),
+            "city": doc.get("city", ""), "starts_at": doc.get("starts_at", ""),
+            "vendor_name": doc.get("vendor_name", ""), "redeemed_at": doc.get("redeemed_at", ""),
+            "redeemed_by_name": doc.get("redeemed_by_name", "")}
+
+
+@api.post("/passes/{code}/redeem")
+async def redeem_pass(code: str, user: dict = Depends(get_current_user)):
+    """Anyone signed in — organiser, host or companion — can redeem, once."""
+    doc = await db.passes.find_one({"code": code.upper()})
+    if not doc:
+        raise HTTPException(status_code=404, detail="We couldn't find that code. Check it and try again.")
+    if doc["status"] == "redeemed":
+        raise HTTPException(status_code=400,
+                            detail=f"Already used on {str(doc.get('redeemed_at'))[:16].replace('T', ' ')}"
+                                   f" by {doc.get('redeemed_by_name') or 'someone'}.")
+    if doc["status"] != "valid":
+        raise HTTPException(status_code=400, detail=f"This pass is {doc['status']} and can't be used.")
+    order = await db.orders.find_one({"_id": ObjectId(doc["order_id"])})
+    if not order or order["payment_status"] != "paid" or order.get("refund_status") in ("refunded", "partial"):
+        await db.passes.update_one({"_id": doc["_id"]}, {"$set": {"status": "void"}})
+        raise HTTPException(status_code=400, detail="This booking was cancelled or refunded, so the pass is void.")
+    await db.passes.update_one({"_id": doc["_id"]}, {"$set": {
+        "status": "redeemed", "redeemed_at": iso(now_utc()), "redeemed_by": user["id"],
+        "redeemed_by_name": user.get("full_name", "")}})
+    await notify(doc["user_id"], "Pass checked in",
+                 f"Your pass for {doc['item_name']} was accepted by {user.get('full_name', 'the host')}. "
+                 "Have a great time.", "order", "/orders", email=False)
+    fresh = await db.passes.find_one({"_id": doc["_id"]})
+    return {"ok": True, "pass": clean(fresh)}
+
+
+@api.get("/partner/events/{event_id}/check-in")
+async def event_check_in(event_id: str, user: dict = Depends(get_current_user)):
+    """Live door list for the organiser of this event (or staff)."""
+    ev = await db.events.find_one({"_id": as_oid(event_id, "event")})
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found.")
+    if ev.get("partner_id") != user["id"] and "events:manage" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="That event isn't yours.")
+    rows = await db.passes.find({"kind": "event", "ref_id": event_id}).limit(1000).to_list(1000)
+    items = [clean(r) for r in rows]
+    return {"event": {"id": event_id, "title": ev.get("title", ""), "starts_at": ev.get("starts_at", "")},
+            "items": items, "guests": sum(int(r.get("quantity") or 1) for r in items),
+            "arrived": sum(int(r.get("quantity") or 1) for r in items if r["status"] == "redeemed"),
+            "valid": sum(1 for r in items if r["status"] == "valid")}
+
+
+CANCEL_TIERS = [(7, 30), (2, 50), (0, 100)]   # days notice -> % deducted (minimum 30%)
+
+
+async def cancellation_deduction(order: dict) -> tuple[float, int, str]:
+    """Returns (refundable amount, deduction %, reason) using the published tiers."""
+    if order["kind"] == "membership":
+        return 0.0, 100, "Membership fees are non-refundable."
+    paid = float(order.get("charge_total") or order["total"])
+    start = ""
+    if order["kind"] == "event" and ObjectId.is_valid(order.get("ref_id", "")):
+        ev = await db.events.find_one({"_id": ObjectId(order["ref_id"])}, {"starts_at": 1})
+        start = (ev or {}).get("starts_at", "")
+    days = 999
+    if start:
+        try:
+            days = (datetime.fromisoformat(str(start).replace("Z", "+00:00")) - now_utc()).days
+        except ValueError:
+            days = 999
+    pct = next(p for d, p in CANCEL_TIERS if days >= d)
+    label = ("more than 7 days" if days >= 7 else "2-7 days" if days >= 2 else "under 48 hours")
+    return round(paid * (100 - pct) / 100, 2), pct, f"Cancelled {label} before the booking."
+
+
+@api.get("/me/orders/{oid}/cancellation-quote")
+async def cancellation_quote(oid: str, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"_id": as_oid(oid, "order"), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    refundable, pct, reason = await cancellation_deduction(order)
+    return {"paid": float(order.get("charge_total") or order["total"]), "currency": order.get("currency"),
+            "deduction_percent": pct, "refundable": refundable, "reason": reason,
+            "credit_option": round(refundable * 1.1, 2) if refundable > 0 else 0.0,
+            "cancellable": order["payment_status"] == "paid" and order.get("refund_status", "none") == "none"}
+
+
+class CancelIn(BaseModel):
+    reason: str = ""
+    prefer: str = "refund"   # refund | credit
+
+
+@api.post("/me/orders/{oid}/cancel")
+async def cancel_my_order(oid: str, payload: CancelIn = Body(default=CancelIn()),
+                          user: dict = Depends(get_current_user)):
+    """Member-initiated cancellation. Entitlement stops now; the money decision sits with admin."""
+    order = await db.orders.find_one({"_id": as_oid(oid, "order"), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order["payment_status"] != "paid":
+        raise HTTPException(status_code=400, detail="Only a paid booking can be cancelled.")
+    if order.get("cancellation", {}).get("status") in ("requested", "settled"):
+        raise HTTPException(status_code=400, detail="This booking is already cancelled.")
+    refundable, pct, reason = await cancellation_deduction(order)
+    cancellation = {"status": "requested", "requested_at": iso(now_utc()), "reason": payload.reason,
+                    "deduction_percent": pct, "refundable": refundable,
+                    "prefer": "credit" if payload.prefer == "credit" else "refund",
+                    "policy_note": reason}
+    await db.orders.update_one({"_id": order["_id"]}, {"$set": {
+        "order_status": "cancelled", "cancellation": cancellation}})
+    await db.passes.update_many({"order_id": oid}, {"$set": {"status": "void"}})
+    if order["kind"] == "event":
+        part = await db.event_participants.find_one({"order_id": oid})
+        if part:
+            await db.event_participants.delete_one({"_id": part["_id"]})
+            count = await db.event_participants.count_documents({"event_id": order["ref_id"],
+                                                                 "status": "confirmed"})
+            await db.events.update_one({"_id": ObjectId(order["ref_id"])},
+                                       {"$set": {"participant_count": count}})
+            await promote_waitlist(order["ref_id"])
+    if order["kind"] == "membership":
+        await db.user_memberships.update_many({"order_id": oid}, {"$set": {"status": "cancelled",
+                                                                          "auto_renews": False}})
+    for admin in await db.users.find({"role": "admin"}, {"_id": 1}).limit(20).to_list(20):
+        await notify(str(admin["_id"]), "Cancellation to settle",
+                     f"#{order['order_no']} cancelled by the member. {pct}% deduction applies — "
+                     f"{fmt_money(refundable, order.get('currency'))} refundable.", "order", "/admin")
+    await notify(user["id"], "Booking cancelled",
+                 f"{order['item_name']} is cancelled. {pct}% is deducted as per the cancellation policy, "
+                 f"so {fmt_money(refundable, order.get('currency'))} is due back once Buddilio settles it.",
+                 "order", "/orders")
+    return {"cancellation": cancellation}
+
+
+@api.get("/admin/cancellations")
+async def admin_cancellations(user: dict = Depends(require_perm("finance:manage"))):
+    rows = await db.orders.find({"cancellation.status": "requested"}).sort("cancellation.requested_at", -1) \
+        .limit(200).to_list(200)
+    return {"items": [clean(r) for r in rows], "tiers": CANCEL_TIERS}
+
+
+class SettleIn(BaseModel):
+    amount: float = -1.0
+    as_credit: bool = False
+    note: str = ""
+
+
+@api.post("/admin/orders/{oid}/settle-cancellation")
+async def settle_cancellation(oid: str, payload: SettleIn = Body(default=SettleIn()),
+                              user: dict = Depends(require_perm("finance:manage"))):
+    """Admin decides the final amount — as a gateway refund or as Buddilio credit."""
+    order = await db.orders.find_one({"_id": as_oid(oid, "order")})
+    if not order or (order.get("cancellation") or {}).get("status") != "requested":
+        raise HTTPException(status_code=400, detail="This order has no cancellation awaiting settlement.")
+    quoted = float(order["cancellation"]["refundable"])
+    amount = round(quoted if payload.amount < 0 else float(payload.amount), 2)
+    paid = float(order.get("charge_total") or order["total"])
+    if amount < 0 or amount - paid > 0.005:
+        raise HTTPException(status_code=400, detail=f"Enter an amount between 0 and {paid:.2f}.")
+    settled = {**order["cancellation"], "status": "settled", "settled_at": iso(now_utc()),
+               "settled_by": user["id"], "settled_amount": amount,
+               "method": "credit" if payload.as_credit else "refund", "note": payload.note}
+    if amount > 0 and payload.as_credit:
+        await grant_credit(order["user_id"], amount,
+                           f"Cancellation credit for #{order['order_no']}")
+        await db.orders.update_one({"_id": order["_id"]},
+                                   {"$set": {"cancellation": settled, "refund_status": "credited",
+                                             "refunded_amount": amount}})
+    elif amount > 0:
+        await refund_order(oid, RefundIn(amount=amount, override_policy=amount > quoted + 0.005,
+                                         reason=payload.note or "Cancellation settlement"), user)
+        await db.orders.update_one({"_id": order["_id"]}, {"$set": {"cancellation": settled}})
+    else:
+        await db.orders.update_one({"_id": order["_id"]}, {"$set": {"cancellation": settled}})
+        await notify(order["user_id"], "Cancellation settled",
+                     f"#{order['order_no']} is closed with no refund as per the cancellation policy.",
+                     "order", "/orders")
+    await audit(user, "order.cancellation_settled", "order", oid,
+                {"amount": amount, "as_credit": payload.as_credit, "quoted": quoted})
+    return {"cancellation": settled}
+
+
+async def promote_waitlist(event_id: str) -> int:
+    """Tells the next people on an event waitlist that a seat opened up."""
+    ev = await db.events.find_one({"_id": ObjectId(event_id)}, {"title": 1, "capacity": 1,
+                                                                "participant_count": 1})
+    if not ev:
+        return 0
+    free = int(ev.get("capacity") or 0) - int(ev.get("participant_count") or 0)
+    if free <= 0:
+        return 0
+    rows = await db.event_waitlist.find({"event_id": event_id, "status": "waiting"}) \
+        .sort("created_at", 1).limit(free).to_list(free)
+    for row in rows:
+        await db.event_waitlist.update_one({"_id": row["_id"]}, {"$set": {
+            "status": "offered", "offered_at": iso(now_utc())}})
+        await notify(row["user_id"], f"A seat opened up — {ev.get('title', 'an event')}",
+                     "Someone cancelled, so there's room again. Book now before it's taken.",
+                     "event", f"/events/{event_id}")
+    return len(rows)
+
+
+@api.post("/events/{event_id}/waitlist")
+async def join_event_waitlist(event_id: str, user: dict = Depends(get_current_user)):
+    ev = await db.events.find_one({"_id": as_oid(event_id, "event")}, {"title": 1})
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found.")
+    await db.event_waitlist.update_one({"event_id": event_id, "user_id": user["id"]},
+                                       {"$setOnInsert": {"event_id": event_id, "user_id": user["id"],
+                                                          "status": "waiting",
+                                                          "created_at": iso(now_utc())}}, upsert=True)
+    count = await db.event_waitlist.count_documents({"event_id": event_id, "status": "waiting"})
+    return {"ok": True, "waiting": count,
+            "message": "You're on the waitlist — we'll email you the moment a seat frees up."}
 
 
 @api.get("/me/orders")
@@ -3034,37 +3400,145 @@ async def admin_orders(status: str = "", user: dict = Depends(require_perm("fina
     return {"items": [clean(d) for d in await db.orders.find(flt).sort([("created_at", -1)]).limit(300).to_list(300)]}
 
 
+async def refund_stripe(order: dict, amount: float) -> str:
+    """Stripe refunds go against the payment intent captured at checkout."""
+    key = os.environ.get("STRIPE_API_KEY", "")
+    intent = order.get("transaction_id") or ""
+    if not key or not intent.startswith(("pi_", "ch_", "cs_")):
+        raise HTTPException(status_code=400,
+                            detail="This card payment has no Stripe reference to refund. "
+                                   "Refund it from the Stripe dashboard and record it here.")
+    data = {"amount": int(round(amount * 100)), "reason": "requested_by_customer"}
+    data["payment_intent" if intent.startswith("pi_") else "charge"] = intent
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post("https://api.stripe.com/v1/refunds", data=data, auth=(key, ""))
+    if r.status_code >= 400:
+        logger.error(f"Stripe refund failed for {order['order_no']}: {r.text[:300]}")
+        raise HTTPException(status_code=502, detail="Stripe rejected this refund. Try the Stripe dashboard.")
+    return r.json().get("id", "")
+
+
+async def refund_paypal(order: dict, amount: float) -> str:
+    """PayPal refunds go against the capture id stored on the order."""
+    capture_id = order.get("transaction_id") or ""
+    if not capture_id:
+        raise HTTPException(status_code=400, detail="This PayPal payment has no capture reference to refund.")
+    charged = float(order.get("charge_total_paypal") or order.get("charge_total") or order["total"])
+    full = amount >= charged - 0.01
+    try:
+        res = await paypal.refund_capture(capture_id, None if full else amount,
+                                          f"Buddilio order {order['order_no']}")
+    except paypal.PayPalError as exc:
+        logger.error(f"PayPal refund failed for {order['order_no']}: {exc}")
+        raise HTTPException(status_code=502, detail=paypal.member_message(exc))
+    return res.get("id", "")
+
+
+class RefundIn(BaseModel):
+    amount: float = 0.0
+    reason: str = ""
+    override_policy: bool = False   # superadmin goodwill exception, always audited
+
+
+def refund_ceiling(order: dict) -> tuple[float, str]:
+    """What the cancellation policy allows back — membership fees are never refundable."""
+    base = float(order.get("charge_total") or order["total"])
+    if order["kind"] == "membership":
+        return 0.0, "Membership fees are non-refundable under the cancellation policy."
+    quote = order.get("cancellation") or {}
+    if quote.get("refundable") is not None and quote.get("status") in ("requested", "settled"):
+        return round(float(quote["refundable"]), 2), (
+            f"The cancellation policy allows {fmt_money(float(quote['refundable']), order.get('currency'))} "
+            f"back after a {quote.get('deduction_percent', 0)}% deduction.")
+    return base, ""
+
+
 @api.post("/admin/orders/{oid}/refund")
-async def refund_order(oid: str, user: dict = Depends(require_perm("finance:manage"))):
-    order = await db.orders.find_one({"_id": ObjectId(oid)})
+async def refund_order(oid: str, payload: RefundIn = Body(default=RefundIn()),
+                       user: dict = Depends(require_perm("finance:manage"))):
+    order = await db.orders.find_one({"_id": as_oid(oid, "order")})
     if not order or order["payment_status"] != "paid":
         raise HTTPException(status_code=400, detail="Only paid orders can be refunded.")
+    if order.get("refund_status") == "refunded":
+        raise HTTPException(status_code=400, detail="This order has already been refunded.")
+    base_total = float(order.get("charge_total") or order["total"])
+    already = float(order.get("refunded_amount") or 0)
+    amount = round(float(payload.amount or 0) or (base_total - already), 2)
+    remaining = round(base_total - already, 2)
+    if amount <= 0 or amount - remaining > 0.005:
+        raise HTTPException(status_code=400,
+                            detail=f"Enter an amount between 0 and {remaining:.2f}.")
+    ceiling, policy_note = refund_ceiling(order)
+    if not payload.override_policy and amount - round(ceiling - already, 2) > 0.005:
+        raise HTTPException(status_code=400, detail=(
+            f"{policy_note or 'The cancellation policy caps this refund.'} "
+            "Tick 'override policy' with a reason to refund more."))
+    if payload.override_policy and not payload.reason.strip():
+        raise HTTPException(status_code=400,
+                            detail="A reason is required when overriding the cancellation policy.")
     gateway_ref = ""
+    gateway = order.get("gateway", "")
     client_rp = razorpay_client()
-    if client_rp and order.get("gateway") == "razorpay" and order.get("transaction_id"):
+    if gateway == "paypal":
+        usd = round(amount / base_total * float(order.get("charge_total_paypal") or amount), 2) \
+            if order.get("charge_total_paypal") else amount
+        gateway_ref = await refund_paypal(order, usd)
+    elif gateway == "stripe":
+        gateway_ref = await refund_stripe(order, amount)
+    elif client_rp and gateway == "razorpay" and order.get("transaction_id"):
         try:
             rf = await asyncio.to_thread(client_rp.payment.refund, order["transaction_id"],
-                                         {"amount": int(round(order["total"] * 100)), "speed": "normal"})
+                                         {"amount": int(round(amount * 100)), "speed": "normal"})
             gateway_ref = rf.get("id", "")
         except Exception as e:
             logger.error(f"Razorpay refund failed: {e}")
             raise HTTPException(status_code=502, detail="The gateway rejected this refund. Please retry from the Razorpay dashboard.")
-    await db.orders.update_one({"_id": order["_id"]},
-                               {"$set": {"refund_status": "refunded", "order_status": "refunded",
-                                         "refund_id": gateway_ref, "refunded_at": iso(now_utc())}})
-    if order["kind"] == "membership":
-        await db.user_memberships.update_many({"order_id": oid}, {"$set": {"status": "cancelled"}})
-    if order["kind"] == "event":
-        part = await db.event_participants.find_one({"order_id": oid})
-        if part:
-            await db.event_participants.delete_one({"_id": part["_id"]})
-            count = await db.event_participants.count_documents({"event_id": order["ref_id"], "status": "confirmed"})
-            await db.events.update_one({"_id": ObjectId(order["ref_id"])}, {"$set": {"participant_count": count}})
-    await audit(user, "order.refund", "order", oid, {"amount": order["total"], "refund_id": gateway_ref})
+    refunded_total = round(already + amount, 2)
+    partial = refunded_total < base_total - 0.01
+    await db.orders.update_one({"_id": order["_id"]}, {"$set": {
+        "refund_status": "partial" if partial else "refunded",
+        "order_status": order["order_status"] if partial else "refunded",
+        "refund_id": gateway_ref, "refunded_amount": refunded_total,
+        "refund_reason": payload.reason, "refunded_at": iso(now_utc())}})
+    if not partial:
+        if order["kind"] == "membership":
+            await db.user_memberships.update_many({"order_id": oid}, {"$set": {"status": "cancelled"}})
+        if order["kind"] == "event":
+            part = await db.event_participants.find_one({"order_id": oid})
+            if part:
+                await db.event_participants.delete_one({"_id": part["_id"]})
+                count = await db.event_participants.count_documents({"event_id": order["ref_id"], "status": "confirmed"})
+                await db.events.update_one({"_id": ObjectId(order["ref_id"])}, {"$set": {"participant_count": count}})
+    await audit(user, "order.refund", "order", oid,
+                {"amount": amount, "refund_id": gateway_ref, "partial": partial, "gateway": gateway,
+                 "policy_ceiling": ceiling, "override_policy": payload.override_policy,
+                 "reason": payload.reason})
     await notify(order["user_id"], "Refund processed",
-                 f"{fmt_money(order.get('charge_total', order['total']), order.get('currency'))} for {order['item_name']} has been refunded. "
+                 f"{fmt_money(amount, order.get('currency'))} for {order['item_name']} has been refunded. "
                  "It reaches your original payment method in 5-7 working days.", "refund", "/orders")
-    return {"refund_status": "refunded", "refund_id": gateway_ref}
+    await send_tpl("order_refunded", order.get("user_email", ""),
+                   {"first_name": first_name(order.get("user_name", "")),
+                    "item": order["item_name"], "order_no": order["order_no"],
+                    "amount": fmt_money(amount, order.get("currency")),
+                    "orders_url": f"{FRONTEND_URL}/orders"})
+    return {"refund_status": "partial" if partial else "refunded", "refund_id": gateway_ref,
+            "refunded_amount": refunded_total, "amount": amount}
+
+
+@api.post("/me/orders/{oid}/retry")
+async def retry_order(oid: str, user: dict = Depends(get_current_user)):
+    """Re-opens a failed or pending order so the member can pay again."""
+    order = await db.orders.find_one({"_id": as_oid(oid, "order"), "user_id": user["id"]})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order["payment_status"] == "paid":
+        raise HTTPException(status_code=400, detail="This order is already paid.")
+    await db.orders.update_one({"_id": order["_id"]}, {"$set": {
+        "payment_status": "pending", "order_status": "created", "failure_reason": "",
+        "gateway_order_id": "", "retried_at": iso(now_utc())},
+        "$inc": {"retry_count": 1}})
+    fresh = await db.orders.find_one({"_id": order["_id"]})
+    return {"order": clean(fresh)}
 
 
 @api.get("/admin/reports")
@@ -5054,14 +5528,43 @@ async def expire_vendor_documents() -> dict:
     return {"reminded": reminded, "expired": expired}
 
 
+async def send_membership_renewal_reminders() -> int:
+    """One nudge, 7 days out, for memberships that will not auto-renew."""
+    start = iso(now_utc() + timedelta(days=6))
+    end = iso(now_utc() + timedelta(days=8))
+    rows = await db.user_memberships.find(
+        {"status": "active", "ends_at": {"$gte": start, "$lte": end},
+         "auto_renews": {"$ne": True}, "renewal_reminded": {"$ne": True}}).limit(500).to_list(500)
+    sent = 0
+    for m in rows:
+        user = await db.users.find_one({"_id": ObjectId(m["user_id"])}, {"full_name": 1, "email": 1})
+        if not user:
+            continue
+        await db.user_memberships.update_one({"_id": m["_id"]}, {"$set": {
+            "renewal_reminded": True, "renewal_reminded_at": iso(now_utc())}})
+        await notify(m["user_id"], "Your membership ends in a week",
+                     f"{m.get('plan_name', 'Your plan')} ends on {str(m['ends_at'])[:10]}. "
+                     "Renew to keep your benefits.", "membership", "/membership")
+        await send_tpl("membership_expiring", user.get("email", ""),
+                       {"first_name": first_name(user.get("full_name", "")),
+                        "plan_name": m.get("plan_name", "Buddilio"), "days": "7",
+                        "ends_on": str(m["ends_at"])[:10],
+                        "membership_url": f"{FRONTEND_URL}/membership"})
+        sent += 1
+    logger.info(f"membership renewal reminders sent: {sent}")
+    return sent
+
+
 @api.post("/cron/daily-maintenance")
 async def cron_daily_maintenance(_: None = Depends(cron_guard)):
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     asyncio.create_task(send_verification_reminders())
     asyncio.create_task(expire_vendor_documents())
+    asyncio.create_task(send_membership_renewal_reminders())
     if now_utc().day == 1:
         asyncio.create_task(generate_monthly_commission_invoices())
-    return {"ok": True, "queued": ["verification-reminders", "vendor-doc-expiry"]}
+    return {"ok": True, "queued": ["verification-reminders", "vendor-doc-expiry",
+                                   "membership-renewal-reminders"]}
 
 
 async def generate_monthly_commission_invoices() -> dict:

@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 40 — verified payment retry (API + UI), admin partial/full refunds, renewal reminders and the two new email templates, plus the iteration 35-39 regression suite. 110/111 pytest cases pass (new suite: 15/16). Regression initially failed 7 PayPal tests because a leftover TEST_ user_membership seeded by the main agent's own smoke test (no plan_id) made POST /api/checkout return 500 (KeyError 'plan_id'); after deleting that row all 95 regression tests pass. Frontend flows verified end-to-end on the preview URL: retry redirects to www.paypal.com (payment NOT completed — PayPal navigation was aborted by the test), admin Refund / 'Refund more' prompt flow works with toast and a refunded-amount column, mobile 390px has no overflow on /orders and Admin -> Orders, /membership still shows 'Pay by card' + 'Subscribe with PayPal', checkout still shows pay-paypal-btn. All refunds were executed against SIMULATED (gateway=stripe_sim) seeded orders — no real money moved and no PayPal capture was refunded.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/admin/orders/{oid}/refund", "issue": "No Stripe branch. refund_order() only calls PayPal (gateway=='paypal') or Razorpay; for gateway=='stripe' (every real 'Pay by card' membership/pass, fulfil_order(..., 'stripe')) the order is marked refund_status=refunded/partial, the member is notified AND emailed 'your refund is on its way', but no Stripe refund API call is ever made — money is never returned. Add a Stripe refund call (or block refunds for unsupported gateways with a 400).", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/checkout", "issue": "500 KeyError 'plan_id' when the member has an active user_memberships row without plan_id (server.py:1570 member['plan_id']; same unguarded access at :643 and :6368). Any malformed/legacy membership row hard-breaks checkout for that member. Use member.get('plan_id') and skip the discount when absent.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/admin/orders/{oid}/refund", "issue": "Over-refund by a cent accepted: guard is `amount > round(base_total - already + 0.01, 2)`, so a 500.00 order accepts amount=500.01 (returns 200, refunded_amount 500.01). Compare with a tolerance that cannot exceed the charge (e.g. amount - remaining > 0.005). Frontend has the same `max + 0.01` slack in Admin.jsx refund()."},
+      {"endpoint": "POST /api/me/orders/{oid}/retry", "issue": "Endpoint itself is correct, but Dashboard retry() always calls /payments/paypal/order, so an INR (Razorpay/simulated) order is retried in USD through PayPal — no gateway choice is offered."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Admin Orders refund toast", "issue": "Toast prints the raw number without currency: 'Partial refund done — 300 refunded so far.' Should use money()/currency formatting.", "selector": "[data-testid=refund-<id>]", "priority": "LOW"},
+      {"component": "Orders retry button", "issue": "busy state is set (setBusy(o.id)) but never used — the Retry payment button is not disabled/labelled while the retry + PayPal order call is in flight, so it can be double-clicked (each click increments retry_count and creates a new PayPal order).", "selector": "[data-testid=order-retry-<id>]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "My orders / Admin -> Orders", "issues": ["No layout or contrast problems found at 1920px and 390px (scrollWidth == clientWidth on both).", "Member /orders is polluted with 400+ pending/failed orders left behind by earlier automated runs (434 pending/failed orders in DB) — makes the page hard to scan; consider a cleanup script for preview data."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration40_retry_refund_renewal.py",
+    "/app/backend/tests/i40_ui_seed.py",
+    "/app/test_reports/pytest/iteration40.xml"
+  ],
+  "action_items": [
+    "CRITICAL: implement a Stripe refund path in refund_order() (or 400 for gateways that cannot be refunded) — card-paid orders are currently marked refunded and the member is emailed without any money moving.",
+    "Guard member.get('plan_id') in checkout()/dashboard/companion pricing so a malformed membership row cannot 500 /api/checkout.",
+    "Tighten the refund amount guard so amount cannot exceed the charged total by 0.01 (backend + Admin.jsx prompt).",
+    "Offer the original gateway on retry (INR orders currently go to PayPal in USD) and disable the Retry button while busy.",
+    "Format the refund toast amount with the order currency.",
+    "Clean up smoke-test seeds: the main agent's TEST_renewal user_memberships row was still in the DB and broke 7 PayPal tests."
+  ],
+  "critical_code_review_comments": [
+    "refund_order() sends the order_refunded email and the member notification before/regardless of whether any gateway actually refunded — for unsupported gateways this is a customer-facing false promise.",
+    "server.py is 8004 lines; payments/refunds/cron should be split into modules.",
+    "retry_order() clears gateway_order_id but leaves the previous PayPal order record in paypal state; fine today, but consider marking the abandoned gateway order for reconciliation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration40_retry_refund_renewal.py",
+    "/app/backend/tests/i40_ui_seed.py"
+  ],
+  "success_rate": {"backend": "99% (110/111 pytest cases; the single failure is the genuine cent over-refund bug)", "frontend": "100% of tested flows (retry, refund prompt, mobile, membership/checkout sanity)"},
+  "seed_data_creation": "Temporary only, all deleted: simulated paid/partially-refunded orders (order_no prefix TEST/TESTUI, gateway stripe_sim), one pending checkout order, user_memberships rows with order_id TEST_i40_renewal (7-day expiry, auto_renews true/false) and TEST_i40_* throwaway users. Also deleted the stale TEST_renewal membership left by the main agent's smoke test.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@buddilio.com/Admin@123, arjun.sethi@example.com/User@123, cron bearer WEBHOOK_CRON_SECRET",
+  "context_for_next_testing_agent": "New suite: /app/backend/tests/test_iteration40_retry_refund_renewal.py (retry guards, refund partial->full with membership cancel + event participant removal, RBAC, renewal reminder idempotency, email templates). It only refunds simulated stripe_sim orders — never refund a real PayPal capture (PAYPAL_ENV=live). test_cent_over_refund_rejected is expected to FAIL until the +0.01 tolerance is fixed. Renewal-reminder test uses the seeded member (not a TEST_ user) because a parallel xdist worker's session purge deletes TEST_ users mid-test. Verified: retry -> /payments/paypal/order -> www.paypal.com redirect only (aborted in test, no payment).",
+  "rca_of_the_issue": "Regression failure RCA: a TEST_ user_memberships document (order_id 'TEST_renewal') left over from the main agent's renewal-reminder smoke test had no plan_id. membership_active() returned it for arjun.sethi, and checkout() dereferences member['plan_id'] unguarded (server.py:1570), so every POST /api/checkout for that member raised KeyError -> 500, failing 7 iteration-39 PayPal tests. Deleting the row restored 95/95. Fix = defensive .get() plus disciplined smoke-seed cleanup. Refund RCA: refund_order() dispatches on order['gateway'] and only handles 'paypal'/'razorpay'; 'stripe' falls through to the state update, so card payments are flagged refunded without a gateway refund."
+}

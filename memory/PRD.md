@@ -45,6 +45,26 @@ Gurugram-122505, Haryana · no GST · grievance officer Manish.
   **PayPal is in LIVE mode** (`PAYPAL_ENV=live`, USD); sandbox keys kept as `PAYPAL_SANDBOX_*`.
   Verified: `/app/backend/tests/test_iteration39_paypal.py` 28/28 plus report iteration_39.
 
+- **2026-06-21** **Built-in captcha** (`backend/botguard.py`, `frontend/src/components/Captcha.jsx`):
+  server-issued challenge (`GET /api/captcha`) + hidden honeypot (`website`) + per-IP rate limits
+  (register 5/h, login 12/15min). Register always shows the check on the Confirm step; login shows it
+  **progressively** after a failed/suspicious attempt. Captcha box has an error/retry state.
+- **2026-06-21** **Buddilio Pass (QR voucher / m-token)** (`backend/passes.py`): every paid booking gets
+  a QR + short code `BUD-XXXX-99`, printable A5 PDF voucher, listed under `/orders` → "My passes".
+  Public `/verify` page checks and redeems a code — redeemable **once by anyone** (organiser, host,
+  buddy); a second redeem is rejected with who/when. Passes are voided on cancellation/refund.
+- **2026-06-21** **Cancellation & refunds**: tiers `CANCEL_TIERS` 30% (>7 days) / 50% (2-7 days) /
+  100% (<48h) deduction; membership fees **non-refundable**. Member cancels via a styled sheet
+  (`CancelBookingDialog`) showing paid / deduction / refundable and a refund-vs-credit(+10%) choice.
+  Admin decides the money in **Admin → Cancellations & refunds** (`Cancellations.jsx`, wired to
+  `/api/admin/cancellations` + `/settle-cancellation`). `POST /api/admin/orders/{id}/refund` now
+  enforces the policy ceiling and blocks membership refunds unless `override_policy` + a reason is
+  given (both audited).
+- **2026-06-21** **Simulated-payment hole closed**: the public "pay" simulation that marked orders paid
+  without a charge is disabled server-side and removed from checkout UI.
+  Verified: `/app/test_reports/iteration_41.json` — backend 21/21, all frontend flows; the policy
+  ceiling, admin cancellation screen and styled dialogs were added afterwards from its action items.
+
 ## Known gaps / backlog
 P0
 - After deploying, run Admin → Pages → "Fill missing policy pages" on buddilio.com (separate database).
@@ -56,7 +76,11 @@ P1
 - Vendor gaps in `/app/memory/vendor_spec_review.md`: TDS/withholding, per-service commercial
   schedules UI, agreement renewal automation, bank-file formats beyond the generic CSV.
 - Legal review of policy + agreement text by an Indian legal professional before production reliance.
+- PayPal **guest card checkout** depends on the merchant account: the user must switch on
+  "PayPal account optional" in PayPal business account settings, and confirm with a live purchase.
+  Subscriptions always require the payer to log into/create a PayPal account.
 P2
+- Register rate limit (5/h per IP) counts failed attempts too — could block shared/NAT IPs.
 - UTR capture uses `window.prompt` — could become a styled dialog; no UI toggle for batching
   not-yet-due settlements (API supports `due_only:false`).
 - `POST /api/vendor/profile` is full-replace; `expire_vendor_documents()` N+1 lookups;

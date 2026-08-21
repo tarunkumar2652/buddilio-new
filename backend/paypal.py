@@ -125,6 +125,14 @@ async def get_order(paypal_order_id: str) -> dict:
     return await _call("GET", f"/v2/checkout/orders/{paypal_order_id}")
 
 
+async def refund_capture(capture_id: str, amount: float | None, note: str = "") -> dict:
+    """amount=None refunds the full capture."""
+    body: dict = {"note_to_payer": note[:255]} if note else {}
+    if amount is not None:
+        body["amount"] = {"value": f"{amount:.2f}", "currency_code": CURRENCY}
+    return await _call("POST", f"/v2/payments/captures/{capture_id}/refund", body)
+
+
 # ---------------- subscriptions ----------------
 async def ensure_product(name: str, description: str) -> str:
     res = await _call("POST", "/v1/catalogs/products", {
