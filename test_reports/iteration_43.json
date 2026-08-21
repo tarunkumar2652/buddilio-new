@@ -1,0 +1,55 @@
+{
+  "summary": "Iteration 43 — tested walk-in door sales (cash/UPI/card + PayPal link), validation, RBAC, door CSV export + search, doors-open nudges cron, configurable pass_reminder_hours, and QR/refund/PayPal-webhook regressions. 22/22 backend pytest cases pass and the mobile Door UI works end to end (cash sale issues + checks in a pass, counters refresh, CSV downloads with TOTAL row, search + no-match message, unknown-email PayPal-link error surfaces). Two real defects found: (1) a walk-in guest pass is created with user_id \"\" and, when the pass is left 'valid' (check_in_now=false), send_pass_reminders() raises bson InvalidId and aborts the ENTIRE reminder batch (reproduced, backend traceback captured); (2) the vendor settlement created for a door sale is priced from the commercial schedule (gross 3264.35 / net 1900 for a ₹25 cash sale) and is booked as a payable to the vendor even though the vendor already holds the cash. All artefacts (orders, passes, payments, settlements, snapshots, notifications) were deleted and participant_count / pass_reminder_hours restored.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "cron /api/cron/city-openings -> send_pass_reminders()", "issue": "Crashes with bson.errors.InvalidId: '' is not a valid ObjectId at server.py:5803 (ObjectId(p['user_id'])) as soon as ANY valid event pass has an empty user_id. Walk-in cash/UPI/card sales for guests with no Buddilio account create exactly that pass (user_id \"\"), and if check_in_now=false the pass stays 'valid', so one door sale silently stops pass reminders for every other guest. Reproduced: tests/test_iteration43_edge_guestpass.py (member pass in-window NOT reminded) and tests/test_iteration43_edge_walkin_nocheckin.py. Fix: skip/guard with ObjectId.is_valid(p.get('user_id')) and wrap the per-pass loop in try/except.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/partner/events/{id}/walk-in (settlement)", "issue": "vendor_snapshot_hook prices the settlement from the vendor's commercial schedule, not from the money actually collected: a ₹25 cash door sale produced vendor_settlements {gross: 3264.35, commission: 570, net: 1900, status: pending}. For collected_by_vendor orders the intent was 'commission comes off the next settlement', i.e. the vendor OWES Buddilio the commission — instead Buddilio is now recorded as owing the vendor 1900. Door-sale settlements need a negative/adjustment row based on the collected amount.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/partner/events/{id}/walk-in", "issue": "events.participant_count is incremented by exactly 1 regardless of quantity (a 2-guest walk-in bumps the count by 1), so the count drifts from the door list's guest total."},
+      {"endpoint": "POST /api/passes/{code}/redeem", "issue": "A pass whose order_id is missing/invalid makes ObjectId(doc['order_id']) throw -> HTTP 500 and the door UI shows the generic 'Something went wrong. Please try again.' Should return a 400 'this pass has no valid booking'. Same fragility class as the reminder crash now that issue_pass() tolerates guest orders."},
+      {"endpoint": "POST /api/partner/events/{id}/walk-in", "issue": "Walk-in orders are stored in BASE_CURRENCY, which resolves to INR (BASE_CURRENCY is not set in backend/.env) while Admin -> Settings shows currency USD and PayPal charges USD. Door confirmation therefore reads '₹25 recorded as collected by you'. Pre-existing app-wide inconsistency, but very visible on the new door receipt."},
+      {"endpoint": "notify()", "issue": "Guest walk-ins can generate notification rows with user_id \"\" (orphan rows nobody can read) when a guest pass is later redeemed."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Door -> typed code check-in of a pass with no linked order", "issue": "Backend 500 surfaces only as 'Something went wrong. Please try again.' in door-last-result — no actionable message for the organiser.", "affected_selectors": ["[data-testid=door-last-result]", "[data-testid=door-code-submit]"]}
+    ],
+    "design_issues": [
+      {"screen": "Door walk-in confirmation (390px)", "issues": ["Amount is rendered with the ₹ symbol ('₹25 recorded as collected by you') although the platform/PayPal is USD — confusing for an organiser at the door"]},
+      {"screen": "Admin dashboard vs Admin -> Settings", "issues": ["Dashboard KPIs render ₹ while the settings 'currency' field says USD (pre-existing)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration43_walkin_doors.py",
+    "/app/backend/tests/test_iteration43_edge_guestpass.py",
+    "/app/backend/tests/test_iteration43_edge_walkin_nocheckin.py",
+    "/app/test_reports/pytest/i43_results.xml"
+  ],
+  "action_items": [
+    "Guard send_pass_reminders(): skip passes without a valid ObjectId user_id and try/except per pass so one bad pass can't abort the batch (CRITICAL — reminders currently die on the first guest walk-in pass).",
+    "Rework door-sale settlement maths: base the row on the amount actually collected and record it as commission owed by the vendor (negative/adjustment), not a net payable of the schedule price.",
+    "Increment participant_count by the walk-in quantity, not by 1.",
+    "Return 400 (not 500) from /passes/{code}/redeem when the pass has no valid order_id.",
+    "Decide the door-sale currency: either set BASE_CURRENCY=USD or format the walk-in receipt with the event's currency so it stops showing ₹ in a USD platform."
+  ],
+  "critical_code_review_comments": [
+    "server.py:5803 — ObjectId(p['user_id']) inside send_pass_reminders() is now reachable with an empty string because issue_pass() deliberately supports guest orders; every consumer of pass.user_id must use ObjectId.is_valid (send_doors_open_nudges already does, redeem/notify do not).",
+    "event_walk_in() duplicates ~30 lines of the order document built by the checkout path; extract a shared order-builder to avoid the two drifting (e.g. tax_label/currency handling).",
+    "server.py is 8663 lines — walk-in/door/pass logic is a natural module to split out (>700-line guideline)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration43_walkin_doors.py",
+    "/app/backend/tests/test_iteration43_edge_guestpass.py",
+    "/app/backend/tests/test_iteration43_edge_walkin_nocheckin.py"
+  ],
+  "success_rate": {"backend": "92% (22/22 main suite pass; 2 targeted edge-case tests fail and expose the reminder crash)", "frontend": "95%"},
+  "seed_data_creation": "Temporary only: walk-in orders (cash/upi/card/staff/paypal_link), seeded passes for doors-open + reminder windows, and one UI pass BUD-UI43-77. All deleted; participant_count for DIFC Rooftop Jazz restored to 1 and settings.pass_reminder_hours restored to 12. No door/walk-in orders, TEST_I43 passes, settlements, snapshots or notifications remain.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "/app/memory/test_credentials.md used as-is (admin@buddilio.com / partner@buddilio.com / arjun.sethi@example.com). PayPal LIVE respected — Connect webhook never pressed, no PayPal approval completed.",
+  "context_for_next_testing_agent": "Run pytest with -n 0. tests/test_iteration43_walkin_doors.py covers walk-in happy paths + validation + RBAC + CSV + doors-open nudges + pass_reminder_hours and self-cleans (module fixture 'created'). The two edge tests (edge_guestpass, edge_walkin_nocheckin) are EXPECTED to fail until the empty-user_id guard lands — re-run them to verify the fix. Cron runs are async background tasks, so sleep 8-10s before asserting notifications. Door UI route: /door?event=6a7cc7045fed9266ef613262 (DIFC Rooftop Jazz). Admin sections are sidebar-click only (?tab= query param does not switch sections).",
+  "rca_of_the_issue": "issue_pass() was relaxed to accept guest orders with user_id == \"\" so door sales can issue a pass without an account. send_pass_reminders() still calls ObjectId(p['user_id']) unconditionally; the first such pass inside the reminder window raises bson InvalidId inside the asyncio background task ('Task exception was never retrieved' in backend.err.log), so the loop aborts and no remaining pass is reminded and none are flagged 'reminded'. Reproduction: POST /api/partner/events/{id}/walk-in with method=cash, no guest_email, check_in_now=false (pass stays 'valid' with user_id \"\"), then POST /api/cron/city-openings — a legitimate member pass inside the window is left un-reminded."
+}

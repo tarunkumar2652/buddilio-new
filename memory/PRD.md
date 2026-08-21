@@ -84,6 +84,24 @@ Gurugram-122505, Haryana · no GST · grievance officer Manish.
   now the admin setting `pass_reminder_hours` (default 12, clamped 1-168h) instead of "the day
   before". Reminders run from the `pass-reminders` cron every 2 hours (which also carries the old
   city-openings work, keeping the 5-cron limit).
+- **2026-06-21** **Walk-in door sales** (`POST /api/partner/events/{id}/walk-in`, `WalkInDialog.jsx`):
+  organiser records a guest who turns up without a pass. Two routes — money collected in person
+  (cash/UPI/card machine) creates a paid order (`gateway: "door"`, `collected_by_vendor: true`),
+  issues the pass and checks the guest straight in; or a **PayPal link** is sent to a guest who
+  already has a Buddilio account (order stays pending; pass issues on capture). Guest passes may have
+  an empty `user_id` — every `pass.user_id` consumer must use `ObjectId.is_valid`.
+  Door-sale money uses `door_sale_settlement()`: gross = amount collected, commission per the vendor's
+  schedule, `net = -commission` (the vendor owes Buddilio, recovered from the next payout) — never
+  `vendor_snapshot_hook`, which would book Buddilio as owing the vendor.
+- **2026-06-21** **Doors-open nudges**: `send_doors_open_nudges()` in the hourly `pass-reminders` cron
+  notifies every pass holder within an hour of the start and the organiser with the arrival count
+  (once per pass, flag `doors_nudged`).
+- **2026-06-21** Fixes from iteration 43: `send_pass_reminders()` can no longer be aborted by a guest
+  pass (invalid ObjectId guard + per-pass try), `participant_count` increments by walk-in quantity,
+  `/passes/{code}/redeem` returns 400 (not 500) when a pass has no valid booking, and walk-in orders
+  use the event's currency instead of `BASE_CURRENCY`.
+  Verified: `/app/test_reports/iteration_43.json` (22/22 backend, mobile door UI) plus direct
+  re-checks of all four fixes.
 - **2026-06-21** Fixes from iteration 42: `cancellation_deduction()` no longer 500s for past-dated
   events (tier fallback 100%), door list staff check uses `events:view` (`events:manage` never
   existed), admin cancellation/refund dialogs format money in the order's currency, member cancel
@@ -110,11 +128,16 @@ P2
   not-yet-due settlements (API supports `due_only:false`).
 - `POST /api/vendor/profile` is full-replace; `expire_vendor_documents()` N+1 lookups;
   `/admin/vendor-documents/expiring` unpaginated.
-- `server.py` ~7.6k lines and `vendor_routes.py` ~1.1k — modularisation candidates.
+- `server.py` ~8.7k lines and `vendor_routes.py` ~1.1k — modularisation candidates (walk-in/door/pass
+  logic is the natural next module to split out).
+- Platform currency is inconsistent: `BASE_CURRENCY` resolves to INR while Admin → Settings says USD
+  and PayPal charges USD. Walk-in receipts now use the event's currency, the rest of the app does not.
 
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.
 - City guide data is a free-form dict in `city_guides.data` (keys: intro, areas[[name,blurb,photo]],
   when, around, tip, venues[{name,type,area,note,url}], faqs, seo_title, seo_description).
-- Admin sidebar is intentionally non-sticky. Max 5 platform crons — daily work is in `daily-maintenance`.
+- Admin sidebar is intentionally non-sticky. Max 5 platform crons — daily work is in
+  `daily-maintenance`; the hourly `pass-reminders` cron carries pass reminders, doors-open nudges and
+  city-waitlist openings.

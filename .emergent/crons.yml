@@ -28,8 +28,8 @@ crons:
     method: POST
     enabled: true
   - name: pass-reminders
-    description: "Every 2h: city waitlist openings plus QR pass reminders due before an event"
-    cron: "0 */2 * * *"
+    description: "Hourly: pass reminders, doors-open nudges and city waitlist openings"
+    cron: "0 * * * *"
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     endpoint: "{{BASE_URL}}/api/cron/city-openings"
     method: POST

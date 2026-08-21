@@ -2338,7 +2338,9 @@ async def issue_pass(order: dict) -> dict | None:
     existing = await db.passes.find_one({"order_id": str(order["_id"])})
     if existing:
         return clean(existing)
-    user = await db.users.find_one({"_id": ObjectId(order["user_id"])}, {"full_name": 1, "email": 1})
+    user = None
+    if ObjectId.is_valid(order.get("user_id") or ""):
+        user = await db.users.find_one({"_id": ObjectId(order["user_id"])}, {"full_name": 1, "email": 1})
     city, starts_at, vendor_name = "", "", ""
     if order["kind"] == "event" and ObjectId.is_valid(order.get("ref_id", "")):
         ev = await db.events.find_one({"_id": ObjectId(order["ref_id"])},
@@ -2352,7 +2354,8 @@ async def issue_pass(order: dict) -> dict | None:
         if not await db.passes.find_one({"code": code}):
             break
     doc = {"code": code, "order_id": str(order["_id"]), "order_no": order["order_no"],
-           "user_id": order["user_id"], "user_name": user.get("full_name", "") if user else "",
+           "user_id": order["user_id"],
+           "user_name": (user.get("full_name", "") if user else order.get("guest_name", "")),
            "kind": order["kind"], "ref_id": order.get("ref_id", ""), "item_name": order["item_name"],
            "quantity": order.get("quantity", 1), "city": city, "starts_at": starts_at,
            "vendor_name": vendor_name,
@@ -2433,8 +2436,12 @@ async def redeem_pass(code: str, user: dict = Depends(get_current_user)):
                                    f" by {doc.get('redeemed_by_name') or 'someone'}.")
     if doc["status"] != "valid":
         raise HTTPException(status_code=400, detail=f"This pass is {doc['status']} and can't be used.")
-    order = await db.orders.find_one({"_id": ObjectId(doc["order_id"])})
-    if not order or order["payment_status"] != "paid" or order.get("refund_status") in ("refunded", "partial"):
+    order = None
+    if ObjectId.is_valid(doc.get("order_id") or ""):
+        order = await db.orders.find_one({"_id": ObjectId(doc["order_id"])})
+    if not order:
+        raise HTTPException(status_code=400, detail="This pass has no valid booking behind it.")
+    if order["payment_status"] != "paid" or order.get("refund_status") in ("refunded", "partial"):
         await db.passes.update_one({"_id": doc["_id"]}, {"$set": {"status": "void"}})
         raise HTTPException(status_code=400, detail="This booking was cancelled or refunded, so the pass is void.")
     await db.passes.update_one({"_id": doc["_id"]}, {"$set": {
@@ -2483,6 +2490,141 @@ async def event_check_in_csv(event_id: str, user: dict = Depends(get_current_use
     name = "".join(ch if ch.isalnum() else "-" for ch in data["event"]["title"].lower())[:40]
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="door-{name}.csv"'})
+
+
+async def door_sale_settlement(order: dict) -> dict | None:
+    """The vendor already holds the cash, so Buddilio's commission is booked as owed BY the vendor."""
+    try:
+        import vendor_routes
+        vendor_id = await vendor_routes.vendor_for_order(order)
+        if not vendor_id:
+            return None
+        sched = await vendor_routes.active_schedule(vendor_id, order.get("ref_id", "")) or {}
+    except Exception as exc:
+        logger.warning(f"door settlement skipped for {order.get('order_no')}: {exc}")
+        return None
+    gross = float(order.get("charge_total") or order["total"])
+    qty = max(int(order.get("quantity") or 1), 1)
+    ctype = sched.get("commission_type", "percentage")
+    cval = float(sched.get("commission_value") or 0)
+    if ctype == "fixed":
+        commission = cval * qty
+    elif ctype == "percentage":
+        commission = gross * cval / 100
+    else:
+        commission = gross * cval / 100 + float(sched.get("commission_fixed") or 0) * qty
+    commission = round(min(max(commission, 0), gross), 2)
+    row = {"vendor_id": vendor_id, "booking_id": str(order["_id"]), "order_no": order["order_no"],
+           "gross": gross, "commission": commission, "platform_fee": 0.0, "refunds": 0.0,
+           "adjustments": 0.0, "net": round(-commission, 2), "currency": order.get("currency", ""),
+           "collected_by_vendor": True, "source": "door_sale",
+           "note": f"Door sale collected by the organiser ({order.get('payment_method', 'cash')}). "
+                   "Commission is recovered from the next payout.",
+           "status": "pending", "due_on": iso(now_utc() + timedelta(days=7)),
+           "created_at": iso(now_utc())}
+    await db.vendor_settlements.insert_one(row)
+    return row
+
+
+class WalkInIn(BaseModel):
+    guest_name: str
+    guest_phone: str = ""
+    guest_email: str = ""
+    quantity: int = 1
+    amount: float = 0.0
+    method: str = "cash"          # cash | upi | card | paypal_link
+    check_in_now: bool = True
+
+
+@api.post("/partner/events/{event_id}/walk-in")
+async def event_walk_in(event_id: str, payload: WalkInIn, user: dict = Depends(get_current_user)):
+    """Door sale: the organiser collects the money in person, or sends a PayPal link on the spot."""
+    ev = await db.events.find_one({"_id": as_oid(event_id, "event")})
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found.")
+    if ev.get("partner_id") != user["id"] and "events:view" not in perms_of(user):
+        raise HTTPException(status_code=403, detail="That event isn't yours.")
+    qty = max(int(payload.quantity or 1), 1)
+    name = payload.guest_name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Add the guest's name for the door list.")
+    email = payload.guest_email.strip().lower()
+
+    if payload.method == "paypal_link":
+        if not email:
+            raise HTTPException(status_code=400,
+                                detail="A PayPal link needs the guest's email. Otherwise collect at the door.")
+        guest = await db.users.find_one({"email": email})
+        if not guest:
+            raise HTTPException(status_code=400, detail=(
+                "That email has no Buddilio account yet, so we can't send a pay link. Ask them to sign "
+                "up, or take the money at the door and record it here."))
+        amount = round(float(payload.amount or 0) or float(ev.get("price") or 0) * qty, 2)
+        order = {"order_no": "BUD" + uuid.uuid4().hex[:8].upper(), "user_id": str(guest["_id"]),
+                 "user_email": guest["email"], "user_name": guest.get("full_name", name),
+                 "kind": "event", "ref_id": event_id, "item_name": ev["title"], "quantity": qty,
+                 "subtotal": amount, "discount": 0.0, "tax": 0.0, "total": amount,
+                 "tax_percent": 0.0, "tax_label": "No tax", "credit_applied": 0.0, "charge_credit": 0.0,
+                 "coupon": "", "currency": BASE_CURRENCY, "fx_rate": 1.0, "base_currency": BASE_CURRENCY,
+                 "charge_subtotal": amount, "charge_discount": 0.0, "charge_tax": 0.0,
+                 "charge_total": amount, "payment_status": "pending", "order_status": "created",
+                 "refund_status": "none", "gateway": "paypal", "transaction_id": "",
+                 "walk_in": True, "walk_in_by": user["id"], "created_at": iso(now_utc())}
+        oid_new = str((await db.orders.insert_one(order)).inserted_id)
+        await notify(str(guest["_id"]), "Pay for your pass",
+                     f"{ev['title']} — {fmt_money(amount)} is waiting to be paid. Open your orders and "
+                     "tap Retry payment to pay with PayPal.", "order", "/orders")
+        return {"mode": "paypal_link", "order_id": oid_new, "order_no": order["order_no"],
+                "amount": amount, "pay_url": f"{FRONTEND_URL.rstrip('/')}/orders",
+                "message": f"Pay link sent to {guest['email']}. The pass is issued the moment PayPal confirms."}
+
+    if payload.method not in ("cash", "upi", "card"):
+        raise HTTPException(status_code=400, detail="Choose cash, UPI, card machine or a PayPal link.")
+    amount = round(float(payload.amount or 0), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Enter how much you collected.")
+    guest = await db.users.find_one({"email": email}) if email else None
+    cur = (ev.get("price_currency") or BASE_CURRENCY).upper()
+    order = {"order_no": "BUD" + uuid.uuid4().hex[:8].upper(),
+             "user_id": str(guest["_id"]) if guest else "", "user_email": email,
+             "user_name": guest.get("full_name", name) if guest else name,
+             "guest_name": name, "guest_phone": payload.guest_phone.strip(),
+             "kind": "event", "ref_id": event_id, "item_name": ev["title"], "quantity": qty,
+             "subtotal": amount, "discount": 0.0, "tax": 0.0, "total": amount,
+             "tax_percent": 0.0, "tax_label": "Collected at the door",
+             "credit_applied": 0.0, "charge_credit": 0.0, "coupon": "",
+             "currency": cur, "fx_rate": 1.0, "base_currency": BASE_CURRENCY,
+             "charge_subtotal": amount, "charge_discount": 0.0, "charge_tax": 0.0,
+             "charge_total": amount, "payment_status": "paid", "order_status": "completed",
+             "refund_status": "none", "gateway": "door", "payment_method": payload.method,
+             "transaction_id": f"DOOR-{uuid.uuid4().hex[:6].upper()}",
+             "walk_in": True, "walk_in_by": user["id"], "collected_by_vendor": True,
+             "paid_at": iso(now_utc()), "created_at": iso(now_utc())}
+    res = await db.orders.insert_one(order)
+    order["_id"] = res.inserted_id
+    await db.payments.insert_one({"order_id": str(res.inserted_id), "user_id": order["user_id"],
+                                  "amount": amount, "status": "captured", "gateway": "door",
+                                  "transaction_id": order["transaction_id"],
+                                  "created_at": iso(now_utc())})
+    await door_sale_settlement(order)          # commission owed on money the vendor already holds
+    voucher = await issue_pass(order)
+    if payload.check_in_now and voucher:
+        await db.passes.update_one({"code": voucher["code"]}, {"$set": {
+            "status": "redeemed", "redeemed_at": iso(now_utc()), "redeemed_by": user["id"],
+            "redeemed_by_name": user.get("full_name", "")}})
+        voucher = clean(await db.passes.find_one({"code": voucher["code"]}))
+    if guest:
+        await db.event_participants.update_one(
+            {"event_id": event_id, "user_id": str(guest["_id"])},
+            {"$setOnInsert": {"event_id": event_id, "user_id": str(guest["_id"]),
+                              "status": "confirmed", "order_id": str(res.inserted_id),
+                              "created_at": iso(now_utc())}}, upsert=True)
+    await db.events.update_one({"_id": ev["_id"]}, {"$inc": {"participant_count": qty}})
+    logger.info(f"door sale {order['order_no']} · {ev['title']} · {payload.method} · {amount}")
+    return {"mode": "collected", "order_no": order["order_no"], "amount": amount,
+            "method": payload.method, "pass": voucher,
+            "message": f"{name} is in. {fmt_money(amount, cur)} recorded as collected by you — "
+                       "Buddilio's commission comes off your next settlement."}
 
 
 CANCEL_TIERS = [(7, 30), (2, 50), (0, 100)]   # days notice -> % deducted (minimum 30%)
@@ -3090,12 +3232,44 @@ async def cron_monthly_prize(_: None = Depends(cron_guard)):
     return {"ok": True, "queued": "monthly-prize", "month": last_month()}
 
 
+async def send_doors_open_nudges() -> int:
+    """An hour before doors, nudges every pass holder — and the organiser with the arrival count."""
+    now = now_utc()
+    rows = await db.passes.find({"status": {"$in": ["valid", "redeemed"]}, "kind": "event",
+                                 "starts_at": {"$gte": iso(now), "$lte": iso(now + timedelta(hours=1))},
+                                 "doors_nudged": {"$ne": True}}).limit(1000).to_list(1000)
+    sent, events = 0, {}
+    for p in rows:
+        await db.passes.update_one({"_id": p["_id"]}, {"$set": {"doors_nudged": True}})
+        events[p["ref_id"]] = events.get(p["ref_id"], 0) + 1
+        if p["status"] != "valid" or not ObjectId.is_valid(p.get("user_id") or ""):
+            continue
+        await notify(p["user_id"], "Doors open soon",
+                     f"{p['item_name']} starts within the hour. Have code {p['code']} or your QR ready "
+                     "at the door.", "reminder", "/orders", email=False)
+        sent += 1
+    for event_id in events:
+        ev = await db.events.find_one({"_id": as_oid(event_id, "event")},
+                                     {"title": 1, "partner_id": 1}) if ObjectId.is_valid(event_id) else None
+        if not ev or not ev.get("partner_id"):
+            continue
+        items = await db.passes.find({"kind": "event", "ref_id": event_id}).limit(1000).to_list(1000)
+        guests = sum(int(r.get("quantity") or 1) for r in items)
+        arrived = sum(int(r.get("quantity") or 1) for r in items if r["status"] == "redeemed")
+        await notify(ev["partner_id"], "Doors open within the hour",
+                     f"{ev['title']}: {arrived} of {guests} guests have arrived. Open door check-in to "
+                     "scan the rest.", "reminder", "/door", email=False)
+    logger.info(f"doors-open nudges sent: {sent}")
+    return sent
+
+
 @api.post("/cron/city-openings")
 async def cron_city_openings(_: None = Depends(cron_guard)):
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     asyncio.create_task(open_city_waitlists())
     asyncio.create_task(send_pass_reminders())
-    return {"ok": True, "queued": ["city-openings", "pass-reminders"]}
+    asyncio.create_task(send_doors_open_nudges())
+    return {"ok": True, "queued": ["city-openings", "pass-reminders", "doors-open-nudges"]}
 
 
 def city_slug(name: str) -> str:
@@ -5665,7 +5839,15 @@ async def send_pass_reminders() -> int:
                                  "reminded": {"$ne": True}}).limit(1000).to_list(1000)
     sent = 0
     for p in rows:
-        user = await db.users.find_one({"_id": ObjectId(p["user_id"])}, {"full_name": 1, "email": 1})
+        if not ObjectId.is_valid(p.get("user_id") or ""):
+            # Door walk-ins can belong to a guest with no account — nothing to email.
+            await db.passes.update_one({"_id": p["_id"]}, {"$set": {"reminded": True}})
+            continue
+        try:
+            user = await db.users.find_one({"_id": ObjectId(p["user_id"])}, {"full_name": 1, "email": 1})
+        except Exception as exc:
+            logger.warning(f"pass reminder skipped for {p.get('code')}: {exc}")
+            continue
         if not user:
             continue
         await db.passes.update_one({"_id": p["_id"]}, {"$set": {"reminded": True,

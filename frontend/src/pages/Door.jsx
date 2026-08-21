@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Camera, CameraOff, CheckCircle2, Download, QrCode, Users, XCircle } from "lucide-react";
+import { Camera, CameraOff, CheckCircle2, Download, QrCode, UserPlus, Users, XCircle } from "lucide-react";
+import { WalkInDialog } from "@/components/WalkInDialog";
 import { api, errMsg } from "@/lib/api";
 import { SEO, Spinner, Empty, Badge } from "@/components/Shared";
 
@@ -20,6 +21,7 @@ export default function Door() {
   const [door, setDoor] = useState(null);
   const [code, setCode] = useState("");
   const [q, setQ] = useState("");
+  const [walk, setWalk] = useState(null);
   const [last, setLast] = useState(null);
   const [scanning, setScanning] = useState(false);
   const scanner = useRef(null);
@@ -135,6 +137,10 @@ export default function Door() {
             className="flex-1 rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-sm uppercase" />
           <button data-testid="door-code-submit" className={`${PILL} bg-brand-magenta text-white`}>Check in</button>
         </form>
+        <button onClick={() => setWalk({})} data-testid="door-walkin-open"
+          className={`${PILL} mt-3 w-full border border-slate-200`}>
+          <UserPlus className="mr-1.5 inline h-4 w-4" />Guest without a pass
+        </button>
         {last && (
           <div data-testid="door-last-result"
             className={`mt-4 flex items-start gap-3 rounded-2xl p-4 text-sm ${last.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"}`}>
@@ -185,6 +191,9 @@ export default function Door() {
         <QrCode className="h-4 w-4 shrink-0" />
         Camera scanning needs HTTPS and camera permission. If it won't open, type the code — it works the same.
       </p>
+      {walk && eventId && (
+        <WalkInDialog eventId={eventId} onClose={() => setWalk(null)} onDone={loadDoor} />
+      )}
     </div>
   );
 }
