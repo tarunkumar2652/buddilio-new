@@ -4,7 +4,7 @@ import { api, money, setBaseCurrency } from "@/lib/api";
 const Ctx = createContext(null);
 export const useCurrency = () => useContext(Ctx);
 
-const FALLBACK = [{ code: "INR", rate: 1, symbol: "₹", label: "Indian Rupee" }];
+const FALLBACK = [{ code: "USD", rate: 1, symbol: "$", label: "US Dollar" }];
 
 const TZ_COUNTRY = {
   "Asia/Kolkata": "IN", "Asia/Calcutta": "IN", "Asia/Dubai": "AE", "Asia/Singapore": "SG",
@@ -40,7 +40,7 @@ export function CurrencyProvider({ children }) {
       setCountries(data.countries || []);
       setBaseCurrency(data.base_currency);
       if (!localStorage.getItem("bud_currency")) {
-        setCode(detectCurrency(data.countries || [], currencies) || data.base_currency || "INR");
+        setCode(detectCurrency(data.countries || [], currencies) || data.base_currency || "USD");
       }
     }).catch(() => {});
   }, []);

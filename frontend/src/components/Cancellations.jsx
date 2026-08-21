@@ -106,7 +106,7 @@ const SettleDialog = ({ order, onClose, onDone }) => {
             ["Deduction", `${c.deduction_percent || 0}%`],
             ["Quoted refundable", money(c.refundable || 0, order.currency)],
             ["Member prefers", c.prefer === "credit" ? "Credit (+10%)" : "Refund to card"],
-            ["Currency", (order.currency || "INR").toUpperCase()],
+            ["Currency", (order.currency || "USD").toUpperCase()],
             ["Member's reason", c.reason || "—"]].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-3">
                 <dt className="text-slate-500">{k}</dt><dd className="font-bold text-slate-900 text-right">{v}</dd>

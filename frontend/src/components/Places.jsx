@@ -5,7 +5,7 @@ import { api, errMsg } from "@/lib/api";
 import { Spinner } from "@/components/Shared";
 
 const cls = "rounded-xl border border-slate-200 px-3 py-2 text-sm";
-const blank = { code: "", name: "", currency: "INR", tax_percent: 0, tax_label: "Tax", emergency: "", cities: [], active: true };
+const blank = { code: "", name: "", currency: "USD", tax_percent: 0, tax_label: "Tax", emergency: "", cities: [], active: true };
 
 export const Places = () => {
   const [data, setData] = useState(null);

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { api, errMsg } from "@/lib/api";
+import { api, errMsg, money } from "@/lib/api";
 import { Spinner } from "@/components/Shared";
 
 const PILL = "rounded-full px-4 py-2.5 text-xs font-bold";
-const fm = (c, v) => `${c === "INR" ? "₹" : `${c || ""} `}${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+const fm = (c, v) => money(v, c);
 
 /** Member cancellation sheet — shows the deduction breakdown before anything is cancelled. */
 export const CancelBookingDialog = ({ order, onClose, onDone }) => {

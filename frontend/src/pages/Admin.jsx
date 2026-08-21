@@ -304,10 +304,10 @@ function Overview() {
         <Stat label="Events" value={s.events} />
         <Stat label="Upcoming events" value={s.upcoming_events} />
         <Stat label="Participations" value={s.participations} />
-        <Stat label="Gross sales" value={money(s.gross_sales)} testid="admin-stat-sales" />
-        <Stat label="Membership revenue" value={money(s.membership_revenue)} />
-        <Stat label="Event revenue" value={money(s.event_revenue)} />
-        <Stat label="Pass revenue" value={money(s.pass_revenue)} />
+        <Stat label="Gross sales" value={money(s.gross_sales, s.currency)} testid="admin-stat-sales" />
+        <Stat label="Membership revenue" value={money(s.membership_revenue, s.currency)} />
+        <Stat label="Event revenue" value={money(s.event_revenue, s.currency)} />
+        <Stat label="Pass revenue" value={money(s.pass_revenue, s.currency)} />
         <Stat label="Refunds" value={s.refunds} />
         <Stat label="Pending event approvals" value={s.pending_events} testid="admin-stat-pending-events" />
         <Stat label="Open reports" value={s.open_reports} testid="admin-stat-reports" />
@@ -514,11 +514,11 @@ function Orders({ payments }) {
                 <td className="px-4 py-3"><p className="font-semibold">#{o.order_no}</p><p className="text-xs text-slate-500">{fmtDate(o.created_at)}</p></td>
                 <td className="px-4 py-3">{o.item_name}</td>
                 <td className="px-4 py-3 text-xs">{o.kind}</td>
-                <td className="px-4 py-3 font-semibold">{money(o.total)}</td>
+                <td className="px-4 py-3 font-semibold">{money(o.charge_total ?? o.total, o.currency)}</td>
                 <td className="px-4 py-3"><Badge tone={statusTone(o.payment_status)}>{o.payment_status}</Badge></td>
                 <td className="px-4 py-3 text-xs">
                   {o.refund_status}
-                  {Number(o.refunded_amount || 0) > 0 && <p className="text-[10px] text-slate-400">{money(o.refunded_amount)} back</p>}
+                  {Number(o.refunded_amount || 0) > 0 && <p className="text-[10px] text-slate-400">{money(o.refunded_amount, o.currency)} back</p>}
                 </td>
                 <td className="px-4 py-3">
                   {payments ? <span className="text-xs text-slate-500">{o.transaction_id || "—"}</span>
@@ -541,9 +541,12 @@ function Orders({ payments }) {
 
 function Payouts() {
   const [items, setItems] = useState(null);
+  const [meta, setMeta] = useState({ totals: {}, currency: "" });
   const [status, setStatus] = useState("");
   const load = useCallback(() => {
-    api.get("/admin/payouts", { params: { status } }).then(({ data }) => setItems(data.items)).catch(() => setItems([]));
+    api.get("/admin/payouts", { params: { status } })
+      .then(({ data }) => { setItems(data.items); setMeta(data); })
+      .catch(() => setItems([]));
   }, [status]);
   useEffect(() => { load(); }, [load]);
 
@@ -569,8 +572,8 @@ function Payouts() {
       </div>
       <div className="mt-4 grid sm:grid-cols-3 gap-4">
         <Stat label="Pending payouts" value={pending.length} testid="payouts-pending-count" />
-        <Stat label="Pending amount" value={money(pending.reduce((s, p) => s + p.net, 0))} testid="payouts-pending-amount" />
-        <Stat label="Settled amount" value={money(items.filter((p) => p.status === "paid").reduce((s, p) => s + p.net, 0))} testid="payouts-paid-amount" />
+        <Stat label="Pending amount" value={money(meta.totals?.pending || 0, meta.currency)} testid="payouts-pending-amount" />
+        <Stat label="Settled amount" value={money(meta.totals?.paid || 0, meta.currency)} testid="payouts-paid-amount" />
       </div>
       <div className="mt-5 rounded-xl border border-slate-200 bg-white overflow-x-auto">
         <table className="w-full text-sm">
@@ -583,9 +586,9 @@ function Payouts() {
               <tr key={p.id} data-testid={`admin-payout-${p.id}`}>
                 <td className="px-4 py-3"><p className="font-semibold">{p.partner?.org_name || p.partner?.full_name || "—"}</p><p className="text-xs text-slate-500">{p.partner?.email}</p></td>
                 <td className="px-4 py-3">{p.event_title}<p className="text-xs text-slate-500">{p.orders} paid orders · {fmtDate(p.created_at)}</p></td>
-                <td className="px-4 py-3">{money(p.gross)}</td>
-                <td className="px-4 py-3 text-slate-500">− {money(p.fee)}</td>
-                <td className="px-4 py-3 font-semibold">{money(p.net)}</td>
+                <td className="px-4 py-3">{money(p.gross, p.currency)}</td>
+                <td className="px-4 py-3 text-slate-500">− {money(p.fee, p.currency)}</td>
+                <td className="px-4 py-3 font-semibold">{money(p.net, p.currency)}</td>
                 <td className="px-4 py-3"><Badge tone={p.status === "paid" ? "green" : "amber"}>{p.status}</Badge></td>
                 <td className="px-4 py-3">
                   {p.status === "pending"

@@ -213,9 +213,7 @@ export function Orders() {
             </div>
             <div className="text-right">
               <p className="font-display font-bold">
-                {o.currency && o.currency !== "INR"
-                  ? `${o.currency} ${Number(o.charge_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                  : money(o.total)}
+                {money(o.charge_total ?? o.total, o.currency)}
               </p>
               <div className="mt-1 flex gap-1.5 justify-end">
                 <span data-testid={`order-status-${o.id}`}>

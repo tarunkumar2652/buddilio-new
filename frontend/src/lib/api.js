@@ -18,8 +18,8 @@ export function errMsg(e) {
   return "Something went wrong. Please try again.";
 }
 
-let baseCurrency = "INR";
-export const setBaseCurrency = (c) => { baseCurrency = (c || "INR").toUpperCase(); };
+let baseCurrency = "USD";
+export const setBaseCurrency = (c) => { baseCurrency = (c || "USD").toUpperCase(); };
 
 export const money = (n, currency) => {
   const cur = (currency || baseCurrency).toUpperCase();

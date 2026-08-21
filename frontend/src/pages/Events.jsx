@@ -61,7 +61,7 @@ export function Events() {
         <select data-testid="events-price" value={f.max_price} onChange={(e) => { setPage(1); setF({ ...f, max_price: Number(e.target.value) }); }}
           className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
           <option value={-1}>Any price</option><option value={0}>Free only</option>
-          <option value={1000}>Under {fmt(1000)}</option><option value={2500}>Under {fmt(2500)}</option><option value={5000}>Under {fmt(5000)}</option>
+          <option value={25}>{`Under ${fmt(25).replace(/\.00$/, "")}`}</option><option value={50}>{`Under ${fmt(50).replace(/\.00$/, "")}`}</option><option value={100}>{`Under ${fmt(100).replace(/\.00$/, "")}`}</option>
         </select>
       </div>
 

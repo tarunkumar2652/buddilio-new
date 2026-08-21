@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { api, errMsg, fmtDate } from "@/lib/api";
 import { Badge, Empty, Spinner } from "@/components/Shared";
 
-const money = (v, c = "INR") => `${c} ${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+const money = (v, c) => `${c || "USD"} ${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
 const lastMonth = () => {
   const d = new Date();
   d.setDate(0);
@@ -96,7 +96,7 @@ export const VendorPayouts = () => {
         {[["Due", t.due], ["In a batch", t.batched], ["Paid", t.paid], ["Commission earned", t.commission]].map(([l, v]) => (
           <div key={l} className="rounded-2xl border border-slate-200 bg-white p-5">
             <p className="overline">{l}</p>
-            <p className="mt-1.5 font-display text-xl font-bold">{money(v)}</p>
+            <p className="mt-1.5 font-display text-xl font-bold">{money(v, t.currency)}</p>
           </div>
         ))}
       </div>

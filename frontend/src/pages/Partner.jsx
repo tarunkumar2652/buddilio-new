@@ -8,12 +8,13 @@ import { RichText } from "@/components/RichText";
 import { GalleryUpload } from "@/components/GalleryUpload";
 import { CopyHelper } from "@/components/CopyHelper";
 import { Stars } from "@/components/Cards";
+import { DoorTakings } from "@/components/DoorTakings";
 import { Spinner, Empty, Badge, Stat, statusTone, SEO } from "@/components/Shared";
 import { Plus, Send } from "lucide-react";
 
 const blank = {
   title: "", description: "", category: "Parties", city: "Delhi NCR", country: "India", venue: "",
-  starts_at: "", ends_at: "", cover_image: "", gallery: [], price: 0, price_currency: "INR", capacity: 50,
+  starts_at: "", ends_at: "", cover_image: "", gallery: [], price: 0, price_currency: "USD", capacity: 50,
   rules: "Government ID required at entry. 21+ only.",
   cancellation_policy: "Full refund up to 48 hours before start.",
   approval_mode: "instant", featured: false,
@@ -121,7 +122,7 @@ export default function PartnerDashboard() {
               <Badge tone={statusTone(ev.status)}>{ev.status}</Badge>
               <div className="flex gap-2">
                 <button onClick={() => { setF({ ...blank, ...ev, price: ev.price_input ?? ev.price,
-                  price_currency: ev.price_currency || "INR",
+                  price_currency: ev.price_currency || "USD",
                   starts_at: ev.starts_at?.slice(0, 16), ends_at: ev.ends_at?.slice(0, 16) }); setEditing(ev.id); setTab("create"); }}
                   data-testid={`edit-event-${ev.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Edit</button>
                 <button onClick={() => viewParticipants(ev)} data-testid={`participants-event-${ev.id}`} className="rounded-full border border-slate-200 px-4 py-2 text-xs font-bold">Participants</button>
@@ -184,7 +185,7 @@ export default function PartnerDashboard() {
             <label className="block"><span className="text-xs font-bold text-slate-600">Price currency</span>
               <select data-testid="event-price-currency" value={f.price_currency} onChange={(e) => setF({ ...f, price_currency: e.target.value })}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm">
-                {(meta.currencies || []).map((c) => <option key={c.code} value={c.code}>{c.code} — {c.label}</option>)}
+                {(meta.currencies || []).map((c) => <option key={c.code} value={c.code}>{`${c.code} — ${c.label}`}</option>)}
               </select>
               <span className="mt-1.5 block text-[11px] text-slate-500">
                 Locals pay exactly this in {f.price_currency}. Other currencies convert automatically.
@@ -314,6 +315,7 @@ export default function PartnerDashboard() {
             </table>
             {!payouts?.items?.length && <p className="p-6 text-sm text-slate-500">No payouts yet. A ledger entry is created automatically 48 hours after each event finishes.</p>}
           </div>
+          <DoorTakings />
         </div>
       )}
     </div>

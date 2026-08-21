@@ -104,11 +104,11 @@ export const ProfileForm = ({ profile, onClose, onSaved }) => {
 
 const EVENT_BLANK = {
   title: "", description: "", category: "Nightlife", city: "", country: "", venue: "", starts_at: "",
-  ends_at: "", cover_image: "", price: 0, price_currency: "INR", capacity: 50, rules: "", cancellation_policy: "",
+  ends_at: "", cover_image: "", price: 0, price_currency: "USD", capacity: 50, rules: "", cancellation_policy: "",
   approval_mode: "instant", featured: false, partner_id: "", status: "published",
 };
 
-const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD", "JPY", "AUD", "THB"];
+const CURRENCIES = ["USD", "INR", "EUR", "GBP", "AED", "SGD", "JPY", "AUD", "THB"];
 
 export const EventForm = ({ event, onClose, onSaved }) => {
   const [f, setF] = useState({
@@ -116,7 +116,7 @@ export const EventForm = ({ event, onClose, onSaved }) => {
     ...(event || {}),
     // The event carries a converted base price; the organiser's own figure lives in price_input.
     price: event ? (event.price_input ?? event.price ?? 0) : 0,
-    price_currency: event?.price_currency || "INR",
+    price_currency: event?.price_currency || "USD",
   });
   const [hosts, setHosts] = useState([]);
   const [busy, setBusy] = useState(false);

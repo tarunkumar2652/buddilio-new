@@ -234,19 +234,19 @@ def require_perm(*keys: str, active: bool = False):
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 
-BASE_CURRENCY = os.environ.get("BASE_CURRENCY", "INR")
+BASE_CURRENCY = os.environ.get("BASE_CURRENCY", "USD")
 
 DEFAULT_CURRENCIES = {
-    "INR": {"rate": 1.0, "symbol": "₹", "label": "Indian Rupee", "stripe_min": 4200},
-    "USD": {"rate": 0.012, "symbol": "$", "label": "US Dollar", "stripe_min": 50},
-    "EUR": {"rate": 0.011, "symbol": "€", "label": "Euro", "stripe_min": 50},
-    "GBP": {"rate": 0.0094, "symbol": "£", "label": "British Pound", "stripe_min": 30},
-    "AED": {"rate": 0.044, "symbol": "AED ", "label": "UAE Dirham", "stripe_min": 200},
-    "SGD": {"rate": 0.016, "symbol": "S$", "label": "Singapore Dollar", "stripe_min": 50},
-    "CAD": {"rate": 0.016, "symbol": "C$", "label": "Canadian Dollar", "stripe_min": 50},
-    "AUD": {"rate": 0.018, "symbol": "A$", "label": "Australian Dollar", "stripe_min": 50},
-    "THB": {"rate": 0.39, "symbol": "฿", "label": "Thai Baht", "stripe_min": 1000},
-    "JPY": {"rate": 1.8, "symbol": "¥", "label": "Japanese Yen", "stripe_min": 50},
+    "USD": {"rate": 1.0, "symbol": "$", "label": "US Dollar", "stripe_min": 50},
+    "INR": {"rate": 83.33, "symbol": "₹", "label": "Indian Rupee", "stripe_min": 4200},
+    "EUR": {"rate": 0.92, "symbol": "€", "label": "Euro", "stripe_min": 50},
+    "GBP": {"rate": 0.79, "symbol": "£", "label": "British Pound", "stripe_min": 30},
+    "AED": {"rate": 3.67, "symbol": "AED ", "label": "UAE Dirham", "stripe_min": 200},
+    "SGD": {"rate": 1.34, "symbol": "S$", "label": "Singapore Dollar", "stripe_min": 50},
+    "CAD": {"rate": 1.36, "symbol": "C$", "label": "Canadian Dollar", "stripe_min": 50},
+    "AUD": {"rate": 1.50, "symbol": "A$", "label": "Australian Dollar", "stripe_min": 50},
+    "THB": {"rate": 32.5, "symbol": "฿", "label": "Thai Baht", "stripe_min": 1000},
+    "JPY": {"rate": 150.0, "symbol": "¥", "label": "Japanese Yen", "stripe_min": 50},
     **EXTRA_CURRENCIES,
 }
 ZERO_DECIMAL = {"JPY", "KRW"}
@@ -350,7 +350,7 @@ def razorpay_client():
 
 EMAIL_TYPES = {"registration", "membership", "order", "event", "refund", "message", "reminder", "moderation"}
 PUSH_TYPES = {"message", "reminder"}
-REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "250"))
+REFERRAL_REWARD = float(os.environ.get("REFERRAL_REWARD", "3"))
 
 
 # ---------------- editable email templates ----------------
@@ -761,7 +761,7 @@ async def register_referral(code: str, invitee_id: str, invitee_name: str):
         "code": code, "status": "joined", "created_at": iso(now_utc())})
     await notify(str(ref["_id"]), "Your invite was accepted",
                  f"{invitee_name.split(' ')[0]} joined Buddilio with your link. "
-                 f"You earn ₹{REFERRAL_REWARD:.0f} credit on their first paid booking.",
+                 f"You earn {fmt_money(REFERRAL_REWARD)} credit on their first paid booking.",
                  "system", "/referrals", email=False)
 
 
@@ -923,7 +923,7 @@ class CheckoutIn(BaseModel):
     item_id: str
     quantity: int = 1
     coupon_code: str = ""
-    currency: str = "INR"
+    currency: str = ""              # ignored: Buddilio always charges in the base currency
     use_credit: bool = True
 
 
@@ -1523,6 +1523,47 @@ async def partner_stats(user: dict = Depends(partner_only)):
             "rating_count": len(revs)}
 
 
+@api.get("/partner/door-takings")
+async def partner_door_takings(user: dict = Depends(get_current_user)):
+    """What this organiser collected at the door, and what commission Buddilio is owed on it."""
+    evs = await db.events.find({"partner_id": user["id"]}, {"title": 1}).limit(500).to_list(500)
+    titles = {str(e["_id"]): e.get("title", "") for e in evs}
+    if not titles:
+        return {"items": [], "collected": 0.0, "commission_owed": 0.0, "commission_recovered": 0.0,
+                "guests": 0, "currency": BASE_CURRENCY}
+    orders = await db.orders.find({"ref_id": {"$in": list(titles)}, "gateway": "door",
+                                   "payment_status": "paid"}).sort("created_at", -1) \
+        .limit(1000).to_list(1000)
+    settlements = {s["order_no"]: s for s in
+                   await db.vendor_settlements.find({"source": "door_sale"}).limit(1000).to_list(1000)}
+    rates = await fx_rates()
+
+    def to_base(amount: float, cur: str) -> float:
+        return round(float(amount or 0) / (rates.get((cur or BASE_CURRENCY).upper()) or 1.0), 2)
+
+    items, collected, owed, recovered, guests = [], 0.0, 0.0, 0.0, 0
+    for o in orders:
+        st = settlements.get(o["order_no"]) or {}
+        commission = float(st.get("commission") or 0)
+        amount = float(o.get("charge_total") or o["total"])
+        cur = o.get("currency", BASE_CURRENCY)
+        collected += to_base(amount, cur)
+        guests += int(o.get("quantity") or 1)
+        if st.get("status") == "paid":
+            recovered += to_base(commission, cur)
+        else:
+            owed += to_base(commission, cur)
+        items.append({"order_no": o["order_no"], "event": titles.get(o["ref_id"], o["item_name"]),
+                      "guest": o.get("guest_name") or o.get("user_name", ""),
+                      "guests": int(o.get("quantity") or 1), "amount": amount,
+                      "currency": cur,
+                      "method": o.get("payment_method", "cash"), "commission": commission,
+                      "settled": st.get("status") == "paid", "at": o.get("paid_at", o["created_at"])})
+    return {"items": items, "collected": round(collected, 2), "commission_owed": round(owed, 2),
+            "commission_recovered": round(recovered, 2), "guests": guests,
+            "currency": BASE_CURRENCY}
+
+
 @api.get("/partner/events/{event_id}/participants")
 async def event_participants(event_id: str, user: dict = Depends(partner_only)):
     ev = await db.events.find_one({"_id": ObjectId(event_id)})
@@ -1642,10 +1683,9 @@ async def checkout(payload: CheckoutIn, user: dict = Depends(get_current_user)):
         discount += round(subtotal * coupon["value"] / 100, 2) if coupon["discount_type"] == "percent" else coupon["value"]
     discount = min(discount, subtotal)
 
-    currency = (payload.currency or BASE_CURRENCY).upper()
+    # The header currency picker is display-only: Buddilio always charges in the base currency.
+    currency = BASE_CURRENCY
     rates = await fx_rates()
-    if currency not in rates:
-        raise HTTPException(status_code=400, detail="We don't support that currency yet.")
     tax_pct, tax_label = tax_for(currency, tax_pct, user.get("country_code", ""))
     if payload.kind in ("companion", "wallet", "travel", "provider_fee"):
         # Hangouts are person-to-person time; the guest pays exactly the agreed amount.
@@ -1817,7 +1857,7 @@ async def payment_config():
             "simulation_enabled": (not (razorpay_client() or os.environ.get("STRIPE_API_KEY")
                                         or paypal.enabled()))
             and os.environ.get("ALLOW_SIMULATED_PAYMENTS", "").lower() in ("1", "true", "yes"),
-            "base_currency": "INR", "currencies": [{"code": k, **v} for k, v in conf.items()],
+            "base_currency": BASE_CURRENCY, "currencies": [{"code": k, **v} for k, v in conf.items()],
             "methods": {"INR": ["upi", "card", "netbanking", "wallet"], "other": ["card"]}}
 
 
@@ -3503,12 +3543,17 @@ async def cms_pages():
 async def admin_stats(days: int = 30, user: dict = Depends(require_perm("analytics:view"))):
     since = iso(now_utc() - timedelta(days=days))
     paid = await db.orders.find({"payment_status": "paid", "created_at": {"$gte": since}}).limit(2000).to_list(2000)
+    rates = await fx_rates()
+
+    def base(o: dict) -> float:
+        return float(o.get("total") or 0) / (rates.get((o.get("currency") or BASE_CURRENCY).upper()) or 1.0)
+
     def rev(kind):
-        return round(sum(o["total"] for o in paid if o["kind"] == kind), 2)
+        return round(sum(base(o) for o in paid if o["kind"] == kind), 2)
     users_total = await db.users.count_documents({"role": "user"})
     series = {}
     for o in paid:
-        series[o["created_at"][:10]] = round(series.get(o["created_at"][:10], 0) + o["total"], 2)
+        series[o["created_at"][:10]] = round(series.get(o["created_at"][:10], 0) + base(o), 2)
     reg_series = {}
     for u in await db.users.find({"created_at": {"$gte": since}}, {"created_at": 1}).limit(2000).to_list(2000):
         reg_series[u["created_at"][:10]] = reg_series.get(u["created_at"][:10], 0) + 1
@@ -3521,7 +3566,7 @@ async def admin_stats(days: int = 30, user: dict = Depends(require_perm("analyti
         "events": await db.events.count_documents({}),
         "upcoming_events": await db.events.count_documents({"status": "published", "starts_at": {"$gte": iso(now_utc())}}),
         "participations": await db.event_participants.count_documents({}),
-        "gross_sales": round(sum(o["total"] for o in paid), 2),
+        "gross_sales": round(sum(base(o) for o in paid), 2), "currency": BASE_CURRENCY,
         "membership_revenue": rev("membership"), "event_revenue": rev("event"), "pass_revenue": rev("product"),
         "refunds": await db.orders.count_documents({"refund_status": {"$in": ["requested", "refunded"]}}),
         "pending_events": await db.events.count_documents({"status": "submitted"}),
@@ -4300,11 +4345,11 @@ async def generate_payouts():
         await db.payouts.insert_one({
             "partner_id": ev["partner_id"], "event_id": eid, "event_title": ev["title"],
             "orders": len(orders), "gross": gross, "fee_percent": PLATFORM_FEE, "fee": fee,
-            "net": round(gross - fee, 2), "currency": "INR", "status": "pending",
+            "net": round(gross - fee, 2), "currency": BASE_CURRENCY, "status": "pending",
             "created_at": iso(now_utc())})
         created += 1
         await notify(ev["partner_id"], "Payout ready",
-                     f"Your payout for {ev['title']} (₹{round(gross - fee):,}) is queued for settlement.",
+                     f"Your payout for {ev['title']} ({fmt_money(round(gross - fee, 2))}) is queued for settlement.",
                      "order", "/partner")
     return created
 
@@ -4330,7 +4375,14 @@ async def admin_payouts(status: str = "", user: dict = Depends(require_perm("pay
         partner = partners.get(p["partner_id"])
         p["partner"] = clean(partner) if partner else None
         out.append(p)
-    return {"items": out}
+    rates = await fx_rates()
+
+    def base(row: dict) -> float:
+        return float(row.get("net") or 0) / (rates.get((row.get("currency") or BASE_CURRENCY).upper()) or 1.0)
+
+    return {"items": out, "currency": BASE_CURRENCY,
+            "totals": {"pending": round(sum(base(p) for p in out if p["status"] == "pending"), 2),
+                       "paid": round(sum(base(p) for p in out if p["status"] == "paid"), 2)}}
 
 
 @api.post("/admin/payouts/{pid}/pay")
@@ -5332,11 +5384,11 @@ async def test_email_template(key: str, user: dict = Depends(require_perm("conte
                "event_title": "Rooftop Jazz & Tapas Night", "city": "Dubai", "venue": "Sky Lounge",
                "host": "Nightfall Collective", "when": "Fri 04 Sep, 08:30 PM",
                "cancellation": "Free cancellation up to 24 hours before.",
-               "receipt": "<p><b>Sample receipt</b><br/>1 ticket · ₹2,500</p>",
+               "receipt": "<p><b>Sample receipt</b><br/>1 ticket · $30.00</p>",
                "plan_name": "Buddilio Plus", "valid_until": "31 Dec 2026", "currency": BASE_CURRENCY,
-               "total": "12,500.00", "intro": "3 payouts across 2 vendors are still pending.",
+               "total": "150.00", "intro": "3 payouts across 2 vendors are still pending.",
                "rows": "<tr><td style='padding:6px 0'><b>Nightfall Collective</b></td>"
-                       "<td style='text-align:right'>₹ 8,000.00</td></tr>",
+                       "<td style='text-align:right'>$ 96.00</td></tr>",
                "reason": "The document was too blurry to read.", "role_label": "Operations",
                "inviter": user.get("full_name", "Buddilio"), "manager_name": "Ops Manager",
                "note": "Looking forward to hosting with you.", "invite_days": 14, "event_count": 12,
@@ -8472,13 +8524,18 @@ async def admin_ledger(frm: str = "", to: str = "", kind: str = "", direction: s
                        q: str = "", status: str = "", page: int = 1, limit: int = 50,
                        user: dict = Depends(require_perm("finance:view"))):
     rows = await ledger_rows(frm, to, kind, direction, q, status)
+    rates = await fx_rates()
+
+    def base(row: dict, field: str) -> float:
+        return float(row.get(field) or 0) / (rates.get((row.get("currency") or BASE_CURRENCY).upper()) or 1.0)
+
     money_in = [r for r in rows if r["direction"] == "in"]
     paid_out = [r for r in rows if r["direction"] == "out"]
-    totals = {"collected": round(sum(r["gross"] for r in money_in), 2),
-              "commission": round(sum(r["commission"] for r in money_in), 2),
-              "tax": round(sum(r["tax"] for r in money_in), 2),
-              "payouts_pending": round(sum(r["payout"] for r in paid_out if r["status"] == "pending"), 2),
-              "payouts_paid": round(sum(r["payout"] for r in paid_out if r["status"] == "paid"), 2),
+    totals = {"collected": round(sum(base(r, "gross") for r in money_in), 2),
+              "commission": round(sum(base(r, "commission") for r in money_in), 2),
+              "tax": round(sum(base(r, "tax") for r in money_in), 2),
+              "payouts_pending": round(sum(base(r, "payout") for r in paid_out if r["status"] == "pending"), 2),
+              "payouts_paid": round(sum(base(r, "payout") for r in paid_out if r["status"] == "paid"), 2),
               "entries": len(rows)}
     start = (page - 1) * limit
     return {"items": rows[start:start + limit], "total": len(rows), "page": page,
@@ -8612,6 +8669,7 @@ vendor_routes.register({
     "get_current_user": get_current_user, "notify": notify, "send_tpl": send_tpl,
     "first_name": first_name, "perms_of": perms_of, "Response": Response,
     "site_url": lambda: FRONTEND_URL,
+    "fx_rates": fx_rates, "base_currency": BASE_CURRENCY,
 })
 
 app.include_router(api)

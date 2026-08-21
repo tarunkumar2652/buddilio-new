@@ -41,7 +41,7 @@ export const Ledger = () => {
           ["Payouts paid", t.payouts_paid, "paid"]].map(([label, value, key]) => (
           <div key={key} className="rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-[11px] uppercase tracking-widest text-slate-400">{label}</p>
-            <p className="mt-1.5 text-xl font-bold" data-testid={`ledger-total-${key}`}>{money(value || 0)}</p>
+            <p className="mt-1.5 text-xl font-bold" data-testid={`ledger-total-${key}`}>{money(value || 0, data?.currency)}</p>
           </div>
         ))}
       </div>
@@ -91,9 +91,9 @@ export const Ledger = () => {
                   <p className="font-semibold">{r.client}</p>
                   <p className="text-xs text-slate-500">{r.email || r.description}</p>
                 </td>
-                <td className="px-4 py-3 text-right font-semibold">{money(r.gross)}</td>
-                <td className="px-4 py-3 text-right">{money(r.commission)}</td>
-                <td className="px-4 py-3 text-right">{money(r.payout)}</td>
+                <td className="px-4 py-3 text-right font-semibold">{money(r.gross, r.currency)}</td>
+                <td className="px-4 py-3 text-right">{money(r.commission, r.currency)}</td>
+                <td className="px-4 py-3 text-right">{money(r.payout, r.currency)}</td>
                 <td className="px-4 py-3"><Badge tone={r.status === "paid" ? "green" : r.status === "pending" ? "amber" : "slate"}>{r.status}</Badge></td>
                 <td className="px-4 py-3">
                   {r.direction === "in" && (

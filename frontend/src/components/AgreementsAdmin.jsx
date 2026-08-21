@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Download, X } from "lucide-react";
-import { api, errMsg, fmtDate, fileUrl } from "@/lib/api";
+import { api, errMsg, fmtDate, fileUrl, money } from "@/lib/api";
 import { Spinner, Badge } from "@/components/Shared";
 import { downloadAgreementPdf } from "@/pages/VendorAgreement";
 
@@ -19,7 +19,7 @@ const F = ({ label, hint, children }) => (
 );
 
 const SCHEDULE_BLANK = {
-  service_name: "", currency: "INR", vendor_net_rate: 1500, pricing_floor: 1500,
+  service_name: "", currency: "USD", vendor_net_rate: 20, pricing_floor: 20,
   commission_type: "percentage", commission_value: 20, commission_fixed: 0,
   platform_fee_percent: 10, platform_fee_fixed: 0, tax_percent: 18,
   dynamic_pricing_enabled: false, promotion_discount: 0, discount_funding: "buddilio",
@@ -116,7 +116,7 @@ export const AgreementsAdmin = () => {
                     {v.agreement ? <>{v.agreement.agreement_number}<br /><Badge tone={tone(v.agreement.status)}>{v.agreement.status.replace(/_/g, " ")}</Badge></> : "—"}
                   </td>
                   <td className="px-4 py-3 text-xs">
-                    {v.schedule ? `₹${v.schedule.vendor_net_rate} · ${v.schedule.commission_value}${v.schedule.commission_type === "percentage" ? "%" : ""} · fee ${v.schedule.platform_fee_percent}%` : "not set"}
+                    {v.schedule ? `${money(v.schedule.vendor_net_rate || 0)} · ${v.schedule.commission_value}${v.schedule.commission_type === "percentage" ? "%" : ""} · fee ${v.schedule.platform_fee_percent}%` : "not set"}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap justify-end gap-1.5">
@@ -174,7 +174,7 @@ export const AgreementsAdmin = () => {
                   <td className="px-4 py-3">v{a.version}</td>
                   <td className="px-4 py-3"><Badge tone={tone(a.status)}>{a.status.replace(/_/g, " ")}</Badge></td>
                   <td className="px-4 py-3 text-xs">{a.commission_label}</td>
-                  <td className="px-4 py-3 text-xs">₹{a.schedule?.vendor_net_rate} / ₹{a.schedule?.pricing_floor}</td>
+                  <td className="px-4 py-3 text-xs">{money(a.schedule?.vendor_net_rate || 0)} / {money(a.schedule?.pricing_floor || 0)}</td>
                   <td className="px-4 py-3 text-xs">{a.accepted_at ? `${fmtDate(a.accepted_at)}\n${a.accepted_by}` : "—"}</td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap justify-end gap-1.5">
@@ -333,14 +333,14 @@ const ScheduleModal = ({ ctx, meta, onClose, onSaved }) => {
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5" data-testid="sched-preview">
             <p className="font-bold">Price preview</p>
             <div className="mt-3 grid gap-1.5 text-sm sm:grid-cols-2">
-              <p>Vendor net rate: <b>₹{preview.vendor_net_rate}</b></p>
-              <p>Commission: <b>₹{preview.commission}</b></p>
-              <p>Platform fee: <b>₹{preview.platform_fee}</b></p>
-              <p>Dynamic adjustment: <b>₹{preview.dynamic_adjustment}</b></p>
-              <p>Customer discount: <b>₹{preview.discount}</b></p>
-              <p>Tax: <b>₹{preview.tax}</b></p>
-              <p className="text-base">Estimated customer price: <b data-testid="preview-customer-price">₹{preview.customer_price}</b></p>
-              <p className="text-base">Vendor settlement: <b data-testid="preview-settlement">₹{preview.vendor_settlement}</b></p>
+              <p>Vendor net rate: <b>{money(preview.vendor_net_rate || 0)}</b></p>
+              <p>Commission: <b>{money(preview.commission || 0)}</b></p>
+              <p>Platform fee: <b>{money(preview.platform_fee || 0)}</b></p>
+              <p>Dynamic adjustment: <b>{money(preview.dynamic_adjustment || 0)}</b></p>
+              <p>Customer discount: <b>{money(preview.discount || 0)}</b></p>
+              <p>Tax: <b>{money(preview.tax || 0)}</b></p>
+              <p className="text-base">Estimated customer price: <b data-testid="preview-customer-price">{money(preview.customer_price || 0)}</b></p>
+              <p className="text-base">Vendor settlement: <b data-testid="preview-settlement">{money(preview.vendor_settlement || 0)}</b></p>
             </div>
           </div>
         )}
@@ -486,7 +486,7 @@ const AgreementDetail = ({ id, onClose }) => {
               <div className="mt-2 divide-y divide-slate-100 text-sm" data-testid="detail-schedules">
                 {d.schedules.map((s) => (
                   <div key={s.id} className="py-2">
-                    v{s.version} · {s.status} · net ₹{s.vendor_net_rate} · commission {s.commission_value}
+                    v{s.version} · {s.status} · net {money(s.vendor_net_rate || 0)} · commission {s.commission_value}
                     {s.commission_type === "percentage" ? "%" : ""} · fee {s.platform_fee_percent}% · {s.settlement_cycle}
                   </div>
                 ))}

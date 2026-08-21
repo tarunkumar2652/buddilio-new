@@ -90,7 +90,7 @@ class ScheduleIn(BaseModel):
     model_config = ConfigDict(extra="ignore")
     service_id: str = ""
     service_name: str = ""
-    currency: str = "INR"
+    currency: str = "USD"
     vendor_net_rate: float = Field(ge=0)
     pricing_floor: float = Field(default=0, ge=0)
     commission_type: Literal["percentage", "fixed", "hybrid"] = "percentage"
@@ -193,7 +193,7 @@ async def entity_settings() -> dict:
 
 
 def schedule_summary(s: dict) -> str:
-    return (f"Net rate {agr.money(s.get('vendor_net_rate'), s.get('currency', 'INR'))} · "
+    return (f"Net rate {agr.money(s.get('vendor_net_rate'), s.get('currency') or D.get('base_currency', 'USD'))} · "
             f"commission {agr.commission_label(s)} · platform fee {agr.platform_fee_label(s)} · "
             f"settlement {s.get('settlement_cycle', 'T+7')}")
 
@@ -442,10 +442,19 @@ def register(deps: dict):
         v = await my_vendor(user)
         rows = await db.vendor_settlements.find({"vendor_id": str(v["_id"])}).sort("created_at", -1).to_list(500)
         out = [clean(r) for r in rows]
+        rates = await D["fx_rates"]()
+        base = D["base_currency"]
+
+        def to_base(amount, cur: str) -> float:
+            return float(amount or 0) / (rates.get((cur or base).upper()) or 1.0)
+
         return {"items": out, "payout_hold": bool(v.get("payout_hold")),
                 "payout_hold_reason": v.get("payout_hold_reason", ""),
-                "totals": {"paid": round(sum(r["net"] for r in out if r["status"] == "paid"), 2),
-                           "pending": round(sum(r["net"] for r in out if r["status"] != "paid"), 2)}}
+                "totals": {"paid": round(sum(to_base(r["net"], r.get("currency"))
+                                             for r in out if r["status"] == "paid"), 2),
+                           "pending": round(sum(to_base(r["net"], r.get("currency"))
+                                                for r in out if r["status"] != "paid"), 2),
+                           "currency": base}}
 
     # ---------------- acceptance ----------------
     @api.post("/vendor/agreement/otp")
@@ -662,10 +671,18 @@ def register(deps: dict):
 
     async def settlement_totals(q: dict) -> dict:
         rows = [D["clean"](r) for r in await db.vendor_settlements.find(q).limit(5000).to_list(5000)]
-        by = lambda s: round(sum(r["net"] for r in rows if r["status"] == s), 2)  # noqa: E731
+        rates = await D["fx_rates"]()
+        base = D["base_currency"]
+
+        def to_base(amount, cur: str) -> float:
+            return float(amount or 0) / (rates.get((cur or base).upper()) or 1.0)
+
+        by = lambda s: round(sum(to_base(r["net"], r.get("currency"))                    # noqa: E731
+                                 for r in rows if r["status"] == s), 2)
         return {"count": len(rows), "due": by("pending"), "batched": by("batched"), "paid": by("paid"),
-                "commission": round(sum(r.get("commission", 0) for r in rows), 2),
-                "platform_fee": round(sum(r.get("platform_fee", 0) for r in rows), 2)}
+                "commission": round(sum(to_base(r.get("commission"), r.get("currency")) for r in rows), 2),
+                "platform_fee": round(sum(to_base(r.get("platform_fee"), r.get("currency")) for r in rows), 2),
+                "currency": base}
 
     @api.get("/admin/vendor-settlements")
     async def admin_settlements(status: str = "", vendor_id: str = "", user: dict = Depends(pay_view)):
@@ -707,7 +724,8 @@ def register(deps: dict):
                 continue
             batch = {
                 "batch_no": "BUD-PR-" + uuid.uuid4().hex[:8].upper(), "vendor_id": vid,
-                "vendor_name": v.get("legal_name", ""), "currency": items[0].get("currency", "INR"),
+                "vendor_name": v.get("legal_name", ""),
+                "currency": items[0].get("currency") or D["base_currency"],
                 "settlement_ids": [str(i["_id"]) for i in items], "count": len(items),
                 "gross": round(sum(float(i.get("gross") or 0) for i in items), 2),
                 "commission": round(sum(float(i.get("commission") or 0) for i in items), 2),
@@ -742,7 +760,8 @@ def register(deps: dict):
         head = "Beneficiary Name,Account Number,IFSC,Bank,Amount,Currency,Reference,Remarks\n"
         cells = [bank.get("bank_account_name", ""), bank.get("bank_account_number", ""),
                  bank.get("bank_ifsc", ""), bank.get("bank_name", ""), f"{b['net']:.2f}",
-                 b.get("currency", "INR"), b["batch_no"], f"Buddilio settlement {b['count']} booking(s)"]
+                 b.get("currency") or D["base_currency"], b["batch_no"],
+                 f"Buddilio settlement {b['count']} booking(s)"]
         line = ",".join('"' + str(c).replace('"', '""') + '"' for c in cells) + "\n"
         await audit(user, "VENDOR_PAYOUT_BATCH_EXPORTED", "vendor_payout_batch", bid, {})
         return deps["Response"](content=head + line, media_type="text/csv",
@@ -844,8 +863,14 @@ def register(deps: dict):
         ).limit(5000).to_list(5000)
         if not rows:
             return None
-        commission = round(sum(float(r.get("commission") or 0) for r in rows), 2)
-        platform_fee = round(sum(float(r.get("platform_fee") or 0) for r in rows), 2)
+        rates = await D["fx_rates"]()
+        base_cur = D["base_currency"]
+
+        def to_base(amount, cur: str) -> float:
+            return float(amount or 0) / (rates.get((cur or base_cur).upper()) or 1.0)
+
+        commission = round(sum(to_base(r.get("commission"), r.get("currency")) for r in rows), 2)
+        platform_fee = round(sum(to_base(r.get("platform_fee"), r.get("currency")) for r in rows), 2)
         seq = await db.vendor_commission_invoices.count_documents({"period": period}) + 1
         entity = ((await db.settings.find_one({}) or {}).get("vendor_entity") or {})
         inv = {
@@ -853,9 +878,9 @@ def register(deps: dict):
             "vendor_name": v.get("legal_name", ""), "vendor_email": v.get("email", ""),
             "vendor_pan": v.get("pan", ""), "vendor_gstin": v.get("gstin", ""),
             "vendor_address": v.get("registered_address", ""),
-            "currency": rows[0].get("currency", "INR"), "bookings": len(rows),
-            "gross": round(sum(float(r.get("gross") or 0) for r in rows), 2),
-            "vendor_settlement": round(sum(float(r.get("net") or 0) for r in rows), 2),
+            "currency": base_cur, "bookings": len(rows),
+            "gross": round(sum(to_base(r.get("gross"), r.get("currency")) for r in rows), 2),
+            "vendor_settlement": round(sum(to_base(r.get("net"), r.get("currency")) for r in rows), 2),
             "commission": commission, "platform_fee": platform_fee,
             "total": round(commission + platform_fee, 2),
             "lines": [{"description": "Buddilio commission on bookings", "basis": f"{len(rows)} booking(s)",

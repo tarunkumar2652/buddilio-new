@@ -1,0 +1,37 @@
+{
+  "summary": "Tight re-test of the iteration_46 action items only. ALL SIX FIXES VERIFIED WORKING, backend + frontend. New suite /app/backend/tests/test_iteration47_usd_totals.py = 15/15 pass; combined with the existing iteration-45 and iteration-46 suites = 50/50 pass (after I corrected two stale assertions inside test_iteration46_currency_fixes.py that compared page-1 rows and money-out rows against whole-set money-in totals). Live values: /admin/ledger currency=USD totals {collected 3077.99, commission 2364.11, tax 456.71, payouts_pending 171.42, payouts_paid 293.59}; /admin/stats?days=3650 currency=USD gross 3077.99 (dashboard default 30d shows 2578.35 / 780.54 / 405.37 / 1392.44 exactly as expected) with revenue_series summing to gross; /admin/payouts currency=USD totals {pending 171.42, paid 293.59} and every row carries its own currency (all INR here). Playwright as admin: Ledger cards $3,077.99 / $2,364.11 / $456.71 / $171.42 / $293.59 with all historical rows printed in \u20b9; Dashboard money cards $2,578.35 / $780.54 / $405.37 / $1,392.44 with a USD-scale revenue trend (peak ~700, not 6-figure); Payouts cards $171.42 / $293.59 with \u20b9 rows; Orders rows \u20b91,179 / \u20b92,359 / \u20b96,879 per row currency. /events and /partner consoles are completely clean - the '<span> cannot be a child of <option>' warning is gone (option labels are single template-literal children). Events price buckets are now Under $25 / $50 / $100 and filter the USD catalogue correctly (Under $25 leaves only 3.60-22.80 events). Regression: checkout with currency='INR' is still forced to USD (charge < $500, PayPal amount matches), door takings currency=USD, vendor vs admin settlement totals agree (paid 38.40 / pending 22.80), walk-in cash sale, QR redeem + double-redeem rejection and the membership refund guard all still pass. PayPal was never approved and no Connect-webhook button was pressed. The one pending order my checkout test created was deleted (teardown printed 'deleted 1 pending orders').",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "vendor_routes.py:874 (commission invoice builder)", "issue": "Still has an 'INR' currency fallback (rows[0].get('currency','INR')) and sums gross/net/commission/platform_fee across rows without FX conversion, so a mixed-currency period would produce a wrong invoice. Same pattern as the batch builder you just fixed - use D['base_currency'] + to_base()."},
+      {"endpoint": "vendor_routes.py:196 (schedule_summary)", "issue": "s.get('currency','INR') fallback in the agreement schedule label; should default to BASE_CURRENCY."},
+      {"endpoint": "vendor_routes.py:763 (payout batch CSV export)", "issue": "b.get('currency','INR') fallback in the export row; harmless today because batches now store a currency, but it is the last INR literal in the payout path."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin > Payouts", "issues": ["Leftover test data from older testing runs is STILL visible (iteration_46 action item 7 was not done): UTR 'TEST_UTR_80c294' and 'TEST_UTR_9c1e77' on the two paid payout rows."]},
+      {"screen": "Admin > Ledger filters", "issues": ["The From/To filters are raw <input type='date'> so they render the browser default 'mm/dd/yyyy' picker instead of the shadcn calendar used elsewhere."]},
+      {"screen": "Events price filter", "issues": ["Labels read 'Under $25.00 / $50.00 / $100.00'; the trailing .00 on a round bucket is noisy - cosmetic only, filtering is correct."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration47_usd_totals.py", "/app/backend/tests/i47_dump.py", "/app/test_reports/pytest/i47_regression.xml"],
+  "action_items": [
+    "Optional cleanup: purge the TEST_UTR_80c294 / TEST_UTR_9c1e77 references still showing on Admin > Payouts.",
+    "Optional: replace the last three 'INR' literals in vendor_routes.py (lines 196, 763, 874) with BASE_CURRENCY and convert the commission-invoice sums with to_base()."
+  ],
+  "critical_code_review_comments": [
+    "The to_base()/base() conversion helper is now duplicated inline in at least five places (admin_ledger, admin_stats, admin_payouts, vendor settlement_totals, door takings). Extract one shared async helper in a currency module - the vendor_routes.py:874 invoice builder is the exact spot that was missed because the pattern is copy-pasted.",
+    "server.py is still ~8,750 lines; the currency/pricing/checkout block is the obvious first module to split out."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration47_usd_totals.py", "/app/backend/tests/i47_dump.py", "/app/backend/tests/test_iteration46_currency_fixes.py"],
+  "success_rate": {"backend": "100% (15/15 new + 35/35 iteration-45/46 regression)", "frontend": "100% of the 6 requested fixes verified"},
+  "seed_data_creation": "None persisted. One pending USD checkout order for arjun.sethi@example.com was created by the forced-USD regression test and deleted in teardown (verified by the cleanup log line).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md used as-is (admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123, arjun.sethi@example.com/User@123). PayPal LIVE respected.",
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/test_iteration47_usd_totals.py /app/backend/tests/test_iteration46_currency_fixes.py /app/backend/tests/test_iteration45_usd_forced.py -n 0` -> 50 passed. NOTE: /app/backend/tests/test_iteration44_usd_door.py has 2 permanently stale failures (test_display_currency_switch_does_not_misscale_paypal and test_create_aed_event_and_checkout) because they still expect the charge currency to follow the display/organiser currency, which iteration-45 deliberately changed to always-USD; they should be rewritten or removed, they are NOT product bugs. Useful facts: POST /api/checkout takes {kind,item_id,quantity} and returns {order:{...}, credit_balance}; /api/events items have no 'currency' field (price is always base USD; price_currency is only the organiser display label); /api/vendor/settlements returns currency inside totals, not at the top level; /admin/stats defaults to days=30 so the dashboard total (2578.35) is smaller than the all-time ledger collected (3077.99).",
+  "rca_of_the_issue": "No new defects. All six iteration_46 items are genuinely implemented: admin_ledger/admin_stats/admin_payouts each build a local base() that divides by the row's fx rate and return currency=BASE_CURRENCY; Ledger.jsx formats totals with data.currency and rows with the row currency; Admin.jsx uses money(s.gross_sales, s.currency), meta.totals with meta.currency, and money(o.charge_total ?? o.total, o.currency); Events.jsx and Partner.jsx option labels are now single template-literal children which removes the display:contents span the preview instrumentation was injecting; Events price buckets are 25/50/100. The two failures I hit in the older iteration-46 suite were test-scope bugs of my predecessor (comparing page-1 rows, and money-out rows, against whole-set money-in totals), which I corrected in place."
+}

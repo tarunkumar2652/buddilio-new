@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Download, FileText, ShieldCheck } from "lucide-react";
-import { api, errMsg, fmtDate } from "@/lib/api";
+import { api, errMsg, fmtDate, money } from "@/lib/api";
 import { Spinner, Badge, SEO } from "@/components/Shared";
 import { ImageUpload } from "@/components/ImageUpload";
 
@@ -472,10 +472,10 @@ const Settlements = ({ data }) => (
   <div className="space-y-4" data-testid="vendor-settlements">
     <div className="grid grid-cols-2 gap-3">
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
-        <p className="overline">Settled</p><p className="mt-1 text-xl font-bold">₹{(data?.totals?.paid || 0).toLocaleString()}</p>
+        <p className="overline">Settled</p><p className="mt-1 text-xl font-bold">{money(data?.totals?.paid || 0, data?.totals?.currency)}</p>
       </div>
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
-        <p className="overline">Pending</p><p className="mt-1 text-xl font-bold">₹{(data?.totals?.pending || 0).toLocaleString()}</p>
+        <p className="overline">Pending</p><p className="mt-1 text-xl font-bold">{money(data?.totals?.pending || 0, data?.totals?.currency)}</p>
       </div>
     </div>
     <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
@@ -490,10 +490,10 @@ const Settlements = ({ data }) => (
           {(data?.items || []).map((r) => (
             <tr key={r.id} data-testid={`vendor-settlement-${r.id}`}>
               <td className="px-4 py-3 font-mono text-xs">{r.order_no}</td>
-              <td className="px-4 py-3 text-right">₹{r.gross?.toLocaleString()}</td>
-              <td className="px-4 py-3 text-right">₹{r.commission?.toLocaleString()}</td>
-              <td className="px-4 py-3 text-right">₹{r.platform_fee?.toLocaleString()}</td>
-              <td className="px-4 py-3 text-right font-semibold">₹{r.net?.toLocaleString()}</td>
+              <td className="px-4 py-3 text-right">{money(r.gross || 0, r.currency)}</td>
+              <td className="px-4 py-3 text-right">{money(r.commission || 0, r.currency)}</td>
+              <td className="px-4 py-3 text-right">{money(r.platform_fee || 0, r.currency)}</td>
+              <td className="px-4 py-3 text-right font-semibold">{money(r.net || 0, r.currency)}</td>
               <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(r.due_on)}</td>
               <td className="px-4 py-3">
                 <Badge tone={r.status === "paid" ? "green" : "amber"}>{r.status}</Badge>
@@ -536,7 +536,7 @@ const CommissionInvoices = () => {
         {items.map((i) => (
           <li key={i.id} className="flex items-center justify-between gap-3 py-2.5" data-testid={`vendor-ci-${i.id}`}>
             <span className="text-sm">
-              <b className="font-mono text-xs">{i.invoice_no}</b> · {i.period} · ₹{i.total?.toLocaleString()}
+              <b className="font-mono text-xs">{i.invoice_no}</b> · {i.period} · {money(i.total || 0, i.currency)}
             </span>
             <button onClick={() => download(i)} data-testid={`vendor-ci-pdf-${i.id}`}
               className="rounded-full border border-slate-200 px-4 py-1.5 text-[11px] font-bold">Download PDF</button>
@@ -557,7 +557,7 @@ const History = ({ data }) => (
     }))} />
     <Section title="Commercial schedules" rows={(data?.schedules || []).map((s) => ({
       id: s.id, main: `Version ${s.version} · ${s.status}`,
-      sub: `Net ₹${s.vendor_net_rate} · commission ${s.commission_value}${s.commission_type === "percentage" ? "%" : ""} · platform fee ${s.platform_fee_percent}% · ${s.settlement_cycle} · from ${String(s.effective_from).slice(0, 10)}`,
+      sub: `Net ${money(s.vendor_net_rate, s.currency)} · commission ${s.commission_value}${s.commission_type === "percentage" ? "%" : ""} · platform fee ${s.platform_fee_percent}% · ${s.settlement_cycle} · from ${String(s.effective_from).slice(0, 10)}`,
     }))} />
     <Section title="Acceptances" rows={(data?.acceptances || []).map((a) => ({
       id: a.id, main: `${a.accepted_by} · v${a.version}`,

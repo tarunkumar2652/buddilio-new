@@ -44,7 +44,7 @@ export const MyLedger = ({ compact = false }) => {
   return (
     <div className="space-y-6" data-testid="my-ledger">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Card label={`Total paid (in ${d.currency || "INR"})`} value={money(t.paid || 0)} testid="my-ledger-paid" />
+        <Card label={`Total paid (in ${d.currency || "USD"})`} value={money(t.paid || 0)} testid="my-ledger-paid" />
         <Card label="Buddilio credit" value={money(t.credit_balance || 0)} testid="my-ledger-credit" />
         <Card label="You've earned" value={money(t.earned || 0)} testid="my-ledger-earned" />
         <Card label="Earnings pending" value={money(t.earned_pending || 0)} testid="my-ledger-earned-pending" />

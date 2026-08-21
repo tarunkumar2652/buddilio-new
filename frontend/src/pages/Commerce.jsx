@@ -333,14 +333,9 @@ export function Checkout() {
       <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="font-semibold">{order.item_name}</p>
-          <label className="flex items-center gap-2 text-xs font-bold text-slate-600">
-            <Globe className="h-4 w-4" />Pay in
-            <select data-testid="checkout-currency" value={currency}
-              onChange={(e) => { setCurrency(e.target.value); create(e.target.value, coupon); }}
-              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-bold">
-              {list.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
-            </select>
-          </label>
+          <span className="flex items-center gap-2 text-xs font-bold text-slate-600" data-testid="checkout-currency">
+            <Globe className="h-4 w-4" />Billed in {order.currency}
+          </span>
         </div>
         <div className="mt-5 space-y-2 text-sm">
           <div className="flex justify-between"><span className="text-slate-500">Subtotal</span><span>{amt(order.charge_subtotal)}</span></div>
@@ -353,7 +348,11 @@ export function Checkout() {
             </div>
           )}
           <div className="flex justify-between border-t border-slate-200 pt-3 font-bold text-base"><span>Total payable</span><span data-testid="order-total">{amt(order.charge_total)}</span></div>
-          {!isINR && <p className="text-xs text-slate-400">Billed in {currency} · {fmt(order.total)} equivalent</p>}
+          {order.currency !== code && (
+            <p className="text-xs text-slate-400" data-testid="checkout-fx-hint">
+              Charged in {order.currency} · about {fmt(order.total)} in {code}
+            </p>
+          )}
         </div>
 
         {(order.credit_applied > 0 || balance > 0) && (
@@ -365,7 +364,7 @@ export function Checkout() {
               <span className="font-semibold">Use my Buddilio credit</span>
               <span className="block text-xs text-slate-500 mt-0.5">
                 {order.credit_applied > 0
-                  ? `${fmt(order.credit_applied)} applied · ${fmt(balance)} left in your wallet`
+                  ? `${amt(order.charge_credit || order.credit_applied)} applied · ${amt(balance)} left in your wallet`
                   : `${fmt(balance)} available from referrals`}
               </span>
             </span>

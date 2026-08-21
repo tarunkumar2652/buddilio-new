@@ -84,6 +84,25 @@ Gurugram-122505, Haryana · no GST · grievance officer Manish.
   now the admin setting `pass_reminder_hours` (default 12, clamped 1-168h) instead of "the day
   before". Reminders run from the `pass-reminders` cron every 2 hours (which also carries the old
   city-openings work, keeping the 5-cron limit).
+- **2026-06-21** **USD rebase** (user: convert prices so real-world price stays the same; keep the
+  header switcher as display-only). `BASE_CURRENCY=USD`, `DEFAULT_CURRENCIES` rebased so USD = 1.0 and
+  INR = 83.33, `settings.currency/base_currency/currencies` rewritten. Catalogue prices, coupons,
+  commercial schedules, the hangout fee, credits/wallet top-ups and `REFERRAL_REWARD` (now 3) were all
+  divided by 83.33 via `backend/scripts/rebase_currency_usd.py` (dry-run by default, `--apply` to
+  commit). **Historical orders/payments/payouts/settlements keep their original currency** — each row
+  carries its own currency and rewriting them would falsify the books.
+  `POST /api/checkout` now **ignores** any `currency` in the payload and always charges
+  `BASE_CURRENCY`; the header/checkout picker is display-only ("Billed in USD" + an FX hint).
+  Every money aggregate converts row currencies to base before summing: `admin_ledger`,
+  `admin_stats`, `admin_payouts`, `vendor_routes.settlement_totals`, `/vendor/settlements`,
+  `partner_door_takings` and the commission-invoice builder all return a `currency` field.
+  **Rule: never sum a money column across rows without dividing by its own currency's FX rate.**
+- **2026-06-21** **Door takings report** (`GET /api/partner/door-takings`, `DoorTakings.jsx` in Partner
+  → Revenue & payouts): what the organiser collected at the door, commission owed vs recovered,
+  walk-in guest count, and a per-sale table in each sale's own currency.
+  Verified: `/app/test_reports/iteration_44/45/46/47.json` (iteration 47: 50/50 backend, all six
+  fixes confirmed) plus direct curl/screenshot checks of the vendor_routes INR literals removed
+  afterwards.
 - **2026-06-21** **Walk-in door sales** (`POST /api/partner/events/{id}/walk-in`, `WalkInDialog.jsx`):
   organiser records a guest who turns up without a pass. Two routes — money collected in person
   (cash/UPI/card machine) creates a paid order (`gateway: "door"`, `collected_by_vendor: true`),
@@ -130,8 +149,8 @@ P2
   `/admin/vendor-documents/expiring` unpaginated.
 - `server.py` ~8.7k lines and `vendor_routes.py` ~1.1k — modularisation candidates (walk-in/door/pass
   logic is the natural next module to split out).
-- Platform currency is inconsistent: `BASE_CURRENCY` resolves to INR while Admin → Settings says USD
-  and PayPal charges USD. Walk-in receipts now use the event's currency, the rest of the app does not.
+- Platform currency is USD everywhere (rebased 2026-06-21). Historical pre-rebase rows stay INR by
+  design; only aggregates are converted.
 
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
