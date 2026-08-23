@@ -9044,7 +9044,12 @@ def xml_escape(s: str) -> str:
 
 
 async def seo_settings() -> dict:
-    return await db.seo_settings.find_one({"_id": "seo"}) or {}
+    doc = await db.seo_settings.find_one({"_id": "seo"}) or {}
+    # Tokens are often pasted as "google-site-verification=abc"; Google only wants the value.
+    if doc.get("gsc_verification"):
+        doc["gsc_verification"] = re.sub(r"^google-site-verification[=:]\s*", "",
+                                         doc["gsc_verification"]).strip()
+    return doc
 
 
 def _public_folder() -> Path:
@@ -9074,16 +9079,23 @@ def _write_key_file(key: str) -> bool:
 
 
 async def ensure_indexnow_key() -> str:
-    """The deployed key file is the source of truth — a DB key nobody can verify is useless."""
+    """Whatever key file the live site serves wins — a key nobody can verify is useless."""
     doc = await seo_settings()
     key = doc.get("indexnow_key")
-    shipped = _shipped_key()
-    if shipped and shipped != key:
-        key = shipped
-        await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"indexnow_key": key}}, upsert=True)
+    base = seo_site_url(doc)
+    pending = doc.get("pending_key")
+    if pending and pending != key and await indexnow_key_live(base, pending):
+        key, pending = pending, None       # the staged key went live with the last publish
+        await db.seo_settings.update_one({"_id": "seo"},
+                                        {"$set": {"indexnow_key": key}, "$unset": {"pending_key": ""}})
     if not key:
-        key = seo.new_key()
+        key = _shipped_key() or seo.new_key()
         await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"indexnow_key": key}}, upsert=True)
+    elif not await indexnow_key_live(base, key):
+        shipped = _shipped_key()
+        if shipped and shipped != key and await indexnow_key_live(base, shipped):
+            key = shipped                  # the deployed file is the only key engines can check
+            await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"indexnow_key": key}}, upsert=True)
     _write_key_file(key)
     return key
 
@@ -9156,7 +9168,9 @@ async def admin_seo(user: dict = Depends(require_perm("content:manage"))):
             "gsc_verification": doc.get("gsc_verification", ""),
             "gsc_live": bool(doc.get("gsc_verification")) and await meta_tag_live(base, doc["gsc_verification"]),
             "indexnow_key": key, "key_file_url": f"{base}/{key}.txt" if key else "",
-            "key_file_live": live, "key_needs_publish": bool(key and shipped == key and not live),
+            "key_file_live": live, "pending_key": doc.get("pending_key", ""),
+            "key_needs_publish": bool(key and shipped == key and not live),
+            "stories": await db.blog_posts.count_documents({"status": "published"}),
             "total": len(urls), "groups": groups,
             "urls": [loc for loc, _p in urls][:400],
             "last_submit": doc.get("last_submit") or None,
@@ -9182,12 +9196,13 @@ async def admin_seo_save(payload: SeoSettingsIn, user: dict = Depends(require_pe
 
 @api.post("/admin/seo/indexnow-key")
 async def admin_seo_rotate_key(user: dict = Depends(require_perm("content:manage"))):
+    """Stages a new key. The old one keeps working until the new key file is live on the site."""
     key = seo.new_key()
-    await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"indexnow_key": key}}, upsert=True)
     written = _write_key_file(key)
+    await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"pending_key": key}}, upsert=True)
     await audit(user, "seo.indexnow_key", "seo", "seo", {})
     return {"ok": True, "indexnow_key": key, "key_file_written": written,
-            "message": "New IndexNow key created. Republish so the key file goes live."}
+            "message": "New key created. Republish the site — until then the current key stays in use."}
 
 
 @api.post("/admin/seo/submit")

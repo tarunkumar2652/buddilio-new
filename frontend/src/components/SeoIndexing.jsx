@@ -89,6 +89,13 @@ export const SeoIndexing = () => {
         <div className="mt-4 flex flex-wrap gap-2" data-testid="seo-groups">
           {Object.entries(d.groups).map(([k, v]) => <Badge key={k} tone="slate">{k}: {v}</Badge>)}
         </div>
+        {!d.stories && (
+          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"
+            data-testid="seo-no-stories">
+            No published Journal stories on this site yet — write or publish one in Journal (blog) so
+            search engines have articles to index. Stories don't copy between preview and the live site.
+          </p>
+        )}
         <div className="mt-4 grid gap-2">
           <Copyable label="Sitemap" value={d.sitemap_url} testid="seo-sitemap-url" />
           <Copyable label="Robots" value={d.robots_url} testid="seo-robots-url" />
@@ -142,6 +149,13 @@ export const SeoIndexing = () => {
           Google does not take submissions this way — use Search Console above.
         </p>
         {d.key_file_url && <div className="mt-3"><Copyable label="Key file" value={d.key_file_url} testid="seo-key-url" /></div>}
+        {!!d.pending_key && (
+          <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600"
+            data-testid="seo-key-pending">
+            A new key is staged and takes over automatically once you republish. Until then the current
+            key keeps working — nothing breaks.
+          </p>
+        )}
         {!d.key_file_live && (
           <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"
             data-testid="seo-key-warning">

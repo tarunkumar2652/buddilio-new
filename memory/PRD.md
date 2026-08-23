@@ -231,6 +231,20 @@ Shipped in Preview, tested (iteration 52: 24 backend tests pass, all UI checks p
   still held the stale IndexNow key `b1f4d2…`, no Google tag in the served HTML, `/blog` still the SPA
   shell). Re-check all three right after the next republish.
 
+## 2026-08-24 (evening) — production verification after republish
+Checked https://buddilio.com directly:
+- ✅ Prerendered **Journal index HTML is live** (`/blog` serves the real title, canonical and JSON-LD).
+- ⚠️ **Production has zero published Journal stories** (`/api/blog` → `total: 0`) — blog content lives per
+  environment and does NOT copy from preview. Hence no article pages and no article URLs in the live
+  sitemap. The user must write/publish stories in the production admin.
+- ⚠️ Google token was stored WITH its `google-site-verification=` prefix, so the injected meta tag was
+  invalid. `seo_settings()` now strips the prefix on read as well as on save; needs one more republish.
+- ⚠️ The deployed static host returns `index.html` (HTTP 200) for missing paths, so a rotated IndexNow
+  key looked "present" but was not. Rotation now **stages** the key (`pending_key`) and only promotes it
+  once `{site}/{key}.txt` really serves it; `ensure_indexnow_key()` falls back to the shipped key file.
+  The live key file `89c2f6….txt` is confirmed reachable on production.
+- SEO panel now warns when the site has no published stories and when a key rotation is pending.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.
