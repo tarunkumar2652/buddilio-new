@@ -5,6 +5,8 @@ import { api, errMsg, fmtDate } from "@/lib/api";
 import { Spinner, Badge } from "@/components/Shared";
 import { ImageUpload } from "@/components/ImageUpload";
 
+import { BlogInsights } from "@/components/BlogInsights";
+
 const PILL = "rounded-full px-4 py-2 text-xs font-bold";
 const IN = "mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm";
 const blank = {
@@ -177,8 +179,9 @@ export const BlogAdmin = () => {
         </div>
       </div>
 
-      <div className="mt-5 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white">
-        {list.length ? list.map((p) => (
+      <div className="mt-6"><BlogInsights /></div>
+
+      <div className="mt-5 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white">        {list.length ? list.map((p) => (
           <div key={p.id} className="flex flex-wrap items-center gap-4 p-4" data-testid={`blog-row-${p.slug}`}>
             <div className="h-14 w-20 shrink-0 overflow-hidden rounded-xl bg-slate-100">
               {p.cover_image && <img src={p.cover_image} alt="" className="h-full w-full object-cover" />}

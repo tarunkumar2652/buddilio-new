@@ -8,7 +8,7 @@ import os
 import asyncio
 import json
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import jwt
 import bcrypt
 import httpx
@@ -7043,12 +7043,38 @@ async def blog_index(category: str = "", q: str = "", tag: str = "", limit: int 
             "all_categories": blog.CATEGORIES}
 
 
+READ_SOURCES = ("search", "social", "referral", "direct")
+
+
+def read_source(referer: str) -> str:
+    """Where the reader came from, from the referrer alone — no cookies, no tracking."""
+    ref = (referer or "").lower()
+    if not ref:
+        return "direct"
+    host = urlparse(ref).netloc
+    if any(s in host for s in ("google.", "bing.", "duckduckgo.", "yandex.", "search.", "ecosia.",
+                               "baidu.", "brave.")):
+        return "search"
+    if any(s in host for s in ("facebook.", "instagram.", "twitter.", "x.com", "t.co", "linkedin.",
+                               "reddit.", "pinterest.", "whatsapp", "telegram")):
+        return "social"
+    site = urlparse(site_base()).netloc
+    return "direct" if site and site in host else "referral"
+
+
+async def record_read(slug: str, referer: str):
+    day = iso(now_utc())[:10]
+    await db.blog_reads.update_one({"slug": slug, "day": day},
+                                   {"$inc": {"views": 1, read_source(referer): 1}}, upsert=True)
+
+
 @api.get("/blog/{slug}")
-async def blog_post(slug: str):
+async def blog_post(slug: str, request: Request):
     doc = await db.blog_posts.find_one({"slug": slug, "status": "published"})
     if not doc:
         raise HTTPException(status_code=404, detail="That story isn't published.")
     await db.blog_posts.update_one({"_id": doc["_id"]}, {"$inc": {"views": 1}})
+    await record_read(slug, request.headers.get("referer", ""))
     post = clean(doc)
     related = await db.blog_posts.find(
         {"status": "published", "slug": {"$ne": slug},
@@ -7069,6 +7095,33 @@ async def admin_blog_list(user: dict = Depends(require_perm("content:manage"))):
     rows = await db.blog_posts.find({}, {"body": 0}).sort("updated_at", -1).limit(200).to_list(200)
     return {"items": [clean(r) | {"status": r.get("status", "draft")} for r in rows],
             "categories": blog.CATEGORIES}
+
+
+@api.get("/admin/blog/insights")
+async def admin_blog_insights(days: int = 7, user: dict = Depends(require_perm("content:manage"))):
+    """Which stories brought readers in, this period against the one before it."""
+    span = max(1, min(days, 90))
+    today = now_utc()
+    start = iso(today - timedelta(days=span))[:10]
+    prev_start = iso(today - timedelta(days=span * 2))[:10]
+    rows = await db.blog_reads.find({"day": {"$gte": prev_start}}).limit(20000).to_list(20000)
+    titles = {p["slug"]: p.get("title", p["slug"])
+              for p in await db.blog_posts.find({}, {"slug": 1, "title": 1}).limit(500).to_list(500)}
+    now_by, prev_by, sources, daily = {}, {}, {s: 0 for s in READ_SOURCES}, {}
+    for r in rows:
+        current = r["day"] >= start
+        bucket = now_by if current else prev_by
+        bucket[r["slug"]] = bucket.get(r["slug"], 0) + int(r.get("views") or 0)
+        if current:
+            daily[r["day"]] = daily.get(r["day"], 0) + int(r.get("views") or 0)
+            for s in READ_SOURCES:
+                sources[s] += int(r.get(s) or 0)
+    items = [{"slug": s, "title": titles.get(s, s), "views": v, "previous": prev_by.get(s, 0),
+              "change": v - prev_by.get(s, 0)}
+             for s, v in sorted(now_by.items(), key=lambda kv: -kv[1])][:25]
+    return {"days": span, "items": items, "sources": sources,
+            "total": sum(now_by.values()), "previous_total": sum(prev_by.values()),
+            "daily": [{"day": d, "views": daily[d]} for d in sorted(daily)]}
 
 
 @api.get("/admin/blog/{post_id}")

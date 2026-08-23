@@ -221,6 +221,16 @@ Shipped in Preview, tested (iteration 52: 24 backend tests pass, all UI checks p
   if it persists, either Emergent Support must allow directory-index files or accept JS-rendered
   indexing (Google and Bing both render).
 
+## 2026-08-24 — Journal readers report
+- `db.blog_reads` daily buckets per slug written on each article view, with the traffic source derived
+  from the referrer only (search / social / referral / direct — no cookies, no tracking IDs).
+- `GET /api/admin/blog/insights?days=7|30|90` returns this period vs the previous one, per-story
+  changes, source split and a daily series; rendered by `BlogInsights.jsx` at the top of
+  Admin → Journal (blog). Verified on preview (desktop + 390px).
+- **Still pending user action**: production had not been republished at the time of writing (prod DB
+  still held the stale IndexNow key `b1f4d2…`, no Google tag in the served HTML, `/blog` still the SPA
+  shell). Re-check all three right after the next republish.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.
