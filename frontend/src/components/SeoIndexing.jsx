@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Globe, Send, RefreshCw, CheckCircle2, XCircle, Copy, Search, ExternalLink, AlertTriangle } from "lucide-react";
 import { api, errMsg, fmtDate } from "@/lib/api";
 import { Spinner, Badge } from "@/components/Shared";
+import { PublishButton } from "@/components/PublishButton";
 
 const CARD = "rounded-2xl border border-slate-200 bg-white p-5";
 const PILL = "rounded-full px-4 py-2 text-xs font-bold transition-colors";
@@ -99,6 +100,13 @@ export const SeoIndexing = () => {
         <div className="mt-4 grid gap-2">
           <Copyable label="Sitemap" value={d.sitemap_url} testid="seo-sitemap-url" />
           <Copyable label="Robots" value={d.robots_url} testid="seo-robots-url" />
+        </div>
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <p className="text-xs text-slate-500">
+            Anything saved here — verification tags, key files, new stories — reaches your live pages the
+            moment you publish.
+          </p>
+          <PublishButton className="mt-3" onDone={load} />
         </div>
       </div>
 

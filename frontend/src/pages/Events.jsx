@@ -10,6 +10,7 @@ import { CompanionMatches } from "@/components/CompanionMatches";
 import { PhotoWall } from "@/components/PhotoWall";
 import { RecapCard } from "@/components/RecapCard";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
+import { AdSlot } from "@/components/AdSlot";
 import { RichHtml } from "@/components/RichText";
 import { plainText } from "@/components/RichText";
 import { CalendarDays, MapPin, Users, Share2, Heart, Flag, ShieldAlert, BadgeCheck } from "lucide-react";
@@ -86,6 +87,7 @@ export function Events() {
           <div className="mt-4 grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.items.map((ev) => <EventCard key={ev.id} ev={ev} />)}
           </div>
+          <AdSlot placement="events" city={f.city} className="mt-8" />
           {data.total > 12 && (
             <div className="mt-10 flex justify-center gap-3">
               <button disabled={page === 1} data-testid="events-prev" onClick={() => setPage(page - 1)}

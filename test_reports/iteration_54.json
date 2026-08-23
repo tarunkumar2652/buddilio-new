@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 54: verified the new Admin Publish button (Ads + SEO tabs, GET/POST /api/admin/publish) and the 'Hide paid hangouts' switch end to end (backend gates + UI hidden/restored states), plus the ads suite and writer-role regressions. Backend pytest: 18/19 passed (1 real bug: invalid ad placement key -> 500). All frontend flows passed. DB left in the required state: hide_hangouts = FALSE (hangouts visible), ads head_code cleared, no TEST ads left.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/ads (and PUT /api/admin/ads/{id})", "issue": "placements containing only unknown keys (e.g. [\"nope\"]) reaches ads.to_doc() which raises a bare ValueError -> 500 Internal Server Error. Empty list is correctly 422 (pydantic min_length), but unknown keys are not validated. Convert to HTTPException 400 or validate in AdIn."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Public footer (Explore column)", "issues": ["While paid hangouts are hidden, the footer still shows a link labelled 'Companions' (it points to /discover, i.e. free member discovery, so it is not a paid-hangouts route). The user's brief mentioned hiding paid-companionship footer links — consider relabelling this link (e.g. 'Members') or hiding it when hangouts_enabled === false to avoid implying paid companionship is still offered."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration54_publish_hangouts.py",
+    "/app/backend/tests/i54_cleanup.py",
+    "/app/test_reports/pytest/i54.xml"
+  ],
+  "action_items": [
+    "Fix 500 on POST/PUT /api/admin/ads when placements contains only unknown keys (raise 400 with a clear message instead of a bare ValueError).",
+    "Optional: relabel/hide the footer 'Companions' link (-> /discover) when hangouts are hidden, so the public site carries no companionship wording while the switch is off.",
+    "Optional cleanup: one seeded support thread 'Advertising enquiry — TEST_i54 Co' remains in the Support inbox from the advertise-form test."
+  ],
+  "critical_code_review_comments": [
+    "ads.to_doc() raises ValueError for invalid placements; server.py does not catch it, so FastAPI returns 500. Validation belongs in the AdIn model (field_validator) so both create and update return 422/400.",
+    "GET/POST /api/admin/publish correctly require content:manage (anonymous 401/403, writer 403) and POST runs `node scripts/prerender.js` cleanly (returncode 0, log array, last_publish persisted in seo_settings). Publishing was non-destructive: /api/blog, article detail and /api/sitemap.xml all still 200 afterwards.",
+    "hangouts_open() gate is applied consistently: premium_member (covers /companions, /companions/{id}, bookings), /me/companion GET+POST all return 404 with the exact copy 'Hangouts aren't available on Buddilio right now.'; /api/site-content exposes hangouts_enabled; admin data (admin/companions, bookings, ratings) stays untouched."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration54_publish_hangouts.py",
+    "/app/backend/tests/i54_cleanup.py"
+  ],
+  "success_rate": {"backend": "95% (18/19)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "Transient ads (TEST_i54 ad / dedup) created and deleted; one advertise support thread 'Advertising enquiry — TEST_i54 Co' remains in the Support inbox. hide_hangouts toggled true then back to FALSE (final state = hangouts visible). Ads head_code temporarily set to a harmless <meta name=qa-i54> then cleared (verified empty).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@buddilio.com / Admin@123, arjun.sethi@example.com / User@12345, writer.aisha@example.com / Writer@12345 (all worked, no captcha triggered)",
+  "context_for_next_testing_agent": "Verified in this run — (1) Publish: publish-block/publish-btn/publish-note render in Admin->Ads (inside ads-head-section) and Admin->SEO; clicking either updates the note to 'Last published Aug 23, 2026'; /api/admin/publish GET returns {available:true, site_url, last_publish}, POST returns ok:true with log[], 401/403 for anon, 403 for writer; blog + sitemap still fine afterwards. (2) Hide hangouts: ticking setting-hide_hangouts + save-settings persists across reload (note: the Admin panel resets to the Dashboard tab after reload, so re-click admin-tab-settings to assert). Hidden state -> site-content hangouts_enabled:false, all 5 companion endpoints 404 with the exact copy, member header has no Hangouts link, all four /hangouts routes render hangouts-off with a working hangouts-off-cta to /events, no hangout hrefs on home; Admin->Hangouts still shows Approved(1)/fees/bookings. Unticked -> nav Hangouts returns, /hangouts renders the premium gate (GET /api/companions 403 'premium member feature' is expected for this member). (3) Regressions: ads admin list/dialog/head-code save+clear all clean (no failed API calls), public ad slots (home/events/journal/article/footer) 200, /api/advertise lands in Support inbox, writer login into /admin lands on 'My stories' with ZERO 4xx API calls (no /api/admin/stats 403). Only open backend bug: unknown ad placement key -> 500.",
+  "rca_of_the_issue": "500 on ad create with an unknown placement: ads.to_doc() (ads.py:50) raises a plain ValueError when the filtered placements list is empty; server.py:9943 calls it outside any try/except so FastAPI turns it into a 500. Repro: POST /api/admin/ads {\"name\":\"x\",\"placements\":[\"nope\"]} as super admin. Fix: validate placements against ads.PLACEMENT_KEYS in the AdIn pydantic model (or catch ValueError and raise HTTPException 400)."
+}

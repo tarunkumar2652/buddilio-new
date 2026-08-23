@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, Link } from "react-router-dom";
+import { useSite } from "@/lib/site";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { CurrencyProvider } from "@/context/CurrencyContext";
@@ -7,6 +8,7 @@ import { Navbar, Footer } from "@/components/Layout";
 import { Spinner } from "@/components/Shared";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { AiChatWidget } from "@/components/AiChatWidget";
+import { AdsHead } from "@/components/AdsHead";
 import Home from "@/pages/Home";
 import { Login, Register, ForgotPassword, ResetPassword } from "@/pages/Auth";
 import AuthCallback from "@/pages/AuthCallback";
@@ -23,6 +25,7 @@ import Blog from "@/pages/Blog";
 import BlogPost from "@/pages/BlogPost";
 import BlogAuthor from "@/pages/BlogAuthor";
 import Unsubscribe from "@/pages/Unsubscribe";
+import Advertise from "@/pages/Advertise";
 import { CmsPage, Safety } from "@/pages/Content";
 import Referrals from "@/pages/Referrals";
 import Concierge from "@/pages/Concierge";
@@ -50,6 +53,25 @@ function Protected({ children, roles }) {
   if (!user) return <Navigate to="/login" state={{ from: loc.pathname }} replace />;
   if (user.profile_complete === false && loc.pathname !== "/welcome") return <Navigate to="/welcome" replace />;
   if (roles && !roles.includes(user.role)) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+function HangoutsOn({ children }) {
+  const site = useSite();
+  if (site.hangouts_enabled === false) {
+    return (
+      <div className="mx-auto max-w-xl px-4 py-24 text-center" data-testid="hangouts-off">
+        <h1 className="text-3xl font-black text-slate-900">Not available</h1>
+        <p className="mt-3 text-slate-600">
+          Paid hangouts aren't part of Buddilio right now. Browse events and members instead.
+        </p>
+        <Link to="/events" data-testid="hangouts-off-cta"
+          className="mt-6 inline-block rounded-full bg-slate-900 px-6 py-3 text-sm font-bold text-white">
+          See what's on
+        </Link>
+      </div>
+    );
+  }
   return children;
 }
 
@@ -104,6 +126,7 @@ function Shell() {
           <Route path="/blog/author/:slug" element={<BlogAuthor />} />
           <Route path="/blog/:slug" element={<BlogPost />} />
           <Route path="/unsubscribe" element={<Unsubscribe />} />
+          <Route path="/advertise" element={<Advertise />} />
           <Route path="/payments/paypal/return" element={<Protected><PayPalReturn /></Protected>} />
           <Route path="/payments/paypal/subscription-return" element={<Protected><PayPalSubscriptionReturn /></Protected>} />
 
@@ -123,10 +146,10 @@ function Shell() {
           <Route path="/invoice/:id" element={<Protected><Invoice /></Protected>} />
           <Route path="/ledger" element={<Protected><LedgerPage /></Protected>} />
           <Route path="/vendor/agreement" element={<Protected><VendorAgreement /></Protected>} />
-          <Route path="/hangouts" element={<Protected><Hangouts /></Protected>} />
-          <Route path="/hangouts/host" element={<Protected><HostHangouts /></Protected>} />
-          <Route path="/hangouts/bookings" element={<Protected><MyBookings /></Protected>} />
-          <Route path="/hangouts/:id" element={<Protected><CompanionDetail /></Protected>} />
+          <Route path="/hangouts" element={<Protected><HangoutsOn><Hangouts /></HangoutsOn></Protected>} />
+          <Route path="/hangouts/host" element={<Protected><HangoutsOn><HostHangouts /></HangoutsOn></Protected>} />
+          <Route path="/hangouts/bookings" element={<Protected><HangoutsOn><MyBookings /></HangoutsOn></Protected>} />
+          <Route path="/hangouts/:id" element={<Protected><HangoutsOn><CompanionDetail /></HangoutsOn></Protected>} />
           <Route path="/checkout" element={<Protected><Checkout /></Protected>} />
           <Route path="/partner" element={<Protected roles={["partner", "admin"]}><PartnerDashboard /></Protected>} />
           <Route path="/admin" element={<Protected roles={["admin"]}><Admin /></Protected>} />
@@ -136,6 +159,7 @@ function Shell() {
       <Footer />
       <PolicyConsent />
       <InstallPrompt />
+      <AdsHead />
       <AiChatWidget />
       <Toaster position="top-center" richColors />
     </div>

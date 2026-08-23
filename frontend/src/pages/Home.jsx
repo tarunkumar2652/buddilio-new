@@ -8,6 +8,7 @@ import { SEO } from "@/components/Shared";
 import { GuestConcierge } from "@/components/GuestConcierge";
 import { planFeatures } from "@/pages/Commerce";
 import { JournalTeaser } from "@/components/JournalTeaser";
+import { AdSlot } from "@/components/AdSlot";
 import { ShieldCheck, Sparkles, UserCheck, Ticket, ArrowRight, Star, Check, MessageCircle } from "lucide-react";
 
 const HERO = "https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg?auto=compress&w=1600";
@@ -263,6 +264,10 @@ export default function Home() {
       </section>
 
       <JournalTeaser />
+
+      <section className="mx-auto max-w-7xl px-4 sm:px-6 pb-4" data-testid="home-ad">
+        <AdSlot placement="home" />
+      </section>
 
       {/* FINAL CTA */}
       <section className="mx-auto max-w-7xl px-4 sm:px-6 pb-24">

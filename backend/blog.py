@@ -44,7 +44,7 @@ class PostIn(BaseModel):
     seo_title: str = ""
     seo_description: str = ""
     featured: bool = False
-    status: Literal["published", "draft"] = "draft"
+    status: Literal["published", "draft", "in_review", "changes_requested"] = "draft"
     published_at: str = ""
     related_city: str = ""
     cta_label: str = ""

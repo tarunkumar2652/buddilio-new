@@ -1,0 +1,57 @@
+{
+  "summary": "Iteration 53 — full test of (A) Journal writer invites/permissions/review workflow and (B) House ads + AdSense head/slot code + /advertise enquiries, plus the requested regression list. Backend: 70/70 pytest assertions pass in /app/backend/tests/test_iteration53_ads_writers.py (invite refusal for member emails, writer 403 matrix, 80-word gate, draft privacy, in_review→changes_requested→published loop, writer cannot publish/edit-live/touch-others, ads CRUD + priority clamping + placement filtering, paused/date-window/city targeting, view+click counters and CTR, /ads/head, per-slot code precedence, /advertise + support inbox + 429 rate limit, public regression endpoints). Frontend: writer /admin shows ONLY 'My stories' with role label 'Journal writer'; full editor↔writer round trip works in the UI; Ads admin create/edit/pause/resume/delete works with the no-placement guard; house banner renders on / (ad-home), /blog (ad-journal) and the footer strip on every page; a real click POSTs /api/ads/{id}/click and the admin count went 0→1 (CTR 4%); head code persists, injects at runtime and the status honestly reads 'Not live yet'; per-slot pasted code renders as ad-code-passes while the home slot keeps its banner; /advertise thank-you state works and the enquiry appears in Support inbox as 'Advertising enquiry'; /, /blog, an article, /events, /membership, /passes, /advertise all render with zero page errors. Mobile 390px: no overflow on home ad card, footer strip, ad dialog or writer editor. All test ads, stories, support threads and ad config were cleaned up and the seeded ad's counters restored to 113/1.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/ads", "issue": "An ad with placements=[] is accepted (200). Only the UI blocks it (AdsAdmin.jsx:38). Such an ad is invisible everywhere and silently dead — add a min_length=1 validator / 400 on AdIn.placements."},
+      {"endpoint": "POST /api/ads/{id}/click", "issue": "Returns 200 {ok:true} for a valid-but-nonexistent ObjectId (should be 404), and there is no rate limit or de-dup at all — anyone can POST the endpoint in a loop and inflate the click count/CTR the admin sees."},
+      {"endpoint": "GET /api/ads", "issue": "Every request increments views, including admin previews, prerender/bots and repeated SPA route changes — the view count (and therefore CTR) is not de-duplicated per session/IP."},
+      {"endpoint": "POST /api/advertise", "issue": "The 5-per-hour rate limit counts ALL support_threads from the IP, not just advertising enquiries, so five ordinary support tickets from one office/NAT IP will block genuine advertising enquiries (and vice-versa)."},
+      {"endpoint": "GET /api/admin/stats", "issue": "A writer's /admin load fires this endpoint and gets 403 twice (console noise). Overview mounts for one render before permissions resolve in Admin.jsx (nav = NAV.filter(... !perms ...)) — gate the render on a loaded user."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BlogAdmin 'Send back'", "issue": "Uses window.prompt() for the editor's note (BlogAdmin.jsx:77) — a native browser dialog instead of the app's dialog pattern; it is unstyled, unlabelled, has no 600-char hint and is blocked outright in some embedded/hardened browsers, which would make 'Send back' unusable.", "selector": "[data-testid^=\"blog-changes-\"]", "priority": "MEDIUM"},
+      {"component": "Layout footer ad strip", "issue": "The 'Promoted' house-ad strip also renders inside the /admin control centre (and console) pages — a paid/house banner should not appear in the back office.", "selector": "[data-testid=\"ad-footer\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Head ad code → publish", "issue": "prerender.js only ever ADDS the snippet (`if (adHead && !shellOut.includes(adHead))`). Clearing the head code in the Ads admin never removes the previously injected snippet from the built index.html, so an AdSense/verification tag stays live forever after the first publish.", "affected_selectors": ["[data-testid=\"ads-head-code\"]", "[data-testid=\"ads-head-status\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Home ad slot", "issues": ["An image-less house ad renders as a very wide near-empty card (huge whitespace right of the CTA at 1920px) — consider centring/limiting the max width or requiring an image."]},
+      {"screen": "Writer editor (mobile 390px)", "issues": ["The floating 'Ask Buddy' bubble sits over the bottom-right of the Story textarea / Save row; usable but it overlaps the primary control."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration53_ads_writers.py",
+    "/app/backend/tests/i53_cleanup.py",
+    "/app/test_reports/pytest/i53.xml"
+  ],
+  "action_items": [
+    "Validate AdIn.placements (min 1) server-side so /api/admin/ads refuses an ad with no placement.",
+    "Return 404 from POST /api/ads/{id}/click for unknown ads and add rate limiting / per-session de-dup to both click and view counting.",
+    "Scope the /api/advertise rate limit to advertising enquiries (e.g. page == '/advertise') instead of every support thread from the IP.",
+    "Replace window.prompt() in BlogAdmin 'Send back' with an in-app dialog + textarea (add data-testid for the note field and submit).",
+    "Make prerender.js remove a previously injected head snippet when the stored head_code is cleared or changed (mark it with a comment/wrapper so it can be replaced).",
+    "Don't render Overview / call /api/admin/stats until the user's permissions are loaded (removes the writer's 403s).",
+    "Hide the footer ad strip on /admin and /console routes."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 10,057 lines — the ads block, writer block and support block should move into ads.py / writer routes modules; the file is far past a maintainable size.",
+    "ads.live_query treats cities:[] as 'everyone' and cities:['Mumbai'] as Mumbai-only, but AdSlot passes city='' on the home/journal/footer slots, so any city-targeted ad can never win those placements. Verified: a Mumbai-only ad renders for ?city=Mumbai and never for the blank-city slots. If city targeting is meant to work on the home page, AdSlot must pass the visitor's active city.",
+    "ads.admin_card returns the raw doc merged with counters; it relies on clean() upstream to strip _id — fine today, but public_card/admin_card should whitelist fields explicitly.",
+    "writer_update keeps status 'in_review' when a writer edits a story that is already under review (only changes_requested resets to draft), so an editor can be reviewing text that changed under them — consider forcing back to draft or blocking edits while in_review."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration53_ads_writers.py",
+    "/app/backend/tests/i53_cleanup.py"
+  ],
+  "success_rate": {"backend": "100% (70/70 pytest)", "frontend": "100% of flows exercised passed; 4 non-blocking issues reported"},
+  "seed_data_creation": "Temporary only: 1 house ad ('TEST_ house ad' / 'TEST_ UI ad i53'), 1 writer story ('TEST_ UI writer story i53'), advertising enquiry threads and a temporary head/slot ad config. All deleted; ad config reset to empty/network disabled; the seeded 'Skybar launch' counters restored to views=113 / clicks=1.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@buddilio.com / Admin@123, writer.aisha@example.com / Writer@12345, arjun.sethi@example.com / User@12345 (unchanged, nothing rotated)",
+  "context_for_next_testing_agent": "Run `pytest tests/test_iteration53_ads_writers.py -n 0` (serial — the classes share module-level state via the `state` dict). Two assertions intentionally tolerate current behaviour and will need tightening once fixed: TestAdsCrud.test_02_create_without_placement_refused (accepts 200 today) and the ad-serving tests compare ad ids rather than expecting None, because the seeded 'Skybar launch' ad always competes for the home/journal/footer/article slots. /app/backend/tests/i53_cleanup.py removes TEST_ ads/posts/support threads and resets the ad config — run it after any ads/advertise testing, because /api/advertise's rate limit counts every support thread from your IP and will 429 later tests. PayPal untouched, no IndexNow triggered, no real AdSense id used.",
+  "rca_of_the_issue": "No functional defects blocked the two increments. The reported items are hardening gaps: (1) placement validation lives only in AdsAdmin.jsx so the API accepts an unplaceable ad; (2) view/click counters are unauthenticated and unthrottled, so the CTR shown in admin is trivially inflatable and is already padded by admin previews; (3) prerender.js's head injection is append-only and keyed on the snippet's own text, so clearing head_code leaves the old snippet baked into index.html; (4) Admin.jsx computes `nav` from a possibly-undefined `perms`, so Overview mounts for one render and a writer's browser fires a 403 /api/admin/stats."
+}

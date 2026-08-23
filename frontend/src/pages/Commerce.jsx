@@ -5,6 +5,7 @@ import { api, errMsg, fileUrl } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useCurrency } from "@/context/CurrencyContext";
 import { Spinner, Empty, Badge, SEO } from "@/components/Shared";
+import { AdSlot } from "@/components/AdSlot";
 import { Check, ShieldCheck, CreditCard, Smartphone, Building2, Globe } from "lucide-react";
 
 /** Everything the plan unlocks, built from the live plan record so admin edits show up immediately. */
@@ -84,6 +85,7 @@ export function Membership() {
       <SEO title="Membership plans" description="Buddilio membership: discounts on passes, premium discovery filters and priority access." />
       <p className="overline">Membership</p>
       <h1 className="mt-2 text-3xl sm:text-4xl font-bold">Choose how you go out</h1>
+      <AdSlot placement="membership" className="mt-6" />
 
       {mine && (
         <div className="mt-6 rounded-2xl bg-slate-900 text-white p-6 flex flex-wrap items-center justify-between gap-4" data-testid="current-membership">
@@ -173,6 +175,7 @@ export function Passes() {
       <p className="overline">Passes</p>
       <h1 className="mt-2 text-3xl sm:text-4xl font-bold">Buddilio passes</h1>
       <p className="mt-3 text-slate-600 max-w-2xl">One purchase, multiple nights out. Members get an extra discount at checkout.</p>
+      <AdSlot placement="passes" className="mt-6" city={city} />
 
       <div className="mt-6 flex flex-wrap gap-3">
         <select data-testid="passes-country" value={country} onChange={(e) => { setCountry(e.target.value); setCity(""); }}

@@ -29,6 +29,8 @@ export const BlogAdmin = () => {
   const [cats, setCats] = useState([]);
   const [f, setF] = useState(null);
   const [doomed, setDoomed] = useState(null);
+  const [sendBack, setSendBack] = useState(null);
+  const [note, setNote] = useState("");
   const [subs, setSubs] = useState(null);
   const [authors, setAuthors] = useState([]);
   const [sending, setSending] = useState(null);
@@ -66,6 +68,24 @@ export const BlogAdmin = () => {
     } catch (e) {
       toast.error(e instanceof SyntaxError ? "That file isn't a Journal export." : errMsg(e));
     }
+  };
+
+  const review = async (p, approve) => {
+    if (!approve) { setSendBack(p); setNote(""); return; }
+    try {
+      const { data } = await api.post(`/admin/blog/${p.id}/approve`);
+      toast.success(data.message);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const submitSendBack = async (e) => {
+    e.preventDefault();
+    try {
+      const { data } = await api.post(`/admin/blog/${sendBack.id}/request-changes`, { note });
+      toast.success(data.message);
+      setSendBack(null); setNote(""); load();
+    } catch (e2) { toast.error(errMsg(e2)); }
   };
 
   const sendNewsletter = async (p, force) => {    setSending(p.id);
@@ -242,8 +262,18 @@ export const BlogAdmin = () => {
                 {p.category} · /blog/{p.slug} · {p.read_minutes} min · {p.views || 0} views · updated {fmtDate(p.updated_at)}
               </p>
             </div>
-            <Badge tone={p.status === "published" ? "green" : "amber"}>{p.status}</Badge>
+            <Badge tone={{ published: "green", in_review: "amber", changes_requested: "red" }[p.status] || "slate"}>
+              {{ in_review: "in review", changes_requested: "changes asked" }[p.status] || p.status}
+            </Badge>
             <div className="flex gap-2">
+              {p.status === "in_review" && (
+                <>
+                  <button onClick={() => review(p, true)} data-testid={`blog-approve-${p.slug}`}
+                    className={`${PILL} bg-slate-900 text-white`}>Approve & publish</button>
+                  <button onClick={() => review(p, false)} data-testid={`blog-changes-${p.slug}`}
+                    className={`${PILL} border border-slate-200`}>Send back</button>
+                </>
+              )}
               {p.status === "published" && (
                 <button onClick={() => sendNewsletter(p, !!p.newsletter_sent_at)} disabled={sending === p.id}
                   data-testid={`blog-newsletter-${p.slug}`} title={p.newsletter_sent_at ? "Already sent — send again" : "Email this story to subscribers"}
@@ -262,8 +292,27 @@ export const BlogAdmin = () => {
         )) : <p className="p-6 text-sm text-slate-500" data-testid="blog-admin-empty">No stories yet. Write the first one.</p>}
       </div>
 
-      {doomed && (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/50 p-4"
+      {sendBack && (
+        <div className="fixed inset-0 z-[90] grid place-items-center bg-slate-900/50 p-4"
+          data-testid="blog-sendback-dialog">
+          <form onSubmit={submitSendBack} className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <p className="text-sm font-black">Send “{sendBack.title}” back</p>
+            <p className="mt-1 text-xs text-slate-500">
+              The writer sees this note on their story and can edit and resubmit.
+            </p>
+            <textarea required rows={4} maxLength={600} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="What needs changing?" data-testid="blog-sendback-note"
+              className="mt-3 w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+            <p className="mt-1 text-right text-[11px] text-slate-400">{note.length}/600</p>
+            <div className="mt-3 flex gap-2">
+              <button className={`${PILL} bg-slate-900 text-white`} data-testid="blog-sendback-submit">Send back</button>
+              <button type="button" onClick={() => setSendBack(null)} className={`${PILL} border border-slate-200`}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {doomed && (        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/50 p-4"
           data-testid="blog-delete-dialog" onClick={() => setDoomed(null)}>
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <p className="text-sm font-black text-slate-900">Delete “{doomed.title}”?</p>

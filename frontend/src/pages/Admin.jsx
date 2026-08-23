@@ -27,6 +27,8 @@ import { PaypalWebhook } from "@/components/PaypalWebhook";
 import { SecurityCredentials } from "@/components/SecurityCredentials";
 import { SeoIndexing } from "@/components/SeoIndexing";
 import { SupportInbox } from "@/components/SupportInbox";
+import { AdsAdmin } from "@/components/AdsAdmin";
+import { WriterDesk } from "@/components/WriterDesk";
 import { BlogAdmin } from "@/components/BlogAdmin";
 import { useAuth } from "@/context/AuthContext";
 
@@ -46,6 +48,7 @@ const NAV = [
   ["ledger", "Ledger", "finance:view"], ["places", "Countries & cities", "content:manage"],
   ["content", "Content", "content:manage"],
   ["pages", "Pages", "content:manage"], ["blog", "Journal (blog)", "content:manage"],
+  ["mystories", "My stories", "content:draft"], ["ads", "Ads", "content:manage"],
   ["support", "Support inbox", "support:respond"], ["seo", "SEO & indexing", "content:manage"],
   ["sections", "Site sections", "content:manage"],
   ["guides", "City guides", "content:manage"], ["emails", "Emails", "content:manage"],
@@ -56,6 +59,7 @@ const NAV = [
 const STAFF_LABELS = {
   super_admin: "Super admin", operations: "Operations", finance: "Finance", support: "Support",
   moderator: "Moderator", viewer: "Viewer", vendor_manager: "Vendor manager",
+  writer: "Journal writer",
   vendor_viewer: "Console viewer",
 };
 const roleLabel = (u) => STAFF_LABELS[u?.staff_role]
@@ -154,7 +158,7 @@ const Input = ({ label, ...p }) => (
 const GROUPS = [
   ["Overview", ["dashboard", "events", "settings"]],
   ["Money", ["orders", "payments", "cancellations", "payouts", "vendorpay", "coupons", "memberships", "products", "ledger"]],
-  ["Content", ["content", "pages", "blog", "sections", "guides", "emails", "places", "seo"]],
+  ["Content", ["content", "pages", "blog", "mystories", "ads", "sections", "guides", "emails", "places", "seo"]],
   ["People", ["users", "partners", "agreements", "managers", "companions", "team", "support"]],
   ["Trust", ["verification", "idchecks", "providers", "reports", "reviews", "photos", "audit", "security"]],
 ];
@@ -162,7 +166,7 @@ const GROUPS = [
 export default function Admin() {
   const { user } = useAuth();
   const perms = user?.permissions;
-  const nav = NAV.filter(([, , p]) => !perms || perms.includes(p));
+  const nav = NAV.filter(([, , p]) => (perms || []).includes(p));
   const [tab, setTab] = useState("");
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -193,6 +197,7 @@ export default function Admin() {
     : (favGroup.length ? [["Favourites", favGroup], ...baseGroups] : baseGroups);
 
   const pick = (v) => { setTab(v); setOpen(false); setQ(""); };
+  if (!perms) return <div className="py-24"><Spinner /></div>;
 
   return (
     <div className="grid lg:grid-cols-[264px_1fr]" data-testid="admin-page">
@@ -277,6 +282,8 @@ export default function Admin() {
         {active === "cancellations" && <Cancellations />}
         {active === "security" && <SecurityCredentials />}
         {active === "blog" && <BlogAdmin />}
+        {active === "mystories" && <WriterDesk />}
+        {active === "ads" && <AdsAdmin />}
         {active === "support" && <SupportInbox />}
         {active === "seo" && <SeoIndexing />}
         {active === "payouts" && <Payouts />}
@@ -870,6 +877,17 @@ function Settings() {
       {[["require_email_verification", "Require email verification"], ["auto_approve_events", "Auto-approve partner events"]].map(([k, l]) => (
         <label key={k} className="flex items-center gap-2 text-sm"><input type="checkbox" data-testid={`setting-${k}`} checked={!!s[k]} onChange={(e) => setS({ ...s, [k]: e.target.checked })} />{l}</label>
       ))}
+      <label className="flex gap-2 rounded-xl bg-slate-50 p-3 text-sm">
+        <input type="checkbox" data-testid="setting-hide_hangouts" className="mt-0.5" checked={!!s.hide_hangouts}
+          onChange={(e) => setS({ ...s, hide_hangouts: e.target.checked })} />
+        <span>
+          <b>Hide paid hangouts (companionship) from the website</b>
+          <span className="mt-0.5 block text-xs text-slate-500">
+            Removes the Hangouts menu, companion listings and booking pages for everyone. Existing hosts and
+            bookings stay in the admin — nothing is deleted.
+          </span>
+        </span>
+      </label>
       <button onClick={save} data-testid="save-settings" className="rounded-full bg-slate-900 text-white px-6 py-2.5 text-sm font-bold">Save settings</button>
     </div>
   );

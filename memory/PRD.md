@@ -263,6 +263,61 @@ Checked https://buddilio.com directly:
 - Verified in preview: byline link, author card, author page with story grid, sitemap entry and the
   prerendered `build/blog/author/<slug>/index.html`.
 
+## 2026-08-24 — Writer invites & house ads
+**Writer invites** (`staff_role: writer`, permission `content:draft`)
+- Invite from Admin → Journal → Writers → "Invite to write": creates/links an admin-scope account with
+  only the **My stories** tab and emails the existing `team_invite` (password-reset) link. Author doc
+  stores `user_id` + `email`.
+- `/api/writer/posts*` — list/get/create/update own drafts, `POST .../submit` (min 80 words) sets
+  `in_review` and notifies every editor with `content:manage`.
+- Editors: `POST /api/admin/blog/{id}/approve` and `/request-changes` (note goes back to the writer,
+  status `changes_requested`). Post statuses now: draft | in_review | changes_requested | published.
+- Writers cannot publish, cannot edit a live story, cannot touch anyone else's story (verified 403s).
+
+**Ads** (`ads.py`, `db.ads`, `db.ad_settings`)
+- 7 placements: home, events, journal, article, membership, passes, footer strip. Per-ad placements,
+  cities, priority (1-10), start/end dates, active/paused, view+click counters and CTR.
+- `GET /api/ads?placement=&city=` serves a house banner first, then the AdSense fallback
+  (`network_enabled`, `network_client`, `network_slots`), and hides everything for plans listed in
+  `hide_for_plans` (user chose to hide only from Premium Annual). Empty slot renders nothing.
+- `POST /api/ads/{id}/click` counts the click then redirects client-side.
+- Admin → Content → **Ads** (`AdsAdmin.jsx`); `AdSlot.jsx` is the render component.
+- **Advertise with us** page at `/advertise` (footer link) → `POST /api/advertise` creates a support
+  thread and pings support staff, so enquiries land in the Support inbox.
+
+### Ads addendum — pasted ad code (2026-08-24)
+- Admin section renamed **"Google AdSense & other ad code"** with 3-step instructions, a **site-wide code**
+  box (Auto ads / verification, served by `GET /api/ads/head`, injected by `AdsHead.jsx`) and a
+  **per-slot code textarea** for each of the 7 placements. Publisher-id + unit-id fields moved into an
+  "Advanced" details block.
+- `ads.AdConfigIn` gained `code_slots` and `head_code`; `/api/ads` returns `network.code` when a snippet
+  exists for that slot, else the client/slot pair, else nothing.
+- `AdSlot.jsx` re-creates `<script>` tags from the pasted snippet (innerHTML never executes scripts) —
+  this is what makes a copied AdSense block actually run. Verified with a probe snippet on /events.
+- Caught and fixed a missing `AdSlot` import in `Events.jsx` that white-screened the events page.
+
+### Publish button in Admin (2026-08-23, iteration 54)
+- User asked for a Publish button inside the site instead of waiting for a redeploy.
+- `GET /api/admin/publish` → `{available, site_url, last_publish}`; `POST /api/admin/publish` runs
+  `node frontend/scripts/prerender.js`, which re-injects the AdSense `<head>` code, the Google
+  verification tag, the IndexNow key file, a fresh sitemap and the static Journal/author HTML.
+  Permission: `content:manage`. Stores `seo_settings.last_publish`, writes an audit entry.
+- `PublishButton.jsx` (testids `publish-block/publish-btn/publish-note`) sits in Admin → Ads
+  (head-code card) and Admin → SEO & indexing. Preview's dev server doesn't serve `build/`, so the
+  button reports success there but only changes raw HTML on the deployed site.
+
+### Hide paid companionship switch (2026-08-23, iteration 54)
+- Admin → Settings → `hide_hangouts` checkbox (testid `setting-hide_hangouts`), `content:manage`.
+- Backend `hangouts_hidden()` / `hangouts_open()` gate `premium_member` (covers `/companions`,
+  `/companions/{id}`, bookings) plus `GET/POST /me/companion` → 404 "Hangouts aren't available on
+  Buddilio right now." `GET /api/site-content` now returns `hangouts_enabled`.
+- Frontend: `navFor()`/`footerGroups()` drop `/hangouts` links and relabel any "Companions" footer
+  link to "Members" while off; `HangoutsOn` guard in `App.js` renders a "Not available" page
+  (testid `hangouts-off`) for all four `/hangouts` routes. Admin data (hosts, bookings, ratings,
+  fees) stays untouched — nothing is deleted. Default: OFF (hangouts visible).
+- Iteration 54 also fixed: unknown ad placement keys returned 500 → now a 422 via a
+  `field_validator` on `ads.AdIn.placements`.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.

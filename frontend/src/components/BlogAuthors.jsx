@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, Pencil, X } from "lucide-react";
+import { Plus, Trash2, Pencil, X, Mail } from "lucide-react";
 import { api, errMsg } from "@/lib/api";
 import { ImageUpload } from "@/components/ImageUpload";
 
@@ -19,6 +19,17 @@ export const BlogAuthors = ({ onChange }) => {
   const [f, setF] = useState(BLANK);
   const [id, setId] = useState(null);
   const [doomed, setDoomed] = useState(null);
+  const [inviting, setInviting] = useState(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+
+  const invite = async (e) => {
+    e.preventDefault();
+    try {
+      const { data } = await api.post(`/admin/blog-authors/${inviting.id}/invite`, { email: inviteEmail });
+      toast.success(data.message);
+      setInviting(null); setInviteEmail(""); load();
+    } catch (e2) { toast.error(errMsg(e2)); }
+  };
 
   const load = useCallback(() => {
     api.get("/admin/blog-authors").then(({ data }) => { setList(data.items); onChange?.(data.items); })
@@ -70,6 +81,11 @@ export const BlogAuthors = ({ onChange }) => {
               </div>
               <a href={`/blog/author/${a.slug}`} target="_blank" rel="noreferrer"
                 className={`${PILL} border border-slate-200`} data-testid={`author-view-${a.slug}`}>View</a>
+              <button onClick={() => { setInviting(a); setInviteEmail(a.email || ""); }}
+                data-testid={`author-invite-${a.slug}`}
+                className={`${PILL} border ${a.user_id ? "border-slate-200 text-slate-500" : "border-slate-900 text-slate-900"}`}>
+                <Mail className="mr-1.5 inline h-3.5 w-3.5" />{a.user_id ? "Re-invite" : "Invite to write"}
+              </button>
               <button onClick={() => { setF({ ...BLANK, ...a }); setId(a.id); setOpen(true); }}
                 data-testid={`author-edit-${a.slug}`} className="p-2 text-slate-400 hover:text-slate-900">
                 <Pencil className="h-4 w-4" />
@@ -128,6 +144,24 @@ export const BlogAuthors = ({ onChange }) => {
                 {id ? "Save writer" : "Add writer"}
               </button>
               <button type="button" onClick={() => setOpen(false)} className={`${PILL} border border-slate-200`}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {inviting && (
+        <div className="fixed inset-0 z-[90] grid place-items-center bg-slate-900/50 p-4" data-testid="author-invite-dialog">
+          <form onSubmit={invite} className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+            <p className="text-sm font-black">Invite {inviting.name} to write</p>
+            <p className="mt-2 text-xs text-slate-500">
+              They get their own login with access to <b>My stories</b> only — they can draft and send
+              for review, and you decide what goes live.
+            </p>
+            <input required type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="writer@email.com" className={IN} data-testid="author-invite-email" />
+            <div className="mt-4 flex gap-2">
+              <button className={`${PILL} bg-slate-900 text-white`} data-testid="author-invite-send">Send invite</button>
+              <button type="button" onClick={() => setInviting(null)} className={`${PILL} border border-slate-200`}>Cancel</button>
             </div>
           </form>
         </div>

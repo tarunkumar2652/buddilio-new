@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { SEO, Spinner } from "@/components/Shared";
 import { PostCard } from "@/pages/Blog";
 import { NewsletterSignup } from "@/components/NewsletterSignup";
+import { AdSlot } from "@/components/AdSlot";
 
 const day = (v) => v ? new Date(v).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : "";
 
@@ -165,9 +166,10 @@ export default function BlogPost() {
         </div>
       </div>
 
+      <AdSlot placement="article" className="mx-auto mt-16 max-w-3xl" />
+
       {d.author && (
-        <section className="mx-auto mt-20 max-w-3xl px-4 sm:px-6" data-testid="post-author-card">
-          <div className="flex flex-col gap-5 rounded-3xl border border-slate-200 bg-slate-50 p-6 sm:flex-row sm:items-center">
+        <section className="mx-auto mt-20 max-w-3xl px-4 sm:px-6" data-testid="post-author-card">          <div className="flex flex-col gap-5 rounded-3xl border border-slate-200 bg-slate-50 p-6 sm:flex-row sm:items-center">
             {d.author.photo ? (
               <img src={d.author.photo} alt={d.author.name}
                 className="h-16 w-16 shrink-0 rounded-full object-cover ring-4 ring-white" />

@@ -62,18 +62,34 @@ const cardHtml = (p, site) => `
   if (!API) return console.log("[prerender] no REACT_APP_BACKEND_URL — skipped");
   const shellPath = path.join(BUILD, "index.html");
   if (!fs.existsSync(shellPath)) return console.log("[prerender] no build/index.html — skipped");
-  const shell = fs.readFileSync(shellPath, "utf8");
+  let shell = fs.readFileSync(shellPath, "utf8");
 
   let pub = {};
   try { pub = await get("/seo/public"); } catch (e) { /* optional */ }
+  let adHead = "";
+  try { adHead = (await get("/ads/head")).code || ""; } catch (e) { /* optional */ }
   const site = (pub.site_url || "https://buddilio.com").replace(/\/$/, "");
   const verification = pub.gsc_verification || "";
 
-  // The SPA shell is what most URLs serve, so the verification tag belongs in it too.
-  if (verification && !shell.includes(verification)) {
-    fs.writeFileSync(shellPath, shell.replace("</head>",
-      `<meta name="google-site-verification" content="${esc(verification)}" />\n</head>`), "utf8");
-    console.log("  injected Google verification tag into index.html");
+  const AD_MARK = "buddilio-head-ads";
+  const stripOld = (html) => html.replace(
+    new RegExp(`<!--${AD_MARK}-->[\\s\\S]*?<!--/${AD_MARK}-->\\n?`), "");
+
+  // The SPA shell is what most URLs serve, so head snippets belong in it too.
+  let shellOut = stripOld(shell);
+  if (verification && !shellOut.includes(verification)) {
+    shellOut = shellOut.replace("</head>",
+      `<meta name="google-site-verification" content="${esc(verification)}" />\n</head>`);
+    console.log("  injected Google verification tag");
+  }
+  if (adHead) {
+    shellOut = shellOut.replace("</head>",
+      `<!--${AD_MARK}-->${adHead}<!--/${AD_MARK}-->\n</head>`);
+    console.log("  injected ad code into <head>");
+  }
+  if (shellOut !== shell) {
+    fs.writeFileSync(shellPath, shellOut, "utf8");
+    shell = shellOut;
   }
 
   // key file for IndexNow, served from the site root

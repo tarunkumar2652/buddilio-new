@@ -17,6 +17,7 @@ import uuid
 import io
 import csv
 import secrets
+import random
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Any, Literal
@@ -41,6 +42,7 @@ import paypal
 import passes
 import vault
 import blog
+import ads
 import seo
 import support
 import botguard
@@ -181,6 +183,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("Platform", "team:manage", "Invite team members and change their permissions"),
     ("Platform", "credentials:manage", "Rotate passwords and payment/service keys"),
     ("Platform", "support:respond", "Read and reply to support chats from visitors and members"),
+    ("Platform", "content:draft", "Write Journal stories and submit them for approval"),
 ]
 ALL_PERMISSIONS = [p[1] for p in PERMISSIONS]
 
@@ -209,6 +212,9 @@ STAFF_ROLES: dict[str, dict] = {
                "description": "Read-only across the control centre.",
                "permissions": ["vendors:view", "payouts:view", "finance:view", "events:view",
                                "members:view", "analytics:view"]},
+    "writer": {"label": "Journal writer", "scope": "admin",
+               "description": "Writes Journal stories and submits them for approval — nothing else.",
+               "permissions": ["content:draft"]},
     "vendor_manager": {"label": "Vendor manager", "scope": "manager",
                        "description": "Console team who onboard and look after vendors.",
                        "permissions": ["vendors:view", "vendors:manage", "invites:manage", "payouts:view"]},
@@ -7121,7 +7127,9 @@ async def admin_authors(user: dict = Depends(require_perm("content:manage"))):
     counts = {}
     for r in rows:
         counts[r["slug"]] = await db.blog_posts.count_documents({"author_slug": r["slug"]})
-    return {"items": [blog.author_card(clean(r)) | {"posts": counts.get(r["slug"], 0)} for r in rows]}
+    return {"items": [blog.author_card(clean(r)) | {"posts": counts.get(r["slug"], 0),
+                                                   "user_id": r.get("user_id", ""),
+                                                   "email": r.get("email", "")} for r in rows]}
 
 
 @api.post("/admin/blog-authors")
@@ -7166,6 +7174,175 @@ async def admin_blog_list(user: dict = Depends(require_perm("content:manage"))):
     rows = await db.blog_posts.find({}, {"body": 0}).sort("updated_at", -1).limit(200).to_list(200)
     return {"items": [clean(r) | {"status": r.get("status", "draft")} for r in rows],
             "categories": blog.CATEGORIES}
+
+
+class WriterInviteIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    email: EmailStr
+
+
+@api.post("/admin/blog-authors/{aid}/invite")
+async def admin_author_invite(aid: str, payload: WriterInviteIn,
+                             user: dict = Depends(require_perm("content:manage"))):
+    """Gives a writer their own login. They can draft and submit; only you publish."""
+    author = await db.blog_authors.find_one({"_id": as_oid(aid, "writer")})
+    if not author:
+        raise HTTPException(status_code=404, detail="Writer not found.")
+    email = payload.email.lower().strip()
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        if existing.get("role") not in ("admin", "manager"):
+            raise HTTPException(status_code=400,
+                                detail="That email already belongs to a Buddilio member account.")
+        uid = str(existing["_id"])
+        await db.users.update_one({"_id": existing["_id"]},
+                                  {"$set": {"staff_role": existing.get("staff_role") or "writer"}})
+    else:
+        doc = {"full_name": author["name"], "email": email, "role": "admin", "staff_role": "writer",
+               "extra_permissions": [], "password_hash": hash_password(secrets.token_urlsafe(18)),
+               "status": "active", "city": author.get("city", ""), "photo": author.get("photo", ""),
+               "verified": True, "email_verified": False, "created_by": user["id"],
+               "created_at": iso(now_utc())}
+        uid = str((await db.users.insert_one(doc)).inserted_id)
+    await db.blog_authors.update_one({"_id": author["_id"]}, {"$set": {"user_id": uid, "email": email}})
+    token = secrets.token_urlsafe(32)
+    await db.password_reset_tokens.insert_one({
+        "token": token, "user_id": uid,
+        "expires_at": now_utc() + timedelta(days=7), "created_at": iso(now_utc())})
+    await send_tpl("team_invite", email, {
+        "inviter": user["full_name"], "role_label": "Journal writer",
+        "reset_url": f"{FRONTEND_URL}/reset-password?token={token}"})
+    await audit(user, "blog.writer_invited", "author", aid, {"email": email})
+    return {"ok": True, "message": f"Invitation sent to {email}. They set their own password."}
+
+
+async def my_author(user: dict) -> dict:
+    doc = await db.blog_authors.find_one({"user_id": user["id"]})
+    if not doc:
+        raise HTTPException(status_code=403,
+                            detail="Your writer profile isn't set up yet — ask an editor to link it.")
+    return doc
+
+
+def writer_row(doc: dict) -> dict:
+    return {"id": str(doc["_id"]), "slug": doc["slug"], "title": doc["title"],
+            "category": doc.get("category", ""), "status": doc.get("status", "draft"),
+            "excerpt": doc.get("excerpt", ""), "cover_image": doc.get("cover_image", ""),
+            "review_note": doc.get("review_note", ""), "updated_at": doc.get("updated_at", ""),
+            "views": int(doc.get("views") or 0)}
+
+
+@api.get("/writer/posts")
+async def writer_posts(user: dict = Depends(require_perm("content:draft", "content:manage"))):
+    author = await db.blog_authors.find_one({"user_id": user["id"]})
+    query = {"author_slug": author["slug"]} if author else {"created_by": user["id"]}
+    rows = await db.blog_posts.find(query, {"body": 0}).sort("updated_at", -1).limit(100).to_list(100)
+    return {"items": [writer_row(r) for r in rows], "categories": blog.CATEGORIES,
+            "author": blog.author_card(clean(author)) if author else None}
+
+
+@api.get("/writer/posts/{post_id}")
+async def writer_post(post_id: str, user: dict = Depends(require_perm("content:draft", "content:manage"))):
+    author = await my_author(user)
+    doc = await db.blog_posts.find_one({"_id": as_oid(post_id, "post"), "author_slug": author["slug"]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That story isn't yours.")
+    return {"post": clean(doc)}
+
+
+@api.post("/writer/posts")
+async def writer_create(payload: blog.PostIn,
+                        user: dict = Depends(require_perm("content:draft", "content:manage"))):
+    author = await my_author(user)
+    doc = blog.to_doc(payload)
+    doc.update({"status": "draft", "author_slug": author["slug"], "author_name": author["name"],
+                "author_role": author.get("role", ""), "created_by": user["id"], "featured": False,
+                "published_at": ""})
+    if await db.blog_posts.find_one({"slug": doc["slug"]}):
+        doc["slug"] = f"{doc['slug']}-{uuid.uuid4().hex[:4]}"
+    res = await db.blog_posts.insert_one(doc)
+    return {"ok": True, "id": str(res.inserted_id), "message": "Draft saved."}
+
+
+@api.put("/writer/posts/{post_id}")
+async def writer_update(post_id: str, payload: blog.PostIn,
+                        user: dict = Depends(require_perm("content:draft", "content:manage"))):
+    author = await my_author(user)
+    existing = await db.blog_posts.find_one({"_id": as_oid(post_id, "post"),
+                                            "author_slug": author["slug"]})
+    if not existing:
+        raise HTTPException(status_code=404, detail="That story isn't yours.")
+    if existing.get("status") == "published":
+        raise HTTPException(status_code=403,
+                            detail="This story is live — ask an editor to make changes for you.")
+    doc = blog.to_doc(payload, existing)
+    doc.update({"status": "draft", "author_slug": author["slug"], "author_name": author["name"],
+                "author_role": author.get("role", ""), "featured": bool(existing.get("featured")),
+                "published_at": existing.get("published_at", "")})
+    if doc["slug"] != existing["slug"] and await db.blog_posts.find_one({"slug": doc["slug"]}):
+        doc["slug"] = f"{doc['slug']}-{uuid.uuid4().hex[:4]}"
+    await db.blog_posts.update_one({"_id": existing["_id"]}, {"$set": doc})
+    return {"ok": True, "message": "Draft saved."}
+
+
+@api.post("/writer/posts/{post_id}/submit")
+async def writer_submit(post_id: str, user: dict = Depends(require_perm("content:draft", "content:manage"))):
+    author = await my_author(user)
+    doc = await db.blog_posts.find_one({"_id": as_oid(post_id, "post"), "author_slug": author["slug"]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That story isn't yours.")
+    if doc.get("status") == "published":
+        raise HTTPException(status_code=400, detail="That story is already live.")
+    if len(blog.plain_text(doc.get("body", "")).split()) < 80:
+        raise HTTPException(status_code=400,
+                            detail="Write at least 80 words before sending it for review.")
+    await db.blog_posts.update_one({"_id": doc["_id"]},
+                                   {"$set": {"status": "in_review", "review_note": "",
+                                             "submitted_at": iso(now_utc())}})
+    for editor in await db.users.find({"role": {"$in": ["admin", "manager"]}, "status": "active"},
+                                     {"full_name": 1, "staff_role": 1, "role": 1,
+                                      "extra_permissions": 1}).limit(50).to_list(50):
+        if "content:manage" in perms_of(clean(editor)):
+            await notify(str(editor["_id"]), "A story is waiting for review",
+                         f"{author['name']} submitted “{doc['title']}”.", "system", "/admin",
+                         cta="Review the story")
+    return {"ok": True, "message": "Sent for review. An editor will take a look."}
+
+
+@api.post("/admin/blog/{post_id}/approve")
+async def admin_blog_approve(post_id: str, user: dict = Depends(require_perm("content:manage"))):
+    doc = await db.blog_posts.find_one({"_id": as_oid(post_id, "post")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    await db.blog_posts.update_one({"_id": doc["_id"]},
+                                   {"$set": {"status": "published", "review_note": "",
+                                             "published_at": doc.get("published_at") or iso(now_utc())}})
+    author = await db.blog_authors.find_one({"slug": doc.get("author_slug", "")})
+    if author and author.get("user_id"):
+        await notify(author["user_id"], "Your story is live",
+                     f"“{doc['title']}” is published on the Journal.", "system",
+                     f"/blog/{doc['slug']}", cta="Read it")
+    await audit(user, "blog.approved", "post", post_id, {"title": doc["title"]})
+    return {"ok": True, "message": "Published."}
+
+
+@api.post("/admin/blog/{post_id}/request-changes")
+async def admin_blog_request_changes(post_id: str, body: dict,
+                                     user: dict = Depends(require_perm("content:manage"))):
+    note = str(body.get("note", "")).strip()[:600]
+    if not note:
+        raise HTTPException(status_code=400, detail="Tell the writer what needs changing.")
+    doc = await db.blog_posts.find_one({"_id": as_oid(post_id, "post")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    await db.blog_posts.update_one({"_id": doc["_id"]},
+                                   {"$set": {"status": "changes_requested", "review_note": note}})
+    author = await db.blog_authors.find_one({"slug": doc.get("author_slug", "")})
+    if author and author.get("user_id"):
+        await notify(author["user_id"], "Changes requested on your story",
+                     note[:180], "system", "/admin", cta="Open my stories")
+    await audit(user, "blog.changes_requested", "post", post_id, {"title": doc["title"]})
+    return {"ok": True, "message": "Sent back to the writer with your note."}
 
 
 @api.get("/admin/blog/export")
@@ -7303,6 +7480,7 @@ async def get_site_content():
                          "label": p.get("nav_label") or p.get("title", p["slug"]),
                          "header": bool(p.get("nav_header")), "footer_group": p.get("nav_footer_group", ""),
                          "order": p.get("order", 0)} for p in pages]
+    content["hangouts_enabled"] = not await hangouts_hidden()
     return content
 
 
@@ -7601,8 +7779,20 @@ def booking_refundable(b: dict) -> float:
     return round(float(b.get("paid_total") or 0) - float(b.get("fee_paid") or 0), 2)
 
 
+async def hangouts_hidden() -> bool:
+    """Admins can take paid hangouts off the public site without deleting anything."""
+    s = await db.settings.find_one({}, {"hide_hangouts": 1}) or {}
+    return bool(s.get("hide_hangouts"))
+
+
+async def hangouts_open():
+    if await hangouts_hidden():
+        raise HTTPException(status_code=404, detail="Hangouts aren't available on Buddilio right now.")
+
+
 async def premium_member(user: dict = Depends(get_current_user)) -> dict:
     """Hangouts are invisible to everyone but plans that switch hangout access on."""
+    await hangouts_open()
     member = await membership_active(user["id"])
     if not member:
         raise HTTPException(status_code=403, detail="Hangouts are a premium member feature.")
@@ -7675,6 +7865,7 @@ def clean_packages(rows: list) -> list:
 
 @api.get("/me/companion")
 async def my_companion_profile(user: dict = Depends(get_current_user)):
+    await hangouts_open()
     doc = await db.users.find_one({"_id": ObjectId(user["id"])})
     return {"profile": companion_card(doc, mine=True), "terms": HANGOUT_TERMS,
             "cut_percent": COMPANION_CUT, "can_apply": bool(doc.get("verified"))}
@@ -7683,6 +7874,7 @@ async def my_companion_profile(user: dict = Depends(get_current_user)):
 @api.post("/me/companion")
 async def apply_as_companion(payload: CompanionIn, user: dict = Depends(get_current_user)):
     """Anyone verified can switch this on and name their rate — an admin approves before they're listed."""
+    await hangouts_open()
     doc = await db.users.find_one({"_id": ObjectId(user["id"])})
     if doc.get("role") != "user":
         raise HTTPException(status_code=403, detail="Only members can offer hangouts.")
@@ -9626,6 +9818,196 @@ async def canned_delete(rid: str, user: dict = Depends(require_perm("support:res
     return {"ok": True}
 
 
+# ---------------- ads ----------------
+async def ad_config() -> dict:
+    doc = await db.ad_settings.find_one({"_id": "ads"}) or {}
+    return {"network_enabled": bool(doc.get("network_enabled")),
+            "network_client": doc.get("network_client", ""),
+            "network_slots": doc.get("network_slots") or {},
+            "code_slots": doc.get("code_slots") or {},
+            "head_code": doc.get("head_code", ""),
+            "hide_for_plans": doc.get("hide_for_plans") or []}
+
+
+@api.get("/ads/head")
+async def ads_head():
+    """Site-wide ad snippet (AdSense Auto ads or the verification tag). Always public."""
+    doc = await db.ad_settings.find_one({"_id": "ads"}) or {}
+    return {"code": doc.get("head_code", "")}
+
+
+AD_COUNT_WINDOW = {"views": 900, "clicks": 60}   # seconds one viewer counts once
+
+
+async def ad_count(ad_id, field: str, request: Request, user: Optional[dict]) -> bool:
+    """Counts a view or click once per viewer per window, so the CTR means something."""
+    who = user["id"] if user else botguard.client_ip(request)
+    key = f"{ad_id}:{field}:{who}"
+    cutoff = now_utc() - timedelta(seconds=AD_COUNT_WINDOW[field])
+    seen = await db.ad_hits.find_one({"_id": key, "at": {"$gte": cutoff}})
+    if seen:
+        return False
+    await db.ad_hits.update_one({"_id": key}, {"$set": {"at": now_utc()}}, upsert=True)
+    await db.ads.update_one({"_id": ad_id}, {"$inc": {field: 1}})
+    return True
+
+
+@api.get("/ads")
+async def ads_serve(placement: str, request: Request, city: str = "",
+                    user: Optional[dict] = Depends(optional_user)):
+    """One ad for this slot: your banner first, the network as fallback."""
+    if placement not in ads.PLACEMENT_KEYS:
+        raise HTTPException(status_code=400, detail="Unknown ad placement.")
+    cfg = await ad_config()
+    if user and cfg["hide_for_plans"]:
+        member = await membership_active(user["id"])
+        if member and member.get("plan_name") in cfg["hide_for_plans"]:
+            return {"ad": None, "network": None, "hidden": True}
+    rows = await db.ads.find(ads.live_query(placement, city, iso(now_utc()))) \
+        .sort([("priority", -1), ("updated_at", -1)]).limit(5).to_list(5)
+    if rows:
+        pick = random.choice(rows) if len(rows) > 1 and rows[0].get("priority") == rows[-1].get("priority") \
+            else rows[0]
+        await ad_count(pick["_id"], "views", request, user)
+        return {"ad": ads.public_card(clean(pick)), "network": None, "hidden": False}
+    if cfg["network_enabled"]:
+        code = (cfg["code_slots"] or {}).get(placement, "").strip()
+        if code:
+            return {"ad": None, "hidden": False, "network": {"code": code}}
+        if cfg["network_client"]:
+            return {"ad": None, "hidden": False,
+                    "network": {"client": cfg["network_client"],
+                                "slot": cfg["network_slots"].get(placement, "")}}
+    return {"ad": None, "network": None, "hidden": False}
+
+
+@api.post("/ads/{ad_id}/click")
+async def ads_click(ad_id: str, request: Request, user: Optional[dict] = Depends(optional_user)):
+    doc = await db.ads.find_one({"_id": as_oid(ad_id, "ad")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That ad no longer exists.")
+    await ad_count(doc["_id"], "clicks", request, user)
+    return {"ok": True, "url": doc.get("url", "")}
+
+
+BUILD_DIR = Path("/app/frontend/build")
+
+
+@api.get("/admin/publish")
+async def admin_publish_status(user: dict = Depends(require_perm("content:manage"))):
+    """Tells the admin whether this environment serves built HTML it can refresh."""
+    doc = await seo_settings()
+    return {"available": (BUILD_DIR / "index.html").exists(), "site_url": seo_site_base(),
+            "last_publish": doc.get("last_publish") or None}
+
+
+@api.post("/admin/publish")
+async def admin_publish(user: dict = Depends(require_perm("content:manage"))):
+    if not (BUILD_DIR / "index.html").exists():
+        return {"ok": False, "preview": True,
+                "message": "This is the preview workspace — it always serves the newest code, "
+                           "so there is nothing to push here. Use this button on your live site."}
+    proc = await asyncio.create_subprocess_exec(
+        "node", "scripts/prerender.js", cwd="/app/frontend",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await proc.communicate()
+    log = [l.strip() for l in out.decode("utf-8", "replace").splitlines() if l.strip()][-40:]
+    ok = proc.returncode == 0
+    when = iso(now_utc())
+    if ok:
+        await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"last_publish": when}}, upsert=True)
+    await audit(user, "site.published", "site", "", {"ok": ok})
+    return {"ok": ok, "log": log, "at": when,
+            "message": "Your live pages are updated — head code, verification files and the Journal."
+                       if ok else "Publish did not finish. Try again in a moment."}
+
+
+@api.get("/admin/ads")
+async def admin_ads(user: dict = Depends(require_perm("content:manage"))):
+    rows = await db.ads.find({}).sort([("status", 1), ("priority", -1)]).limit(200).to_list(200)
+    plans = await db.membership_plans.find({}, {"name": 1}).limit(50).to_list(50)
+    cfg = await ad_config()
+    marker = ""
+    if cfg["head_code"]:
+        m = re.search(r"(ca-pub-\d+|content=[\"']([^\"']+)[\"'])", cfg["head_code"])
+        marker = (m.group(2) or m.group(1)) if m else cfg["head_code"][:40]
+    return {"items": [ads.admin_card(clean(r)) for r in rows],
+            "placements": [{"key": k, "label": v} for k, v in ads.PLACEMENTS],
+            "plans": [p.get("name", "") for p in plans],
+            "config": cfg, "site_url": seo_site_base(),
+            "head_live": bool(marker) and await meta_tag_live(seo_site_base(), marker)}
+
+
+@api.post("/admin/ads")
+async def admin_ad_create(payload: ads.AdIn, user: dict = Depends(require_perm("content:manage"))):
+    doc = ads.to_doc(payload) | {"views": 0, "clicks": 0, "created_at": iso(now_utc())}
+    res = await db.ads.insert_one(doc)
+    await audit(user, "ads.created", "ad", str(res.inserted_id), {"name": doc["name"]})
+    return {"ok": True, "id": str(res.inserted_id), "message": "Ad saved."}
+
+
+@api.put("/admin/ads/{ad_id}")
+async def admin_ad_update(ad_id: str, payload: ads.AdIn,
+                          user: dict = Depends(require_perm("content:manage"))):
+    res = await db.ads.update_one({"_id": as_oid(ad_id, "ad")}, {"$set": ads.to_doc(payload)})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Ad not found.")
+    await audit(user, "ads.updated", "ad", ad_id, {"name": payload.name})
+    return {"ok": True, "message": "Ad updated."}
+
+
+@api.delete("/admin/ads/{ad_id}")
+async def admin_ad_delete(ad_id: str, user: dict = Depends(require_perm("content:manage"))):
+    await db.ads.delete_one({"_id": as_oid(ad_id, "ad")})
+    await audit(user, "ads.deleted", "ad", ad_id, {})
+    return {"ok": True}
+
+
+@api.put("/admin/ads-config")
+async def admin_ads_config(payload: ads.AdConfigIn,
+                           user: dict = Depends(require_perm("content:manage"))):
+    slots = {k: str(v)[:40] for k, v in (payload.network_slots or {}).items()
+             if k in ads.PLACEMENT_KEYS}
+    codes = {k: str(v)[:4000] for k, v in (payload.code_slots or {}).items()
+             if k in ads.PLACEMENT_KEYS and str(v).strip()}
+    await db.ad_settings.update_one({"_id": "ads"}, {"$set": {
+        "network_enabled": payload.network_enabled, "network_client": payload.network_client.strip()[:60],
+        "network_slots": slots, "code_slots": codes, "head_code": payload.head_code.strip()[:4000],
+        "hide_for_plans": payload.hide_for_plans[:10]}}, upsert=True)
+    await audit(user, "ads.config", "ads", "ads", {"network": payload.network_enabled})
+    return {"ok": True, "message": "Ad settings saved."}
+
+
+class AdvertiseIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str = Field(min_length=2, max_length=80)
+    email: EmailStr
+    company: str = ""
+    budget: str = ""
+    message: str = Field(min_length=5, max_length=1500)
+
+
+@api.post("/advertise")
+async def advertise_enquiry(payload: AdvertiseIn, request: Request):
+    """Advertising enquiries land in the same support inbox as everything else."""
+    ip = botguard.client_ip(request)
+    recent = await db.support_threads.count_documents(
+        {"ip": ip, "page": "/advertise", "created_at": {"$gte": iso(now_utc() - timedelta(hours=1))}})
+    if recent >= 5:
+        raise HTTPException(status_code=429, detail="That's a lot of enquiries. Please try again later.")
+    detail = (f"Company: {payload.company or '—'}\nBudget: {payload.budget or '—'}\n\n{payload.message}")
+    doc = {"user_id": "", "name": payload.name.strip()[:80], "email": payload.email.lower(),
+           "subject": f"Advertising enquiry — {payload.company or payload.name}"[:120],
+           "page": "/advertise", "status": "open", "token": support.new_token(), "ip": ip,
+           "ai_transcript": [], "messages": [support.message("visitor", detail, payload.name)],
+           "unread_for_staff": True, "unread_for_visitor": False,
+           "created_at": iso(now_utc()), "updated_at": iso(now_utc())}
+    res = await db.support_threads.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    await notify_support_staff(doc, "new")
+    return {"ok": True, "message": "Thanks — we'll come back to you within two working days."}
+
+
 import vendor_routes
 
 vendor_routes.register({
@@ -9710,6 +10092,7 @@ async def startup():
     await db.support_threads.create_index([("status", 1), ("updated_at", -1)])
     await db.support_threads.create_index("token")
     await db.support_threads.create_index("user_id")
+    await db.ad_hits.create_index("at", expireAfterSeconds=7 * 24 * 3600)
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]
     existing = await db.users.find_one({"email": admin_email})

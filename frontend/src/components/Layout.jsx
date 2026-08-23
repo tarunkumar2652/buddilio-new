@@ -4,6 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useCurrency } from "@/context/CurrencyContext";
 import { api, fileUrl, citySlug } from "@/lib/api";
 import { useSite } from "@/lib/site";
+import { AdSlot } from "@/components/AdSlot";
 import {
   Menu, X, Search, Bell, LayoutGrid, Compass, CalendarDays, MessageCircle, User,
   Facebook, Instagram, Twitter, MapPin, Sparkles,
@@ -40,7 +41,10 @@ const navFor = (site, signedIn) => {
   const extra = (site?.pages || []).filter((p) => p.header)
     .sort((a, b) => (a.order || 0) - (b.order || 0))
     .map((p) => ({ to: `/p/${p.slug}`, label: p.label }));
-  return [...base, ...extra];
+  const links = [...base, ...extra];
+  return site?.hangouts_enabled === false
+    ? links.filter((l) => !String(l.to || "").startsWith("/hangouts"))
+    : links;
 };
 
 const footerGroups = (site) => {
@@ -54,6 +58,14 @@ const footerGroups = (site) => {
     if (g) { if (!g.links.some(same)) g.links.push(link); }
     else groups.push({ title: p.footer_group, links: [link] });
   });
+  if (site?.hangouts_enabled === false) {
+    // No companionship wording anywhere on the public site while the switch is off.
+    return groups.map((g) => ({
+      ...g,
+      links: g.links.filter((l) => !String(l.to || "").startsWith("/hangouts"))
+        .map((l) => (/companion/i.test(l.label || "") ? { ...l, label: "Members" } : l)),
+    }));
+  }
   return groups;
 };
 
@@ -252,8 +264,7 @@ const FOOT_LINKS = [
     ["Cancellation & Refund Policy", "/p/refund"], ["Cookie Policy", "/p/cookies"],
     ["Vendor Terms", "/p/vendor-terms"]]],
   ["Explore", [["Events", "/events"], ["Experiences", "/passes"], ["Companions", "/discover"],
-    ["Journal", "/blog"],
-    ["Membership", "/membership"]]],
+    ["Journal", "/blog"], ["Membership", "/membership"], ["Advertise", "/advertise"]]],
 ];
 
 const SOCIALS = [
@@ -266,6 +277,7 @@ export const Footer = () => {
   const site = useSite();
   return (
   <footer className="relative mt-28 overflow-hidden bg-brand-ink text-white grain" data-testid="footer">
+    <AdSlot placement="footer" variant="strip" />
     <div className="aurora opacity-60" />
     <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-20 pb-10">
       <div className="grid gap-12 sm:grid-cols-2 xl:grid-cols-[1.3fr_repeat(4,1fr)]">
