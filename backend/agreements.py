@@ -11,6 +11,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
+from pdfbrand import logo
+
 # Buddilio's own details. Editable in Admin → Settings (keys mirrored below).
 ENTITY = {
     "legal_name": "Buddilio",
@@ -424,7 +426,7 @@ def agreement_pdf(agreement: dict, vendor: dict, schedule: dict, acceptance: dic
                             topMargin=16 * mm, bottomMargin=16 * mm,
                             title=agreement.get("agreement_number", "Vendor agreement"), author="Buddilio")
     flow = [
-        Table([[_p("BUDDILIO", 16, ACCENT, bold=True),
+        Table([[logo(16 * mm) or _p("BUDDILIO", 16, ACCENT, bold=True),
                 _p(f"VENDOR AGREEMENT<br/><font size=10>{agreement.get('agreement_number', '')} · "
                    f"v{agreement.get('version', '1.0')}</font>", 8, MUTED, bold=True, align=2)]],
               colWidths=[95 * mm, 79 * mm]),

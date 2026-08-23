@@ -179,6 +179,29 @@ Shipped in Preview, tested (iteration 50 retest + iteration 51). **Needs Republi
 - P2: `Admin.jsx` keeps `NAV` and `GROUPS` as parallel lists; a new NAV entry vanishes from the sidebar
   unless added to GROUPS (caused a HIGH bug this iteration). Derive the sidebar from one list.
 
+## 2026-08-23 (later) — Support alerts, canned replies, Journal newsletter, logo on PDFs
+Shipped in Preview, tested (iteration 52: 24 backend tests pass, all UI checks pass).
+- **Support alerts**: `notify_support_staff()` pings every admin holding `support:respond` (in-app
+  notification type `support` + email) on a new human chat and on each visitor follow-up.
+- **Canned replies**: `db.canned_replies` + `/api/admin/support-replies` CRUD; picked from chips in the
+  support inbox, placeholders `{name} {first_name} {last_booking} {my_name}` filled client-side
+  (`SupportInbox.fill()`); `last_booking` comes from the member's latest order.
+- **Journal newsletter**: `NewsletterSignup` on `/blog` and article pages → `db.newsletter_subs`;
+  per-story **Send to subscribers** (`POST /api/admin/blog/{id}/newsletter`, refuses drafts and
+  double sends unless `?force=true`); one-click unsubscribe at `/unsubscribe?t=token`.
+- **Logo on PDFs**: `pdfbrand.logo()` (asset at `backend/assets/logo.png`) heads the invoice/receipt,
+  commission invoice, pass/voucher and vendor agreement PDFs, plus the printable invoice page.
+  Verified by rendering page 1 of each. Fixed the long-standing ₹ tofu box — non-ASCII currency
+  symbols now print as the currency code ("INR 2,359.00").
+
+### Known / accepted
+- Vendor agreements already accepted keep their **stored, hash-signed** PDF, so those downloads have no
+  logo by design; new generations carry it.
+- Emails cannot be delivered from Preview (Resend blocks unverifiable recipients); production sends
+  from the live domain.
+- P2 scale: support alerts and newsletter sends loop recipients inline in the request — fine at current
+  volume, should move to a background job before large lists.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.

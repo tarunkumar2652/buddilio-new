@@ -18,6 +18,8 @@ export default function Invoice() {
   return (
     <div className="mx-auto max-w-3xl px-4 sm:px-6 py-10 pb-28" data-testid="invoice-page">
       <SEO title={inv.invoice_no} description="Buddilio invoice" />
+      <img src="/brand/lockup.png" alt="Buddilio" data-testid="invoice-logo"
+        className="mb-6 h-14 w-auto" />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="overline" data-testid="invoice-template">{inv.template || (paid ? "Receipt" : "Invoice")}</p>

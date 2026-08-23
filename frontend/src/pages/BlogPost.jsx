@@ -6,6 +6,7 @@ import { ArrowLeft, Clock, Link2, Share2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { SEO, Spinner } from "@/components/Shared";
 import { PostCard } from "@/pages/Blog";
+import { NewsletterSignup } from "@/components/NewsletterSignup";
 
 const day = (v) => v ? new Date(v).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : "";
 
@@ -155,6 +156,12 @@ export default function BlogPost() {
           </div>
         </section>
       )}
+
+      <section className="border-t border-slate-200 bg-slate-50 py-16">
+        <div className="mx-auto max-w-3xl px-6" data-testid="post-newsletter">
+          <NewsletterSignup source={`article:${p.slug}`} />
+        </div>
+      </section>
     </div>
   );
 }

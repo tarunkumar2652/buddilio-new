@@ -21,6 +21,7 @@ import VerifyPass from "@/pages/VerifyPass";
 import Door from "@/pages/Door";
 import Blog from "@/pages/Blog";
 import BlogPost from "@/pages/BlogPost";
+import Unsubscribe from "@/pages/Unsubscribe";
 import { CmsPage, Safety } from "@/pages/Content";
 import Referrals from "@/pages/Referrals";
 import Concierge from "@/pages/Concierge";
@@ -100,6 +101,7 @@ function Shell() {
           <Route path="/door" element={<Protected><Door /></Protected>} />
           <Route path="/blog" element={<Blog />} />
           <Route path="/blog/:slug" element={<BlogPost />} />
+          <Route path="/unsubscribe" element={<Unsubscribe />} />
           <Route path="/payments/paypal/return" element={<Protected><PayPalReturn /></Protected>} />
           <Route path="/payments/paypal/subscription-return" element={<Protected><PayPalSubscriptionReturn /></Protected>} />
 

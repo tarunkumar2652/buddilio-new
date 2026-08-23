@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, ExternalLink, Star } from "lucide-react";
+import { Plus, Trash2, ExternalLink, Star, Send, Users } from "lucide-react";
 import { api, errMsg, fmtDate } from "@/lib/api";
 import { Spinner, Badge } from "@/components/Shared";
 import { ImageUpload } from "@/components/ImageUpload";
@@ -26,13 +26,25 @@ export const BlogAdmin = () => {
   const [cats, setCats] = useState([]);
   const [f, setF] = useState(null);
   const [doomed, setDoomed] = useState(null);
+  const [subs, setSubs] = useState(null);
+  const [sending, setSending] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
     api.get("/admin/blog").then(({ data }) => { setList(data.items); setCats(data.categories); })
       .catch(() => setList([]));
+    api.get("/admin/newsletter").then(({ data }) => setSubs(data)).catch(() => setSubs(null));
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const sendNewsletter = async (p, force) => {
+    setSending(p.id);
+    try {
+      const { data } = await api.post(`/admin/blog/${p.id}/newsletter`, {}, { params: { force } });
+      toast.success(data.message);
+      load();
+    } catch (e) { toast.error(errMsg(e)); } finally { setSending(null); }
+  };
 
   const edit = async (id) => {
     try {
@@ -150,6 +162,12 @@ export const BlogAdmin = () => {
           </p>
         </div>
         <div className="flex gap-2">
+          {subs && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600"
+              data-testid="newsletter-count">
+              <Users className="h-3.5 w-3.5" />{subs.active} subscribers
+            </span>
+          )}
           <a href="/blog" target="_blank" rel="noreferrer" className={`${PILL} border border-slate-200`} data-testid="blog-view-live">
             <ExternalLink className="mr-1.5 inline h-3.5 w-3.5" />View journal
           </a>
@@ -175,6 +193,15 @@ export const BlogAdmin = () => {
             </div>
             <Badge tone={p.status === "published" ? "green" : "amber"}>{p.status}</Badge>
             <div className="flex gap-2">
+              {p.status === "published" && (
+                <button onClick={() => sendNewsletter(p, !!p.newsletter_sent_at)} disabled={sending === p.id}
+                  data-testid={`blog-newsletter-${p.slug}`} title={p.newsletter_sent_at ? "Already sent — send again" : "Email this story to subscribers"}
+                  className={`${PILL} border ${p.newsletter_sent_at ? "border-slate-200 text-slate-500" : "border-slate-900 text-slate-900"}`}>
+                  <Send className="mr-1.5 inline h-3.5 w-3.5" />
+                  {sending === p.id ? "Sending…" : p.newsletter_sent_at
+                    ? `Sent to ${p.newsletter_sent_count || 0}` : "Send to subscribers"}
+                </button>
+              )}
               <button onClick={() => edit(p.id)} data-testid={`blog-edit-${p.slug}`} className={`${PILL} border border-slate-200`}>Edit</button>
               <button onClick={() => remove(p)} data-testid={`blog-delete-${p.slug}`} className={`${PILL} border border-slate-200 text-red-600`}>
                 <Trash2 className="h-3.5 w-3.5" />

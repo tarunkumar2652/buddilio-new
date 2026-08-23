@@ -15,6 +15,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from pdfbrand import logo
+
 ACCENT = colors.HexColor("#C2185B")
 INK = colors.HexColor("#0F172A")
 MUTED = colors.HexColor("#64748B")
@@ -60,7 +62,7 @@ def pass_pdf(v: dict, verify_url: str) -> bytes:
                                              -b[0] * size / (b[2] - b[0]), -b[1] * size / (b[3] - b[1])])
     drawing.add(widget)
 
-    head = Table([[_p("BUDDILIO", 15, ACCENT, bold=True),
+    head = Table([[logo(13 * mm) or _p("BUDDILIO", 15, ACCENT, bold=True),
                    _p(KIND_LABELS.get(v.get("kind", ""), "Booking").upper(), 8, MUTED, bold=True, align=2)]],
                  colWidths=[60 * mm, 52 * mm])
     rows = [("Guest", v.get("user_name") or "—"),

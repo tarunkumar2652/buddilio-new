@@ -9154,6 +9154,7 @@ async def support_start(payload: support.StartIn, request: Request,
            "created_at": iso(now_utc()), "updated_at": iso(now_utc())}
     res = await db.support_threads.insert_one(doc)
     doc["_id"] = res.inserted_id
+    await notify_support_staff(doc, "new")
     return {"thread": support.public_thread(doc), "token": token}
 
 
@@ -9181,6 +9182,7 @@ async def support_reply(tid: str, payload: support.ReplyIn,
     await db.support_threads.update_one({"_id": doc["_id"]}, {
         "$push": {"messages": {"$each": [msg], "$slice": -support.MAX_MESSAGES}},
         "$set": {"unread_for_staff": True, "updated_at": iso(now_utc())}})
+    await notify_support_staff(doc | {"messages": doc.get("messages", []) + [msg]}, "reply")
     return {"ok": True, "message": msg}
 
 
@@ -9205,7 +9207,12 @@ async def admin_support_get(tid: str, user: dict = Depends(require_perm("support
     if not doc:
         raise HTTPException(status_code=404, detail="That conversation no longer exists.")
     await db.support_threads.update_one({"_id": doc["_id"]}, {"$set": {"unread_for_staff": False}})
-    return {"thread": support.staff_card(doc) | support.public_thread(doc),
+    booking = ""
+    if doc.get("user_id"):
+        last = await db.orders.find({"user_id": doc["user_id"]}).sort("created_at", -1).limit(1).to_list(1)
+        if last:
+            booking = f"{last[0].get('item_name', '')} ({last[0].get('payment_status', '')})"
+    return {"thread": support.staff_card(doc) | support.public_thread(doc) | {"last_booking": booking},
             "ai_transcript": doc.get("ai_transcript", [])}
 
 
@@ -9245,6 +9252,143 @@ async def admin_support_status(tid: str, body: dict,
         raise HTTPException(status_code=404, detail="That conversation no longer exists.")
     await audit(user, "support.status", "support_thread", tid, {"status": status})
     return {"ok": True, "message": f"Conversation marked {status}."}
+
+
+async def notify_support_staff(thread: dict, kind: str = "new"):
+    """Every admin who can answer support gets an in-app ping and an email."""
+    staff = await db.users.find({"role": {"$in": ["admin", "manager"]},
+                                "status": "active"},
+                               {"full_name": 1, "email": 1, "role": 1, "staff_role": 1,
+                                "extra_permissions": 1}).limit(50).to_list(50)
+    who = thread.get("name") or "A visitor"
+    last = next((m["body"] for m in reversed(thread.get("messages", [])) if m["role"] == "visitor"), "")
+    title = f"{who} wants a human" if kind == "new" else f"{who} replied in support"
+    for s in staff:
+        if "support:respond" not in perms_of(clean(s)):
+            continue
+        await db.notifications.insert_one({
+            "user_id": str(s["_id"]), "title": title, "body": last[:200], "type": "support",
+            "link": "/admin", "read": False, "created_at": iso(now_utc())})
+        if s.get("email"):
+            await send_email(s["email"], f"[Buddilio support] {title}",
+                             wrap(title, f"<p><b>{who}</b>{' · ' + thread.get('email', '') if thread.get('email') else ''}</p>"
+                                         f"<p>{last[:900]}</p>",
+                                  "Open the support inbox", f"{site_base()}/admin"))
+
+
+# ---------------- Journal newsletter ----------------
+class SubscribeIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    email: EmailStr
+    source: str = "journal"
+
+
+@api.post("/newsletter/subscribe")
+async def newsletter_subscribe(payload: SubscribeIn):
+    email = payload.email.lower().strip()
+    existing = await db.newsletter_subs.find_one({"email": email})
+    if existing and existing.get("status") == "active":
+        return {"ok": True, "message": "You're already on the list — new stories are on their way."}
+    token = secrets.token_urlsafe(24)
+    await db.newsletter_subs.update_one({"email": email}, {"$set": {
+        "email": email, "status": "active", "source": payload.source[:40],
+        "token": existing.get("token") if existing else token,
+        "created_at": (existing or {}).get("created_at") or iso(now_utc()),
+        "updated_at": iso(now_utc())}}, upsert=True)
+    return {"ok": True, "message": "You're in. Every new story lands in your inbox."}
+
+
+@api.post("/newsletter/unsubscribe")
+async def newsletter_unsubscribe(body: dict):
+    token = str(body.get("token", ""))
+    email = str(body.get("email", "")).lower().strip()
+    query = {"token": token} if token else {"email": email}
+    if not token and not email:
+        raise HTTPException(status_code=400, detail="We need your unsubscribe link or email address.")
+    res = await db.newsletter_subs.update_one(query, {"$set": {"status": "unsubscribed",
+                                                              "updated_at": iso(now_utc())}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="That address isn't on the list.")
+    return {"ok": True, "message": "Done — you won't get any more Journal emails."}
+
+
+@api.get("/admin/newsletter")
+async def admin_newsletter(user: dict = Depends(require_perm("content:manage"))):
+    rows = await db.newsletter_subs.find({}).sort("created_at", -1).limit(500).to_list(500)
+    return {"active": sum(1 for r in rows if r.get("status") == "active"), "total": len(rows),
+            "items": [{"email": r["email"], "status": r.get("status", "active"),
+                       "source": r.get("source", ""), "created_at": r.get("created_at", "")}
+                      for r in rows[:200]]}
+
+
+@api.post("/admin/blog/{post_id}/newsletter")
+async def admin_blog_newsletter(post_id: str, force: bool = False,
+                                user: dict = Depends(require_perm("content:manage"))):
+    """Emails one published story to every active subscriber — you choose the moment."""
+    post = await db.blog_posts.find_one({"_id": as_oid(post_id, "post")})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    if post.get("status") != "published":
+        raise HTTPException(status_code=400, detail="Publish the story before you email it out.")
+    if post.get("newsletter_sent_at") and not force:
+        raise HTTPException(status_code=400, detail="This story has already gone out to subscribers.")
+    subs = await db.newsletter_subs.find({"status": "active"}, {"email": 1, "token": 1}).limit(5000).to_list(5000)
+    if not subs:
+        raise HTTPException(status_code=400, detail="Nobody has subscribed to the Journal yet.")
+    base = seo_site_url(await seo_settings())
+    url = f"{base}/blog/{post['slug']}"
+    sent = 0
+    for s in subs:
+        body = (f"<p><b>{post['title']}</b></p><p>{post.get('excerpt', '')}</p>"
+                + (f'<p><img src="{post["cover_image"]}" alt="" width="520" style="border-radius:12px"/></p>'
+                   if post.get("cover_image") else "")
+                + f'<p style="font-size:12px;color:#94A3B8">'
+                  f'<a href="{base}/unsubscribe?t={s.get("token", "")}">Unsubscribe</a></p>')
+        if await send_email(s["email"], f"New in the Buddilio Journal: {post['title']}",
+                            wrap("From the Journal", body, "Read the story", url)):
+            sent += 1
+    await db.blog_posts.update_one({"_id": post["_id"]},
+                                   {"$set": {"newsletter_sent_at": iso(now_utc()) if sent else "",
+                                             "newsletter_sent_count": sent}})
+    await audit(user, "blog.newsletter", "post", post_id, {"sent": sent, "of": len(subs)})
+    return {"ok": True, "sent": sent, "subscribers": len(subs),
+            "message": f"Sent to {sent} of {len(subs)} subscribers."}
+
+
+# ---------------- saved (canned) support replies ----------------
+class CannedIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    title: str = Field(min_length=2, max_length=80)
+    body: str = Field(min_length=2, max_length=2000)
+
+
+@api.get("/admin/support-replies")
+async def canned_list(user: dict = Depends(require_perm("support:respond"))):
+    rows = await db.canned_replies.find({}).sort("title", 1).limit(100).to_list(100)
+    return {"items": [{"id": str(r["_id"]), "title": r["title"], "body": r["body"]} for r in rows],
+            "placeholders": ["{name}", "{first_name}", "{last_booking}", "{my_name}"]}
+
+
+@api.post("/admin/support-replies")
+async def canned_create(payload: CannedIn, user: dict = Depends(require_perm("support:respond"))):
+    res = await db.canned_replies.insert_one(payload.model_dump() | {"created_at": iso(now_utc())})
+    return {"ok": True, "id": str(res.inserted_id)}
+
+
+@api.put("/admin/support-replies/{rid}")
+async def canned_update(rid: str, payload: CannedIn,
+                        user: dict = Depends(require_perm("support:respond"))):
+    res = await db.canned_replies.update_one({"_id": as_oid(rid, "saved reply")},
+                                            {"$set": payload.model_dump()})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Saved reply not found.")
+    return {"ok": True}
+
+
+@api.delete("/admin/support-replies/{rid}")
+async def canned_delete(rid: str, user: dict = Depends(require_perm("support:respond"))):
+    await db.canned_replies.delete_one({"_id": as_oid(rid, "saved reply")})
+    return {"ok": True}
 
 
 import vendor_routes

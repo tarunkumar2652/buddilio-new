@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { ArrowUpRight, Clock, Search, PenLine } from "lucide-react";
 import { api } from "@/lib/api";
 import { SEO, Spinner } from "@/components/Shared";
+import { NewsletterSignup } from "@/components/NewsletterSignup";
 
 const CHIP = "inline-flex items-center px-5 py-2 rounded-full text-[11px] font-bold uppercase tracking-[0.18em] transition-all duration-300";
 const day = (v) => v ? new Date(v).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
@@ -158,6 +159,12 @@ export default function Blog() {
                 </p>
               </div>
             ) : null}
+          </section>
+
+          <section className="border-t border-slate-200 bg-white py-16">
+            <div className="mx-auto max-w-3xl px-6" data-testid="blog-newsletter">
+              <NewsletterSignup source="journal-index" />
+            </div>
           </section>
 
           <section className="border-t border-slate-200 bg-slate-900 py-20">

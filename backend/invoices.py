@@ -7,6 +7,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
+from pdfbrand import logo
+
 INK = colors.HexColor("#0f172a")
 MUTED = colors.HexColor("#64748b")
 LINE = colors.HexColor("#e2e8f0")
@@ -61,7 +63,7 @@ def commission_invoice_pdf(inv: dict, entity: dict) -> bytes:
         return f"{cur} {float(v or 0):,.2f}"
 
     flow = [
-        Table([[_p("BUDDILIO", 17, ACCENT, bold=True),
+        Table([[logo(16 * mm) or _p("BUDDILIO", 17, ACCENT, bold=True),
                 _p(f"COMMISSION INVOICE<br/><font size=11>{inv.get('invoice_no', '')}</font>",
                    8, MUTED, bold=True, align=2)]], colWidths=[95 * mm, 79 * mm]),
         Spacer(1, 4 * mm),
@@ -120,10 +122,12 @@ def invoice_pdf(inv: dict, symbol: str = "") -> bytes:
                             title=inv.get("receipt_no") or inv.get("invoice_no"), author="Buddilio")
 
     def money(v):
-        return f"{symbol}{float(v or 0):,.2f}"
+        # Helvetica has no ₹ (and other non-Latin) glyph — fall back to the currency code.
+        mark = symbol if symbol.isascii() else f"{inv.get('currency', '').upper()} "
+        return f"{mark}{float(v or 0):,.2f}"
 
     flow = [
-        Table([[_p("BUDDILIO", 17, ACCENT, bold=True),
+        Table([[logo(16 * mm) or _p("BUDDILIO", 17, ACCENT, bold=True),
                 _p(f"{'RECEIPT' if paid else 'INVOICE'}<br/>"
                    f"<font size=11>{inv.get('receipt_no') if paid else inv.get('invoice_no')}</font>",
                    8, MUTED, bold=True, align=2)]],

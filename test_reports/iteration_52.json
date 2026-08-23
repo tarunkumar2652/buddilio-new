@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 52 e2e: support alerts, canned replies, Journal newsletter (subscribe/send/unsubscribe) and the logo on PDFs + printable invoice. Backend: 24 pytest tests pass, 1 skipped (empty-subscriber-list refusal could not be asserted while subscribers existed). Frontend: newsletter block on /blog and article pages, duplicate + invalid email handling, /unsubscribe valid & bad token, admin saved-replies CRUD + placeholder substitution, admin Journal subscriber count / send-to-subscribers / draft-has-no-button / create+delete, SEO panel, printable invoice logo, and 390px checks — all pass. PDF logo verified by rendering page 1 with pymupdf for order invoice, pass, commission invoice and a freshly generated vendor agreement: brand mark top-left, no overlap with the right-hand receipt/invoice number, body content unchanged.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/vendor-agreements/{id}/pdf", "issue": "Existing agreements are served from the immutable stored copy in db.agreement_documents, which was generated before the logo change, so all 4 seeded agreements download WITHOUT the logo. Freshly generated agreement PDFs do carry it (verified by calling agreements.agreement_pdf directly). Confirm this is intended (hash-signed documents must not change) — if the logo is wanted on existing agreements the stored copies need regenerating on the next version bump."},
+      {"endpoint": "GET /api/orders/{id}/invoice.pdf", "issue": "Pre-existing: the INR rupee sign renders as a black tofu box in the amount column (Helvetica has no ₹ glyph) — see /app/test_reports/pytest/i52_order_invoice.png. The commission invoice avoids this by printing 'INR 704.00'. Not caused by this increment."},
+      {"endpoint": "POST /api/newsletter/subscribe", "issue": "422 body is the raw pydantic message, so the UI toast reads 'value is not a valid email address: The part after the @-sign is not valid...'. Functionally correct, but a friendlier copy line would match the rest of the product."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration52.py",
+    "/app/backend/tests/test_iteration52_pdf.py",
+    "/app/backend/tests/i52_ui_seed.py",
+    "/app/backend/tests/i52_cleanup.py",
+    "/app/test_reports/pytest/i52_results.xml"
+  ],
+  "action_items": [
+    "Decide whether stored (pre-logo) vendor agreement PDFs should be regenerated so downloads of existing agreements also show the brand mark — new generations already do.",
+    "Optional: register a font with the ₹ glyph (or print 'INR') in invoices.py so order invoice/receipt amounts stop rendering a black box for INR.",
+    "Optional: map the 422 email-validation detail to a friendly message on the newsletter form."
+  ],
+  "critical_code_review_comments": [
+    "notify_support_staff loops staff serially and awaits send_email inline inside POST /api/support/threads; with many admins the visitor-facing request latency grows linearly (each Resend call is a network round trip). Consider fire-and-forget / background task.",
+    "admin_blog_newsletter sends to up to 5000 subscribers inside the HTTP request with a per-recipient await — this will time out at scale; batch it or move to a background job.",
+    "server.py is 9505 lines; the newsletter, support-alert and canned-reply blocks are self-contained and would be better as their own modules (matches existing invoices.py/passes.py pattern).",
+    "newsletter_subscribe silently returns the friendly 'already on the list' message for an existing active subscriber but resubscribing an unsubscribed address reuses the old token — good; just note the old token stays valid forever with no rotation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration52.py",
+    "/app/backend/tests/test_iteration52_pdf.py",
+    "/app/backend/tests/i52_ui_seed.py",
+    "/app/backend/tests/i52_cleanup.py"
+  ],
+  "success_rate": {"backend": "100% (24 passed, 1 skipped)", "frontend": "100% (all 18 UI checks passed)"},
+  "seed_data_creation": "Created and then removed: TEST_ newsletter subscribers, TEST guest/member support threads, a TEST_pw canned reply, a TEST_pw draft Journal post. Ran /app/backend/tests/i52_cleanup.py — 15 subs, 12 threads, 12 support notifications deleted, newsletter_sent_at/newsletter_sent_count unset on the 1 story that was emailed. 0 active subscribers left; only the pre-existing 'Refund timeline' canned reply remains.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md — admin@buddilio.com / Admin@123 worked; member arjun.sethi@example.com / User@12345 worked; partner@buddilio.com / Partner@123 worked.",
+  "context_for_next_testing_agent": "Login route is /login (NOT /auth). Admin sections via data-testid=admin-tab-{support,blog,seo...}. Emails: Resend BLOCKS admin@buddilio.com (422, logged by buddilio.email, API still returns 200) but ACCEPTS *@example.com — so 'Send to subscribers' really reported 'Sent to 2' and set the sent badge; the zero-sent branch (newsletter_sent_at left empty, resend allowed) is only reachable when every recipient is rejected. Support alert notifications are titled '<name> wants a human' / '<name> replied in support', type 'support'. Canned-reply substitution happens client-side in SupportInbox.fill(); {my_name} resolves to 'Buddilio' because admin full_name is 'Buddilio Admin'. PDF checks use pymupdf page.get_image_info() + rendered PNGs in /app/test_reports/pytest/i52_*.png. Vendor agreement PDFs are served from db.agreement_documents when a stored copy exists.",
+  "rca_of_the_issue": "Missing logo on the vendor-agreement download traces to vendor_routes.agreement_pdf_download preferring db.agreement_documents (executed/immutable copy stored at acceptance time, before pdfbrand.logo() was added) over regenerating; the generator itself renders the logo correctly. Two initial test failures were test-side only: a newsletter active-count delta assertion that raced with a parallel xdist worker, and a mongo lookup using the mixed-case email while the API stores it lowercased — both fixed in the test file."
+}
