@@ -19,8 +19,8 @@ BASE = (os.environ.get("REACT_APP_BACKEND_URL") or frontend_env["REACT_APP_BACKE
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-MEMBER = ("aarav.mehta@example.com", "User@123")
-OTHER = ("diya.sharma@example.com", "User@123")
+MEMBER = ("aarav.mehta@example.com", "User@12345")
+OTHER = ("diya.sharma@example.com", "User@12345")
 
 STATE = {}
 

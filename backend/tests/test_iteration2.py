@@ -16,10 +16,10 @@ WS_URL = BASE_URL.replace("https://", "wss://").replace("http://", "ws://") + "/
 
 ADMIN = {"email": "admin@buddilio.com", "password": "Admin@123"}
 PARTNER = {"email": "partner@buddilio.com", "password": "Partner@123"}
-USER = {"email": "aarav.mehta@example.com", "password": "User@123"}
-USER2 = {"email": "diya.sharma@example.com", "password": "User@123"}
-USER3 = {"email": "kabir.nair@example.com", "password": "User@123"}
-USER4 = {"email": "meera.rao@example.com", "password": "User@123"}
+USER = {"email": "aarav.mehta@example.com", "password": "User@12345"}
+USER2 = {"email": "diya.sharma@example.com", "password": "User@12345"}
+USER3 = {"email": "kabir.nair@example.com", "password": "User@12345"}
+USER4 = {"email": "meera.rao@example.com", "password": "User@12345"}
 
 
 def _login(email, password):

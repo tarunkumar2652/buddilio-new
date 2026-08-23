@@ -18,7 +18,7 @@ CRON_SECRET = os.environ["WEBHOOK_CRON_SECRET"]
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-MEMBER = ("aarav.mehta@example.com", "User@123")
+MEMBER = ("aarav.mehta@example.com", "User@12345")
 
 BANK_FIELDS = ["bank_account_name", "bank_account_number", "bank_ifsc", "bank_name", "bank_branch",
                "bank_account_type", "bank_swift", "upi_id"]

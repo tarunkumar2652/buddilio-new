@@ -1,0 +1,49 @@
+{
+  "summary": "RETEST of iteration 48 (Security & Credentials) + 49 (Journal/blog & SEO) fixes. Backend: new suite /app/backend/tests/test_iteration50_retest.py — 20/20 pass (public journal index/featured/categories, category filter incl. 'City Guides', article + JSON-LD, 404 'That story isn't published.', site-content Journal links in nav.public/nav.member/footer, sitemap contains /blog + published slugs + URL-encoded category URLs with zero raw spaces and zero draft leakage, credentials gating for anonymous/member/super-admin with exact 403 copy, write-only masking (no plaintext/ciphertext ever returned, sensitive previews bulleted), unknown-key 404, password policy 'Use between 10 and 128 characters.' + wrong-current rejection + all prior tokens die with 'Your session has ended. Please log in again.', user access revoke suspends account + kills token + login 403 + restore, self-lock 400, blog authoring lifecycle draft->hidden publicly->publish->edit->delete->404). Frontend verified at 1920px and 390px as super admin and as member: Journal link present in public header, member header and footer (all navigate to /blog); article page SEO title/meta/#blog-jsonld; 'We couldn't find that story' state for unknown/draft slugs; data-testid='admin-role-label' renders 'SUPER ADMIN'; Admin -> Journal (blog) lists 3 stories and the full create-draft/publish/edit/delete-with-styled-dialog flow works with public verification at each step (draft invisible, published visible + slug live, edited title live, 404 after delete); Security panel shows my-password-card, friendly role labels (Super admin/Manager/Organiser), 17 write-only credential inputs (0 prefilled) with masked previews, reset-password dialog no longer reveals the password before confirm (shown once after success with copy button), revoke dialog + Restore round-trip on invited.vendor@example.com verified and restored. No console errors in any flow. All test data cleaned up; all account passwords/statuses restored (admin, member, ops.manager, partner, partner2, invited.vendor all log in fine at the end).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/me/password + seeded super admin",
+       "issue": "The documented super-admin password 'Admin@123' is 9 chars and is REJECTED by the app's own 10-128 policy, so once the Super admin rotates their password they can never set the documented one back through the app (API returns 'Use between 10 and 128 characters.'). During this retest I had to restore admin@buddilio.com by writing the bcrypt hash directly into Mongo. Seed the admin (and seed_data.py/globalize.py member 'User@123') with policy-compliant 10+ char passwords and update /app/memory/test_credentials.md."},
+      {"endpoint": "POST /api/auth/register",
+       "issue": "Failed *validation* attempts (422) count toward the anti-abuse throttle: after 3 malformed registrations the endpoint returned 429 'Too many attempts from this device. Please try again in 60 minutes.' A 60-minute lockout triggered by schema errors is harsh and blocks legitimate retries; only count real submissions or shorten the window."},
+      {"endpoint": "GET /api/auth/me (suspended account)",
+       "issue": "After access revoke, an existing token gets 403 (suspended) rather than 401. Frontends usually only force logout on 401 — confirm the interceptor also signs out on this 403."},
+      {"endpoint": "vault.decrypt()",
+       "issue": "STILL UNFIXED from iteration 48: encrypt() binds AAD to the key name while decrypt() binds it to doc['_id']. They only agree because _id == name today; any schema change silently breaks every stored secret."},
+      {"endpoint": "GET /sitemap.xml vs UI chips",
+       "issue": "Cosmetic/SEO: the sitemap emits /blog?category=City%20Guides while the UI chips build /blog?category=City+Guides (URLSearchParams). Both are accepted by the API (verified with a temp published 'City Guides' post), but they are two distinct URLs for one listing — add a canonical tag or use the same encoding."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Security & credentials (390px) and article page (390px)",
+       "issues": ["The floating 'Ask Buddy' bubble still sits over content: at 390px it covers the right part of the 'Suggest a strong one' button in the My password card, and it overlaps the article body/cover image. Add bottom/right padding or hide it on those routes."]},
+      {"screen": "Journal index (390px & desktop)",
+       "issues": ["No horizontal overflow anywhere (documentElement.scrollWidth == 390 on /blog, /blog/<slug>, admin blog list and the security panel; the accounts table is correctly inside an overflow-x-auto wrapper). Only note: a category with a single post turns that post into the hero and leaves the grid empty, which looks sparse."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration50_retest.py", "/app/test_reports/pytest/i50_results.xml"],
+  "action_items": [
+    "Re-seed the super admin with a policy-compliant (10+ char, upper+lower+digit) password and update /app/memory/test_credentials.md; do the same for seed_data.py/globalize.py member password. Today the documented Admin@123 can only be restored by writing the bcrypt hash straight into Mongo.",
+    "Fix vault.decrypt AAD to use the same binding as encrypt (still open from iteration 48).",
+    "Do not count 422 validation failures toward the /api/auth/register 60-minute throttle.",
+    "Ensure the frontend auth interceptor logs the user out on the 403 'suspended' response, not just 401.",
+    "Optional SEO: unify category URL encoding (sitemap %20 vs UI +) or emit a canonical link on /blog."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 9069 lines — the blog, sitemap, credentials/security and site-content routes verified here should be split into routers (blog.py already holds the models/helpers).",
+    "vault.encrypt/decrypt AAD mismatch is a latent data-loss bug for every stored secret.",
+    "Password policy is enforced in strong_password() but the seed scripts bypass it, producing accounts whose password the app itself would reject."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration50_retest.py"],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% of retested flows"},
+  "seed_data_creation": "Temporary only, all removed: blog posts 'TEST_i50 Retest Story ...', 'QA50 UI Story Retest' (UI flow) and 'TEST_i50 City Guides probe'; VAPID_SUBJECT credential saved+reverted; invited.vendor@example.com revoked+restored; arjun.sethi suspended+restored; admin password changed and restored (via direct bcrypt hash write, see action items).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@buddilio.com / Admin@123 (restored, verified 200), arjun.sethi@example.com / User@12345, invited.vendor@example.com / Vendor@12345, ops.manager@buddilio.com / Console@123 — all verified logging in at end of run.",
+  "context_for_next_testing_agent": "Run `cd /app/backend && python -m pytest tests/test_iteration50_retest.py -n 0` (must be serial; the password class must run last — it is named TestZZSuperAdminPassword and restores admin@buddilio.com by writing the bcrypt hash directly because Admin@123 is shorter than the policy allows). Login button on /login is NOT type=submit — use get_by_role('button', name='Log in', exact=True). Blog cards use data-testid='post-card-{slug}', category chips 'blog-cat-{Category}', admin rows 'blog-row-{slug}'. On mobile the admin sidebar is hidden — click [data-testid='admin-menu-toggle'] then [data-testid='admin-tab-blog'] / the Security tab. PayPal remains LIVE; no payment flows were touched this iteration.",
+  "rca_of_the_issue": "All iteration 48/49 defects are confirmed fixed: nav/footer Journal links now come from DEFAULT_SITE_CONTENT (no saved site_content doc overrides them — verified in Mongo, so a previously saved nav/footer doc would still shadow the defaults and hide the link; add a migration if any environment has one), sitemap categories are quote()-encoded, Admin.jsx defines STAFF_LABELS/roleLabel with data-testid='admin-role-label', the destructive reset/revoke actions use styled dialogs that reveal the generated password only after success, and BlogAdmin delete uses a confirm dialog. Remaining risk is operational: the seeded credentials violate the new password policy."
+}

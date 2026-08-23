@@ -17,8 +17,8 @@ def h(t):
     return {"Authorization": f"Bearer {t}"}
 
 
-trav = login("tara.joshi@example.com", "User@123")
-prov = login("kabir.nair@example.com", "User@123")
+trav = login("tara.joshi@example.com", "User@12345")
+prov = login("kabir.nair@example.com", "User@12345")
 admin = login("admin@buddilio.com", "Admin@123")
 tid = str(DB.users.find_one({"email": "tara.joshi@example.com"})["_id"])
 pid = str(DB.users.find_one({"email": "kabir.nair@example.com"})["_id"])

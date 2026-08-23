@@ -24,7 +24,7 @@ def client(email, password):
 pu = db.users.find_one({"email": "partner@buddilio.com"}, {"_id": 1})
 v = db.vendor_profiles.find_one({"user_id": str(pu["_id"])}, {"_id": 1})
 vid = str(v["_id"])
-admin, member = client("admin@buddilio.com", "Admin@123"), client("aarav.mehta@example.com", "User@123")
+admin, member = client("admin@buddilio.com", "Admin@123"), client("aarav.mehta@example.com", "User@12345")
 
 q = admin.get(f"{BASE}/pricing/quote", params={"vendor_id": vid}, timeout=30)
 print("quote after effective_from passed:", q.status_code, q.json().get("quote", {}).get("vendor_net_rate"))

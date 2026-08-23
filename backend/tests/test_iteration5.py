@@ -10,7 +10,7 @@ assert BASE, "REACT_APP_BACKEND_URL must be set"
 API = f"{BASE}/api"
 
 
-def _login(email, password="User@123"):
+def _login(email, password="User@12345"):
     r = requests.post(f"{API}/auth/login", json={"email": email, "password": password}, timeout=15)
     assert r.status_code == 200, f"login {email}: {r.status_code} {r.text}"
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -109,7 +109,7 @@ def test_referrals_flow_end_to_end():
     # register invitee via referral link
     uniq = uuid.uuid4().hex[:8]
     payload = {
-        "email": f"TEST_ref_{uniq}@example.com", "password": "User@123",
+        "email": f"TEST_ref_{uniq}@example.com", "password": "User@12345",
         "full_name": f"TEST Referral {uniq}", "mobile": f"+441234{uniq[:6]}",
         "dob": "1995-01-01", "gender": "female", "city": "London",
         "interests": ["dining"], "is_adult": True, "accept_terms": True,

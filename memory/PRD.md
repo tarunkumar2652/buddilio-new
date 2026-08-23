@@ -152,6 +152,33 @@ P2
 - Platform currency is USD everywhere (rebased 2026-06-21). Historical pre-rebase rows stay INR by
   design; only aggregates are converted.
 
+## 2026-08-23 — Journal in HTML, SEO & indexing, human support chat, 4-currency display
+Shipped in Preview, tested (iteration 50 retest + iteration 51). **Needs Republish to reach buddilio.com.**
+- **Crawlable Journal**: `frontend/scripts/prerender.js` runs as `postbuild` on every `yarn build` and
+  writes real HTML for `/blog` and every published article into `build/blog/**` (title, description,
+  canonical, JSON-LD, full article text inside `#root`), plus a fresh `build/sitemap.xml` and the
+  IndexNow key file. React still hydrates over it. New posts need a republish to refresh static HTML.
+- **Sitemap**: category URLs now use `+` encoding (matches the UI chips → one canonical URL);
+  `<loc>` values are XML-escaped; canonicals/sitemap always name the live domain, never the preview
+  host (`seo_site_base()`).
+- **SEO & indexing panel** (Admin → Content → SEO & indexing, `content:manage`): indexable URL list +
+  group counts, IndexNow submission to Bing/Yandex/Seznam/Naver (`POST /api/admin/seo/submit`,
+  refuses preview hosts), key rotation (deletes superseded key files), live site URL + Google Search
+  Console token (injected into the HTML by the prerender step). Backend: `seo.py`, `db.seo_settings`.
+- **Human support chat**: Ask Buddy widget → "Talk to a real person" opens a real thread
+  (`POST /api/support/threads`, guests give name+email, 5 threads/hour/IP). Staff read and reply in
+  Admin → People → Support inbox (`support:respond`, granted to super_admin/operations/support).
+  Members get a notification, guests get an email. Backend: `support.py`, `db.support_threads`.
+- **Display currencies limited to USD, INR, GBP, EUR** (`DISPLAY_CURRENCIES` in `server.py`, surfaced
+  via `/api/meta`). Charging currency stays USD; organiser pricing selects follow the same four.
+
+### Open items from iteration 51
+- P2: `_write_key_file()` writes into `frontend/public`, so a rotated IndexNow key only goes live after
+  a republish (serving `/{key}.txt` from FastAPI would be cleaner).
+- P2: guest support rate limit keys on client IP — behind a CDN confirm the real visitor IP resolves.
+- P2: `Admin.jsx` keeps `NAV` and `GROUPS` as parallel lists; a new NAV entry vanishes from the sidebar
+  unless added to GROUPS (caused a HIGH bug this iteration). Derive the sidebar from one list.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.

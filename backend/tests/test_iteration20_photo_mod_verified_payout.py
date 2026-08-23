@@ -31,8 +31,8 @@ ADMIN = ("admin@buddilio.com", "Admin@123")
 MANAGER = ("ops.manager@buddilio.com", "Console@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
 PARTNER2 = ("partner2@buddilio.com", "Partner@123")
-MEMBER_ATTENDEE = ("tara.joshi@example.com", "User@123")   # confirmed on finished event
-MEMBER_REPORTER = ("diya.sharma@example.com", "User@123")
+MEMBER_ATTENDEE = ("tara.joshi@example.com", "User@12345")   # confirmed on finished event
+MEMBER_REPORTER = ("diya.sharma@example.com", "User@12345")
 
 FINISHED_EVENT_ID = "6a7b73e34a13de566dbd110f"
 

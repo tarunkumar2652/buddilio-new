@@ -21,8 +21,8 @@ if not BASE_URL:
             break
 
 EVENT_ID = "6a7cc7045fed9266ef61325e"  # Marina Yacht Sundowner, Dubai (upcoming, cached for diya)
-DIYA = ("diya.sharma@example.com", "User@123")
-TARA = ("tara.joshi@example.com", "User@123")
+DIYA = ("diya.sharma@example.com", "User@12345")
+TARA = ("tara.joshi@example.com", "User@12345")
 
 
 def _login(email, pw):

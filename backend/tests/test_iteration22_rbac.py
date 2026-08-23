@@ -26,7 +26,7 @@ MONGO_DB = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
 MANAGER = ("ops.manager@buddilio.com", "Console@123")
-MEMBER = ("diya.sharma@example.com", "User@123")
+MEMBER = ("diya.sharma@example.com", "User@12345")
 PERM_TEST = ("perm.test@buddilio.com", "Perm@1234")
 
 # Extra staff accounts we spin up in Mongo

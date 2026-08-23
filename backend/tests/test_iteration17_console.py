@@ -39,7 +39,7 @@ if not BASE_URL:
 API = f"{BASE_URL}/api"
 ADMIN = ("admin@buddilio.com", "Admin@123")
 APPROVED_MGR = ("ops.manager@buddilio.com", "Console@123")
-MEMBER = ("diya.sharma@example.com", "User@123")
+MEMBER = ("diya.sharma@example.com", "User@12345")
 
 db = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 

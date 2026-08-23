@@ -15,7 +15,7 @@ frontend_env = dotenv_values("/app/frontend/.env")
 BASE = (os.environ.get("REACT_APP_BACKEND_URL") or frontend_env["REACT_APP_BACKEND_URL"]).rstrip("/") + "/api"
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
-MEMBER = ("aarav.mehta@example.com", "User@123")
+MEMBER = ("aarav.mehta@example.com", "User@12345")
 BANK_PROOF_DOCS = ["cancelled_cheque", "bank_statement", "bank_proof"]
 
 

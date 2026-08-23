@@ -38,7 +38,7 @@ def db():
 
 @pytest.fixture(scope="module")
 def member():
-    return hdr(token("arjun.sethi@example.com", "User@123"))
+    return hdr(token("arjun.sethi@example.com", "User@12345"))
 
 
 @pytest.fixture(scope="module")
@@ -58,7 +58,7 @@ def fresh_user(db):
     """A throwaway TEST_ member used for membership-cancel and cross-user 404 checks."""
     email = f"TEST_pp_{uuid.uuid4().hex[:8]}@example.com"
     payload = {"full_name": "TEST_ PayPal Tester", "email": email, "mobile": "9876500011",
-               "password": "User@123", "dob": "1990-05-05", "gender": "male", "city": "Mumbai",
+               "password": "User@12345", "dob": "1990-05-05", "gender": "male", "city": "Mumbai",
                "is_adult": True, "accept_terms": True, "accept_privacy": True,
                "accept_guidelines": True}
     r = requests.post(f"{API}/auth/register", json=payload, timeout=30)

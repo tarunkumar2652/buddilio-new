@@ -28,8 +28,8 @@ DB_NAME = os.environ["DB_NAME"]
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-MEMBER = ("diya.sharma@example.com", "User@123")
-ATTENDEE = ("tara.joshi@example.com", "User@123")
+MEMBER = ("diya.sharma@example.com", "User@12345")
+ATTENDEE = ("tara.joshi@example.com", "User@12345")
 
 FINISHED_EVENT_ID = "6a7b73e34a13de566dbd110f"
 

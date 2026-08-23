@@ -18,7 +18,7 @@ API = f"{BASE}/api"
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
 MANAGER = ("ops.manager@buddilio.com", "Console@123")
-MEMBER = ("diya.sharma@example.com", "User@123")
+MEMBER = ("diya.sharma@example.com", "User@12345")
 PARTNER = ("partner@buddilio.com", "Partner@123")
 
 STATE = {}

@@ -24,10 +24,10 @@ USERS = {
     "admin":   ("admin@buddilio.com",       "Admin@123"),
     "manager": ("ops.manager@buddilio.com", "Console@123"),
     "partner": ("partner@buddilio.com",     "Partner@123"),
-    "tara":    ("tara.joshi@example.com",   "User@123"),   # traveller (IN)
-    "kabir":   ("kabir.nair@example.com",   "User@123"),   # provider
-    "aarav":   ("aarav.mehta@example.com",  "User@123"),   # spare traveller
-    "arjun":   ("arjun.sethi@example.com",  "User@123"),
+    "tara":    ("tara.joshi@example.com",   "User@12345"),   # traveller (IN)
+    "kabir":   ("kabir.nair@example.com",   "User@12345"),   # provider
+    "aarav":   ("aarav.mehta@example.com",  "User@12345"),   # spare traveller
+    "arjun":   ("arjun.sethi@example.com",  "User@12345"),
 }
 
 

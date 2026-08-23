@@ -124,7 +124,7 @@ def test_ai_config_requires_auth():
 @pytest.fixture(scope="module")
 def member_token():
     r = requests.post(f"{BASE}/api/auth/login",
-                      json={"email": "diya.sharma@example.com", "password": "User@123"}, timeout=15)
+                      json={"email": "diya.sharma@example.com", "password": "User@12345"}, timeout=15)
     assert r.status_code == 200, r.text
     return r.json()["access_token"]
 

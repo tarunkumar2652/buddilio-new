@@ -18,7 +18,7 @@ BASE = (os.environ.get("REACT_APP_BACKEND_URL") or frontend_env["REACT_APP_BACKE
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-MEMBER = ("aarav.mehta@example.com", "User@123")
+MEMBER = ("aarav.mehta@example.com", "User@12345")
 
 
 def mongo():
@@ -118,7 +118,7 @@ class TestAdminPageBySlug:
 class TestSignupConsents:
     def _payload(self, **over):
         e = f"TEST_i34_{uuid.uuid4().hex[:8]}@example.com"
-        body = {"full_name": "TEST Consent User", "email": e, "password": "User@123",
+        body = {"full_name": "TEST Consent User", "email": e, "password": "User@12345",
                 "mobile": "+919812345678", "dob": "1993-04-11", "gender": "male", "city": "Delhi",
                 "is_adult": True, "accept_terms": True, "accept_privacy": True,
                 "accept_guidelines": True}

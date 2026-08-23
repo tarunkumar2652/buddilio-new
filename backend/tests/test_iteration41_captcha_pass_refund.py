@@ -17,7 +17,7 @@ API = f"{BASE}/api"
 MONGO_URL = be.get("MONGO_URL") or os.environ.get("MONGO_URL")
 DB_NAME = be.get("DB_NAME") or os.environ.get("DB_NAME")
 
-MEMBER = {"email": "arjun.sethi@example.com", "password": "User@123"}
+MEMBER = {"email": "arjun.sethi@example.com", "password": "User@12345"}
 ADMIN = {"email": "admin@buddilio.com", "password": "Admin@123"}
 
 WORDS_RE = re.compile(r"[“\"']([A-Za-z]+)[”\"']")

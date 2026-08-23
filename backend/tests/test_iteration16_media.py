@@ -81,12 +81,12 @@ def register_ephemeral_partner():
 
 @pytest.fixture(scope="session")
 def diya():
-    return login("diya.sharma@example.com", "User@123")
+    return login("diya.sharma@example.com", "User@12345")
 
 
 @pytest.fixture(scope="session")
 def tara():
-    return login("tara.joshi@example.com", "User@123")
+    return login("tara.joshi@example.com", "User@12345")
 
 
 @pytest.fixture(scope="session")
@@ -208,7 +208,7 @@ class TestWebSocketAttachmentDelivery:
     async def test_recipient_receives_attachment_over_ws(self, diya, uploaded_png):
         """Open a WS as Aarav, have Diya send an attachment-only message, expect a
         'message' frame delivered to Aarav with the attachment payload."""
-        aarav = login("aarav.mehta@example.com", "User@123")
+        aarav = login("aarav.mehta@example.com", "User@12345")
         ws_url = BASE_URL.replace("http", "ws") + f"/api/ws?token={aarav}"
         received = []
         async with websockets.connect(ws_url, open_timeout=15) as ws:

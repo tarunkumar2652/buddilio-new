@@ -19,7 +19,7 @@ API = f"{BASE}/api"
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-MEMBER = ("arjun.sethi@example.com", "User@123")
+MEMBER = ("arjun.sethi@example.com", "User@12345")
 
 TRASH = {"order_ids": [], "order_nos": [], "event_ids": []}
 

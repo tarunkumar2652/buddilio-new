@@ -32,8 +32,8 @@ DB_NAME = os.environ["DB_NAME"]
 ADMIN = ("admin@buddilio.com", "Admin@123")
 MANAGER = ("ops.manager@buddilio.com", "Console@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-MEMBER_ATTENDEE = ("tara.joshi@example.com", "User@123")
-MEMBER_OTHER = ("diya.sharma@example.com", "User@123")
+MEMBER_ATTENDEE = ("tara.joshi@example.com", "User@12345")
+MEMBER_OTHER = ("diya.sharma@example.com", "User@12345")
 
 FINISHED_EVENT_ID = "6a7b73e34a13de566dbd110f"  # Rooftop Jazz & Tapas Night
 SKYLINE_EMAIL = "invited.vendor@example.com"
@@ -292,7 +292,7 @@ def test_photo_post_and_authorization(attendee_tok, other_tok, admin_tok, db):
                                         "_id": {"$nin": [ObjectId(u) for u in part_ids]}},
                                        {"email": 1})
         assert candidate, "no non-attendee member available"
-        non_tok = _login(candidate["email"], "User@123")
+        non_tok = _login(candidate["email"], "User@12345")
         url2 = _upload_test_file(non_tok)
         r = requests.post(f"{API}/events/{FINISHED_EVENT_ID}/photos",
                           json={"url": url2}, headers=_hdr(non_tok), timeout=30)

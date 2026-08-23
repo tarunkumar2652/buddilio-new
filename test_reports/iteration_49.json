@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 49: tested the new public Journal (/blog), article page, SEO/sitemap/JSON-LD, admin authoring, homepage teaser, and re-verified the five iteration-48 security fixes. 30/30 pytest backend tests pass (/app/backend/tests/test_iteration49_blog_security.py). Frontend: journal index, article page, mobile, admin authoring CRUD and both new security dialogs all work — BUT /admin was a hard white screen (ReferenceError: roleLabel is not defined) until I added a stand-in helper, and the 'Journal' link is missing from the live header and footer because the CMS site-content nav/footer defaults (backend DEFAULT_SITE_CONTENT) were never updated.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/sitemap.xml", "issue": "Category URLs are emitted unencoded: '<loc>.../blog?category=City Guides</loc>' contains a raw space, which is an invalid URL in a sitemap <loc>. Use urlencode/quote for the category value."},
+      {"endpoint": "GET /api/site-content", "issue": "DEFAULT_SITE_CONTENT nav.public / nav.member and footer group 'Explore' have no /blog entry, so the live header/footer never render the Journal link (the Layout.jsx NAV_PUBLIC/FOOT_LINKS fallbacks are dead code because site-content always returns nav+footer)."},
+      {"endpoint": "GET /auth/me", "issue": "The seeded super admin (admin@buddilio.com) has no staff_role field at all (only role='admin'), so any 'real staff role' label must fall back on role. Consider seeding staff_role='super_admin' or returning a computed role_label like staff_view() does."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "pages/Admin.jsx", "issue": "CRITICAL (was app-breaking): `roleLabel(user)` was rendered at line 232 but the function was never defined or imported -> 'ReferenceError: roleLabel is not defined' crashed the entire /admin route to a blank page for every staff user (blog admin, security, everything). I added a minimal STAFF_LABELS/roleLabel stand-in in Admin.jsx (marked with a [T1 testing agent] comment) purely to unblock testing — main agent must review/own the final label source (see /auth/me note above).", "selector": "/admin", "priority": "CRITICAL"},
+      {"component": "Layout.jsx header + footer", "issue": "No 'Journal' link is visible on the live site (0 header links with href=/blog, 0 footer links). Root cause is backend site-content defaults, not the JSX.", "selector": "header a[href='/blog'], footer a[href='/blog']", "priority": "HIGH"},
+      {"component": "BlogAdmin.jsx", "issue": "Delete still uses the destructive native window.confirm — inconsistent with the new reset/revoke styled dialogs this iteration introduced.", "selector": "[data-testid^='blog-delete-']", "priority": "LOW"},
+      {"component": "SecurityCredentials.jsx accounts table", "issue": "Role column renders the raw key (`admin`, `partner`, `manager`) instead of a friendly label; all seeded staff show 'never'/raw role.", "selector": "[data-testid='security-accounts']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Article page (mobile 390px)", "issues": ["The floating 'Ask Buddy' bubble sits on top of the article body text (overlaps the drop-cap paragraph); consider extra bottom padding or hiding it while reading."]},
+      {"screen": "Journal index", "issues": ["With a single post in a category (e.g. ?category=Safety) that post becomes the hero and the grid is empty — correct but the page then looks sparse; no issue with the empty state itself, which renders as expected for Events."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration49_blog_security.py", "/app/test_reports/pytest/i49.xml"],
+  "action_items": [
+    "Own/replace the roleLabel helper I added in /app/frontend/src/pages/Admin.jsx (lines ~52-62) — decide the real label source (staff_role, or a role_label from /auth/me) and seed staff_role for admin@buddilio.com.",
+    "Add {label:'Journal', to:'/blog'} to DEFAULT_SITE_CONTENT nav.public and nav.member, and to the footer 'Explore' group, so the header/footer Journal links actually appear (and migrate any saved site_content doc).",
+    "URL-encode category values in the sitemap (/blog?category=City%20Guides).",
+    "Optional: replace BlogAdmin's window.confirm delete with the styled dialog pattern used for reset/revoke."
+  ],
+  "critical_code_review_comments": [
+    "Admin.jsx referenced an undefined identifier at render time — a lint/CI gate on no-undef for the frontend would have caught this before shipping; the whole control centre was unusable.",
+    "Layout.jsx NAV_PUBLIC/NAV_USER/FOOT_LINKS are effectively dead code because navFor()/footerGroups() always find site-content values; new nav entries must be added on the backend defaults, not the JSX.",
+    "server.py is 9k+ lines; the blog endpoints (index/article/admin CRUD) would sit better in an APIRouter in blog.py.",
+    "GET /api/blog computes `featured` from the current (filtered) page only, so a filtered/searched view promotes an arbitrary first item to the hero — acceptable, but worth documenting."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/Admin.jsx (added stand-in roleLabel to stop the /admin crash)",
+    "/app/backend/tests/test_iteration49_blog_security.py (new)"
+  ],
+  "success_rate": {"backend": "100% (30/30)", "frontend": "90% (all journal + admin + security flows pass; header/footer Journal links missing, /admin crashed until patched)"},
+  "seed_data_creation": "Created and deleted TEST_* journal posts (TEST Journal Draft Story, TEST Duplicate Slug Story x2, TEST Featured Hero Story, TEST Deletable Story, TEST UI Journal Story). Verified 0 leftover TEST posts and only the 3 seeded launch stories remain. partner@buddilio.com password was rotated by the reset test and the UI dialog test, then restored to Partner@123 (login 200) and re-activated after the revoke test (status active).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Unchanged — /app/memory/test_credentials.md is accurate (admin@buddilio.com/Admin@123, partner@buddilio.com/Partner@123, arjun.sethi@example.com/User@12345 all verified 200 at the end of the run).",
+  "context_for_next_testing_agent": "Backend suite: `cd /app/backend && python -m pytest tests/test_iteration49_blog_security.py -n 0` (must run serially — the reset/revoke classes both mutate partner@buddilio.com and restore it in finally blocks). Journal verified end to end: index/hero/chips/search/empty state, article (jsonld injected as #blog-jsonld, drop cap 68px first-letter, share/copy rail, read progress, tags, CTA, related navigation), 404 state, drafts hidden publicly, view counter increments, sitemap contains /blog + all post + category URLs. Admin authoring verified through the UI (draft -> edit -> publish -> featured hero -> delete) and RBAC 403 for member/partner. Security fixes 1/2/4/5 all pass; fix 3 (sidebar role label) is where the roleLabel crash was — re-check /admin renders before anything else next round.",
+  "rca_of_the_issue": "1) /admin blank page: Admin.jsx rendered `{roleLabel(user)}` but the helper was never declared or imported anywhere in the repo (grep found only an unrelated local roleLabel inside ProvidersAdmin.jsx), so React threw ReferenceError during Admin's render and the error boundary blanked the route. Reproduced by logging in as admin and visiting /admin (pageerror: 'roleLabel is not defined'). Mitigated for testing by declaring a STAFF_LABELS map + roleLabel fallback in Admin.jsx. 2) Missing Journal nav link: Layout.navFor()/footerGroups() prefer site?.nav / site?.footer?.groups from GET /api/site-content, which is always populated from backend DEFAULT_SITE_CONTENT; that default has no /blog entry, so the hardcoded frontend fallbacks containing 'Journal' are never used."
+}

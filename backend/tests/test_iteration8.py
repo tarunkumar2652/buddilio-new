@@ -31,7 +31,7 @@ def _get(path, **kw):
     raise AssertionError(f"GET {path} failed: {last}")
 
 
-def _login(email, password="User@123"):
+def _login(email, password="User@12345"):
     r = requests.post(f"{API}/auth/login", json={"email": email, "password": password}, timeout=15)
     assert r.status_code == 200, f"login {email}: {r.status_code} {r.text}"
     return {"Authorization": f"Bearer {r.json()['access_token']}"}

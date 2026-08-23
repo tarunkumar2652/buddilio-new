@@ -22,9 +22,9 @@ DB = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 CRON_SECRET = os.environ["WEBHOOK_CRON_SECRET"]
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
-TARA = ("tara.joshi@example.com", "User@123")
-AARAV = ("aarav.mehta@example.com", "User@123")
-ANANYA = ("ananya.kapoor@example.com", "User@123")
+TARA = ("tara.joshi@example.com", "User@12345")
+AARAV = ("aarav.mehta@example.com", "User@12345")
+ANANYA = ("ananya.kapoor@example.com", "User@12345")
 PARTNER = ("partner@buddilio.com", "Partner@123")
 
 

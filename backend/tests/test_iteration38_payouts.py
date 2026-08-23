@@ -48,7 +48,7 @@ def admin():
 
 @pytest.fixture(scope="module")
 def member():
-    return hdr(token("arjun.sethi@example.com", "User@123"))
+    return hdr(token("arjun.sethi@example.com", "User@12345"))
 
 
 @pytest.fixture(scope="module")

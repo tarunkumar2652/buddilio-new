@@ -59,6 +59,41 @@ h1, h2, h3, h4, .font-display {
     * { @apply border-border; }
 }
 
+.blog-body > * + * { margin-top: 1.5rem; }
+.blog-body p:first-of-type::first-letter {
+    float: left;
+    margin: 0.1rem 0.75rem 0 0;
+    font-family: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif;
+    font-size: 4.25rem;
+    line-height: 0.8;
+    font-weight: 800;
+    color: #E81E7C;
+}
+.blog-body h2 { font-family: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif; font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; color: #171418; margin-top: 3rem; }
+.blog-body h3 { font-family: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif; font-size: 1.3rem; font-weight: 800; color: #171418; margin-top: 2.25rem; }
+.blog-body a { color: #E81E7C; text-decoration: underline; text-underline-offset: 3px; }
+.blog-body ul { list-style: disc; padding-left: 1.4rem; }
+.blog-body ol { list-style: decimal; padding-left: 1.4rem; }
+.blog-body li + li { margin-top: 0.5rem; }
+.blog-body blockquote {
+    border-left: 3px solid #E81E7C;
+    padding: 0.25rem 0 0.25rem 1.5rem;
+    margin: 3rem 0;
+    font-family: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif;
+    font-size: 1.6rem;
+    line-height: 1.35;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #171418;
+}
+.blog-body img { width: 100%; border-radius: 1.25rem; margin: 3rem 0; max-height: 70vh; object-fit: cover; }
+.blog-body figcaption { font-size: 0.8rem; color: #A29AA4; text-align: center; margin-top: -2rem; }
+.blog-body hr { border: 0; border-top: 1px solid #EAE6EA; margin: 3.5rem 0; }
+@media (max-width: 640px) {
+    .blog-body blockquote { font-size: 1.3rem; }
+    .blog-body p:first-of-type::first-letter { font-size: 3.25rem; }
+}
+
 .overline {
     text-transform: uppercase;
     font-size: 0.7rem;

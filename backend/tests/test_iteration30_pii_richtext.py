@@ -31,9 +31,9 @@ API = f"{BASE_URL}/api"
 ADMIN = ("admin@buddilio.com", "Admin@123")
 MANAGER = ("ops.manager@buddilio.com", "Console@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-MEMBER = ("tara.joshi@example.com", "User@123")
-AARAV = ("aarav.mehta@example.com", "User@123")
-COMPANION = ("ananya.kapoor@example.com", "User@123")
+MEMBER = ("tara.joshi@example.com", "User@12345")
+AARAV = ("aarav.mehta@example.com", "User@12345")
+COMPANION = ("ananya.kapoor@example.com", "User@12345")
 
 DIRTY_HTML = (
     '<p>Hello <b>world</b></p>'

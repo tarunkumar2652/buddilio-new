@@ -24,6 +24,10 @@ import { VendorPayouts } from "@/components/VendorPayouts";
 import { ProfileForm, EventForm } from "@/components/AdminForms";
 import { Cancellations, RefundDialog } from "@/components/Cancellations";
 import { PaypalWebhook } from "@/components/PaypalWebhook";
+import { SecurityCredentials } from "@/components/SecurityCredentials";
+import { SeoIndexing } from "@/components/SeoIndexing";
+import { SupportInbox } from "@/components/SupportInbox";
+import { BlogAdmin } from "@/components/BlogAdmin";
 import { useAuth } from "@/context/AuthContext";
 
 const NAV = [
@@ -33,6 +37,7 @@ const NAV = [
   ["managers", "Console access", "team:manage"], ["events", "Events", "events:view"],
   ["memberships", "Memberships", "finance:manage"], ["products", "Products", "finance:manage"],  ["orders", "Orders", "finance:view"], ["payments", "Payments", "finance:view"],
   ["cancellations", "Cancellations & refunds", "finance:manage"],
+  ["security", "Security & credentials", "credentials:manage"],
   ["payouts", "Payouts", "payouts:view"], ["vendorpay", "Vendor settlements", "payouts:view"],
   ["coupons", "Coupons", "finance:manage"],
   ["reports", "Reports", "moderation:manage"], ["reviews", "Reviews", "moderation:manage"],
@@ -40,11 +45,23 @@ const NAV = [
   ["idchecks", "ID checks", "verification:manage"], ["providers", "Travel crew", "verification:manage"],
   ["ledger", "Ledger", "finance:view"], ["places", "Countries & cities", "content:manage"],
   ["content", "Content", "content:manage"],
-  ["pages", "Pages", "content:manage"], ["sections", "Site sections", "content:manage"],
+  ["pages", "Pages", "content:manage"], ["blog", "Journal (blog)", "content:manage"],
+  ["support", "Support inbox", "support:respond"], ["seo", "SEO & indexing", "content:manage"],
+  ["sections", "Site sections", "content:manage"],
   ["guides", "City guides", "content:manage"], ["emails", "Emails", "content:manage"],
   ["settings", "Settings", "content:manage"], ["audit", "Audit logs", "audit:view"],
   ["team", "Team & roles", "team:manage"],
 ];
+// Friendly label for the signed-in staff member, mirroring the backend STAFF_ROLES labels.
+const STAFF_LABELS = {
+  super_admin: "Super admin", operations: "Operations", finance: "Finance", support: "Support",
+  moderator: "Moderator", viewer: "Viewer", vendor_manager: "Vendor manager",
+  vendor_viewer: "Console viewer",
+};
+const roleLabel = (u) => STAFF_LABELS[u?.staff_role]
+  || (u?.role === "admin" ? "Super admin" : u?.role === "manager" ? "Vendor manager" : "Control centre");
+
+
 
 const VendorActivity = () => {
   const [items, setItems] = useState(null);
@@ -137,9 +154,9 @@ const Input = ({ label, ...p }) => (
 const GROUPS = [
   ["Overview", ["dashboard", "events", "settings"]],
   ["Money", ["orders", "payments", "cancellations", "payouts", "vendorpay", "coupons", "memberships", "products", "ledger"]],
-  ["Content", ["content", "pages", "sections", "guides", "emails", "places"]],
-  ["People", ["users", "partners", "agreements", "managers", "companions", "team"]],
-  ["Trust", ["verification", "idchecks", "providers", "reports", "reviews", "photos", "audit"]],
+  ["Content", ["content", "pages", "blog", "sections", "guides", "emails", "places", "seo"]],
+  ["People", ["users", "partners", "agreements", "managers", "companions", "team", "support"]],
+  ["Trust", ["verification", "idchecks", "providers", "reports", "reviews", "photos", "audit", "security"]],
 ];
 
 export default function Admin() {
@@ -225,7 +242,7 @@ export default function Admin() {
       <div className="min-w-0 px-4 sm:px-8 lg:px-12 py-8 pb-28">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="overline">Super admin</p>
+            <p className="overline" data-testid="admin-role-label">{roleLabel(user)}</p>
             <h1 className="mt-2 text-3xl font-bold">{label}</h1>
           </div>
           <button onClick={() => setOpen(!open)} data-testid="admin-menu-toggle"
@@ -258,6 +275,10 @@ export default function Admin() {
           blank={{ code: "", discount_type: "percent", value: 10, min_order: 0, usage_limit: 100, members_only: false, expires_at: "", active: true }} />}
         {(active === "orders" || active === "payments") && <Orders payments={active === "payments"} />}
         {active === "cancellations" && <Cancellations />}
+        {active === "security" && <SecurityCredentials />}
+        {active === "blog" && <BlogAdmin />}
+        {active === "support" && <SupportInbox />}
+        {active === "seo" && <SeoIndexing />}
         {active === "payouts" && <Payouts />}
         {active === "vendorpay" && <VendorPayouts />}
         {active === "reports" && <Reports />}

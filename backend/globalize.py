@@ -15,7 +15,7 @@ from bson import ObjectId
 db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 now = lambda: datetime.now(timezone.utc)
 iso = lambda d: d.isoformat()
-PW = bcrypt.hashpw(b"User@123", bcrypt.gensalt()).decode()
+PW = bcrypt.hashpw(b"User@12345", bcrypt.gensalt()).decode()
 
 CITIES = [
     ("Delhi NCR", "Delhi", "IN", "India"), ("Gurugram", "Haryana", "IN", "India"),

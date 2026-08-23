@@ -23,7 +23,7 @@ def _items(payload):
 
 
 def test_me_events_tara_has_7_bookings():
-    tok = _login("tara.joshi@example.com", "User@123")
+    tok = _login("tara.joshi@example.com", "User@12345")
     r = requests.get(f"{API}/me/events", headers=_hdr(tok), timeout=30)
     assert r.status_code == 200
     events = _items(r.json())
@@ -34,7 +34,7 @@ def test_me_events_tara_has_7_bookings():
 
 
 def test_conversations_aarav_has_4():
-    tok = _login("aarav.mehta@example.com", "User@123")
+    tok = _login("aarav.mehta@example.com", "User@12345")
     r = requests.get(f"{API}/conversations", headers=_hdr(tok), timeout=30)
     assert r.status_code == 200
     convs = _items(r.json())
@@ -46,7 +46,7 @@ def test_conversations_aarav_has_4():
 
 
 def test_conversations_messages_aarav_first_direct_has_19():
-    tok = _login("aarav.mehta@example.com", "User@123")
+    tok = _login("aarav.mehta@example.com", "User@12345")
     convs = _items(requests.get(f"{API}/conversations", headers=_hdr(tok), timeout=30).json())
     direct = [c for c in convs if c.get("type", "direct") != "event"]
     assert direct
@@ -81,7 +81,7 @@ def test_event_detail_participants_shape():
 
 
 def test_discover_membership_badges():
-    tok = _login("tara.joshi@example.com", "User@123")
+    tok = _login("tara.joshi@example.com", "User@12345")
     members = _items(requests.get(f"{API}/discover", headers=_hdr(tok), timeout=30).json())
     by_email = {m.get("email"): m for m in members if m.get("email")}
     # Gulf members should not be premium (they may not appear if not near Tara — check only if present)

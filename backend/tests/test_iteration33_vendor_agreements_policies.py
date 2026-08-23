@@ -20,8 +20,8 @@ BASE = base_url.rstrip("/") + "/api"
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-AARAV = ("aarav.mehta@example.com", "User@123")
-ARJUN = ("arjun.sethi@example.com", "User@123")
+AARAV = ("aarav.mehta@example.com", "User@12345")
+ARJUN = ("arjun.sethi@example.com", "User@12345")
 
 POLICY_SLUGS = ["about", "how-it-works", "faq", "guidelines", "safety", "report", "privacy", "terms",
                 "refund", "cookies", "vendor-terms", "contact", "grievance", "cities", "insights", "trust"]
@@ -378,7 +378,7 @@ class TestPolicyPages:
 class TestRegisterConsent:
     def payload(self, email, **over):
         body = {"full_name": "TEST_ Consent User", "email": email, "mobile": "9876500011",
-                "password": "User@123", "dob": "1990-05-05", "gender": "male", "city": "Gurugram",
+                "password": "User@12345", "dob": "1990-05-05", "gender": "male", "city": "Gurugram",
                 "is_adult": True, "accept_terms": True, "accept_privacy": True,
                 "accept_guidelines": True}
         body.update(over)

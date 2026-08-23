@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 51 verification of the 4 new asks + listed regressions. Backend: 27/27 pytest assertions pass (/api/meta currency list, sitemap encoding, SEO panel APIs incl. IndexNow refusal on preview host, human support threads for guest+member, staff inbox, permissions, blog regression) plus prerender output checks. Frontend: currency switcher (USD/INR/GBP/EUR) switches and persists prices; guest + member 'Talk to a real person' escalation, validation, back-to-AI, reload persistence and staff reply visible on poll all work; Admin Support inbox (list/unread/read/reply/status/filters/search) and SEO & indexing panel (counts, links, URL filter, save+persist, key rotation, submit correctly disabled+refused on preview) work; `yarn build` exits 0 and prerenders build/blog/index.html + 3 article pages with real title/description/canonical/JSON-LD/article text and build/sitemap.xml. One HIGH navigation bug: the two new admin sections are missing from the sidebar groups.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/seo/indexnow-key", "issue": "Key rotation writes a new frontend/public/<key>.txt but never removes the previous ones — 3 stale key files are now committed in /app/frontend/public and every old key stays valid at the site root. Delete previous *.txt key files on rotation."},
+      {"endpoint": "GET /api/seo/public, GET /api/sitemap.xml", "issue": "When no live site_url is saved, seo_site_url() falls back to FRONTEND_URL (the preview host), so a production build's prerendered canonical/og URLs and the sitemap <loc>s point at lifestyle-connect-17.preview.emergentagent.com (verified: canonical was the preview host until I saved buddilio.com). prerender.js only defaults to https://buddilio.com when the API returns an empty site_url, which it never does. Suggest defaulting to the live domain."},
+      {"endpoint": "POST /api/support/threads", "issue": "Guest rate limit is 5 threads/hour per client IP; in the preview all traffic shares the ingress IP, so a genuine second visitor is blocked with 429 'That's a lot of chats' (hit this during testing). Behind a CDN/proxy in production make sure client_ip resolves to the real visitor, or raise the limit."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Admin.jsx GROUPS", "issue": "GROUPS (line ~154) omits the new 'support' and 'seo' keys, so 'Support inbox' and 'SEO & indexing' never render in the admin sidebar — they are only reachable by typing in the nav search box. Worst for the 'support' staff preset, whose only new tool is the inbox. Add 'support' and 'seo' to the Content/Trust group lists.", "selector": "[data-testid=\"admin-tab-support\"], [data-testid=\"admin-tab-seo\"]", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Support inbox", "issues": ["Staff bubbles carry no unread/status change highlight for the newly replied thread beyond the list refresh — cosmetic only", "Status pill row shows 'open / pending / Close' (mixed verb + states) which reads inconsistently"]},
+      {"screen": "Header currency picker", "issues": ["Uses a bare native <select> (no shadcn Select styling) unlike other in-page dropdowns — visually inconsistent, but functional"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration51.py",
+    "/app/backend/tests/test_iteration51_prerender.py",
+    "/app/backend/tests/i51_support_seed.py",
+    "/app/backend/tests/i51_support_cleanup.py",
+    "/app/backend/tests/i51_cleanup.py",
+    "/app/test_reports/pytest/i51.xml"
+  ],
+  "action_items": [
+    "Add 'support' and 'seo' to Admin.jsx GROUPS so the two new sections appear in the sidebar (currently only findable via nav search).",
+    "Delete superseded frontend/public/<oldkey>.txt files when the IndexNow key is rotated (3 stale keys now present).",
+    "Decide the default site_url: with nothing saved, prerendered canonicals and the sitemap point at the preview host."
+  ],
+  "critical_code_review_comments": [
+    "Admin.jsx: NAV and GROUPS are two parallel lists; any new NAV entry silently disappears from the UI if it is not added to GROUPS. Derive the sidebar from a single source (e.g. put the group name in the NAV tuple) to stop this class of bug.",
+    "server.py is 9.3k lines — the new SEO and support route blocks are good candidates to move into seo_routes.py / support_routes.py alongside the existing vendor_routes pattern.",
+    "_write_key_file() mutates the frontend source tree (frontend/public) at request time; in a deployed container the served build is immutable, so the key only goes live after a rebuild (the toast says so, but consider storing the key in Mongo and serving /{key}.txt from FastAPI instead)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration51.py",
+    "/app/backend/tests/test_iteration51_prerender.py",
+    "/app/backend/tests/i51_support_seed.py",
+    "/app/backend/tests/i51_support_cleanup.py",
+    "/app/backend/tests/i51_cleanup.py"
+  ],
+  "success_rate": {"backend": "100% (27/27 assertions across 24 API tests + 3 prerender tests)", "frontend": "95% (all flows pass; 1 HIGH nav discoverability bug)"},
+  "seed_data_creation": "Created and then deleted: TEST_ guest/member support threads (incl. one used to verify visitor-side polling) and one TEST_ published Journal post. SEO settings were exercised (site_url/gsc token/key rotation) and reset afterwards to gsc_verification='' and empty site_url so IndexNow submission stays disabled. No IndexNow submission was ever performed; no PayPal approval attempted. IndexNow key was rotated twice, so backend/frontend/public now holds extra key .txt files.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@buddilio.com / Admin@123 (super admin), arjun.sethi@example.com / User@12345 (member) — from /app/memory/test_credentials.md; login field access_token",
+  "context_for_next_testing_agent": "Regression suite for this increment: pytest /app/backend/tests/test_iteration51.py (API) and test_iteration51_prerender.py (needs a fresh `cd /app/frontend && yarn build` first — the build takes ~25s and the postbuild prerender step writes build/blog/**). Guest support escalation is rate-limited to 5 threads/hour per IP; run `python /app/backend/tests/i51_support_cleanup.py` to clear TEST_ threads and reset the limit before UI runs. Admin sidebar currently cannot reach the Support inbox / SEO panel by clicking — use the [data-testid=\"admin-nav-search\"] box then [data-testid=\"admin-tab-support\"]/[data-testid=\"admin-tab-seo\"] until the GROUPS fix lands. Never click seo-submit-all / seo-submit-blog while a live site_url is saved.",
+  "rca_of_the_issue": "Sidebar bug: Admin.jsx renders the sidebar from GROUPS (a hand-maintained map of section keys to group titles) rather than from NAV. The new 'support' and 'seo' NAV entries were never added to any GROUPS bucket, so baseGroups filters them out; only the search path (which filters `nav` directly) can surface them. Reproduced as super admin: sidebar Content group jumps from 'Journal (blog)' to 'Site sections', and [data-testid=\"admin-tab-support\"]/[data-testid=\"admin-tab-seo\"] do not exist in the DOM until a search term matches them."
+}

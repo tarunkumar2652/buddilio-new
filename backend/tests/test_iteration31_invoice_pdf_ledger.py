@@ -49,12 +49,12 @@ def _login(email, password):
 
 @pytest.fixture(scope="module")
 def member_token():
-    return _login(MEMBER_EMAIL, "User@123")
+    return _login(MEMBER_EMAIL, "User@12345")
 
 
 @pytest.fixture(scope="module")
 def other_token():
-    return _login(OTHER_EMAIL, "User@123")
+    return _login(OTHER_EMAIL, "User@12345")
 
 
 @pytest.fixture(scope="module")
@@ -64,7 +64,7 @@ def admin_token():
 
 @pytest.fixture(scope="module")
 def new_token():
-    return _login(NEW_EMAIL, "User@123")
+    return _login(NEW_EMAIL, "User@12345")
 
 
 def _h(tok):

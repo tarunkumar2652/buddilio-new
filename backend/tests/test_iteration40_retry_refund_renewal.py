@@ -48,7 +48,7 @@ def db():
 
 @pytest.fixture(scope="module")
 def member_tok():
-    return token("arjun.sethi@example.com", "User@123")
+    return token("arjun.sethi@example.com", "User@12345")
 
 
 @pytest.fixture(scope="module")
@@ -77,7 +77,7 @@ def product_id(db):
 def fresh_user(db):
     email = f"TEST_i40_{uuid.uuid4().hex[:8]}@example.com"
     payload = {"full_name": "TEST_ Iter40 Tester", "email": email, "mobile": "9876500042",
-               "password": "User@123", "dob": "1990-05-05", "gender": "male", "city": "Mumbai",
+               "password": "User@12345", "dob": "1990-05-05", "gender": "male", "city": "Mumbai",
                "is_adult": True, "accept_terms": True, "accept_privacy": True,
                "accept_guidelines": True}
     r = requests.post(f"{API}/auth/register", json=payload, timeout=30)

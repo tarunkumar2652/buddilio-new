@@ -17,8 +17,8 @@ BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("RE
     else os.environ.get("PUBLIC_BACKEND_URL", "https://lifestyle-connect-17.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
-MEMBER_A = ("diya.sharma@example.com", "User@123")   # Mumbai
-MEMBER_B = ("tara.joshi@example.com", "User@123")    # Delhi NCR
+MEMBER_A = ("diya.sharma@example.com", "User@12345")   # Mumbai
+MEMBER_B = ("tara.joshi@example.com", "User@12345")    # Delhi NCR
 
 
 # ---------- fixtures ----------

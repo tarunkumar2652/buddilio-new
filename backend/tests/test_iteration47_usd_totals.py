@@ -44,7 +44,7 @@ def partner():
 
 @pytest.fixture(scope="module")
 def member():
-    return _login("arjun.sethi@example.com", "User@123")
+    return _login("arjun.sethi@example.com", "User@12345")
 
 
 @pytest.fixture(scope="module")

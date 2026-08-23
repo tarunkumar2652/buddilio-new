@@ -26,7 +26,7 @@ CRON = "b9f4c1e78a2d46f0b53c8e19d7a640f2c4e8b1a97d35624fbe08c1937a2d5e6c"
 ADMIN = ("admin@buddilio.com", "Admin@123")
 MANAGER = ("ops.manager@buddilio.com", "Console@123")
 PARTNER = ("partner@buddilio.com", "Partner@123")
-MEMBER = ("tara.joshi@example.com", "User@123")
+MEMBER = ("tara.joshi@example.com", "User@12345")
 
 EXPECTED_KEYS = {
     "notification", "welcome", "welcome_google", "password_reset",

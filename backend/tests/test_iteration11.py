@@ -168,14 +168,14 @@ class TestPasswordAuthRegression:
         assert me.json()["email"] == "admin@buddilio.com"
 
     def test_member_login(self, s):
-        r = s.post(f"{API}/auth/login", json={"email": "diya.sharma@example.com", "password": "User@123"})
+        r = s.post(f"{API}/auth/login", json={"email": "diya.sharma@example.com", "password": "User@12345"})
         assert r.status_code == 200
         body = r.json()
         assert body["user"]["role"] == "user"
 
     def test_member_profile_complete_not_false(self, s):
         """Existing seeded members must NOT be forced into onboarding."""
-        r = s.post(f"{API}/auth/login", json={"email": "diya.sharma@example.com", "password": "User@123"})
+        r = s.post(f"{API}/auth/login", json={"email": "diya.sharma@example.com", "password": "User@12345"})
         assert r.status_code == 200
         u = r.json()["user"]
         # Either profile_complete is True or the key is absent (not falsy-forcing to /welcome).

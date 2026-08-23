@@ -1,99 +1,126 @@
 {
-  "project_context": "Buddilio - Consumer social/events marketplace + Admin Console",
-  "design_philosophy": "Elevated Editorial & Soft Utility. The brand identity shifts away from 'overwhelming pink' to a sophisticated, high-contrast neutral base where magenta and pink act purely as high-impact accents. The UI must feel spacious, authoritative, and modern. Admin panels shift from cluttered tabs to a strictly organized, focused sidebar structure.",
+  "theme": "light",
+  "archetype": "Editorial Future",
   "typography": {
-    "font_pairing": {
-      "headings": "Cabinet Grotesk (replaces Outfit) - Provides a punchy, editorial, and modern feel without being generic.",
-      "body": "Satoshi (replaces Manrope) - Clean, highly legible, modern geometric sans that works beautifully for dense admin data."
+    "headings": {
+      "font": "Playfair Display",
+      "classes": "font-serif tracking-tight text-slate-900"
     },
-    "hierarchy_rules": {
-      "h1": "text-4xl sm:text-5xl lg:text-6xl font-black tracking-tighter text-bud-ink leading-tight",
-      "h2": "text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-bud-ink leading-snug",
-      "h3": "text-xl sm:text-2xl font-bold tracking-tight text-bud-ink",
-      "body": "text-base text-bud-muted leading-relaxed",
-      "small_labels": "text-xs font-bold uppercase tracking-[0.2em] text-bud-muted"
+    "body": {
+      "font": "Inter",
+      "classes": "font-sans leading-relaxed text-slate-700"
+    },
+    "scales": {
+      "h1": "text-5xl sm:text-6xl lg:text-7xl font-bold leading-none tracking-tighter",
+      "h2": "text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight",
+      "h3": "text-xl sm:text-2xl font-medium",
+      "body": "text-base sm:text-lg lg:text-xl text-slate-700",
+      "caption": "text-xs sm:text-sm tracking-[0.2em] uppercase font-semibold text-slate-500"
     }
   },
   "colors": {
-    "strategy": "Dial back the pink. The background and surface colors must be neutral, airy, and professional. Pink/Magenta are reserved EXCLUSIVELY for primary buttons, active sidebar states, and brand moments.",
-    "tokens": {
-      "--bud-bg": "#FCFBFB",
-      "--bud-surface": "#FFFFFF",
-      "--bud-ink": "#1A0F1E",
-      "--bud-muted": "#685B6D",
-      "--bud-line": "#EAE3EA",
-      "--bud-magenta": "#E81E7C",
-      "--bud-pink": "#F0459B",
-      "--bud-coral": "#FF9A62",
-      "--bud-violet": "#6B34CD"
-    },
-    "usage": {
-      "backgrounds": "Use --bud-bg for main app backgrounds and --bud-surface (white) for cards, sidebars, and content areas.",
-      "text": "Never use pure black. Use --bud-ink for headings and primary text, --bud-muted for secondary text.",
-      "accents": "Use --bud-magenta for primary CTAs and active states. Use --bud-coral for warnings or secondary highlights."
+    "primary": "#E81E7C",
+    "background": "#FAFAFA",
+    "surface": "#FFFFFF",
+    "text_primary": "#0A0A0A",
+    "text_secondary": "#52525B",
+    "border": "#E4E4E7",
+    "classes": {
+      "bg_primary": "bg-[#E81E7C]",
+      "text_primary": "text-[#E81E7C]",
+      "text_inverted": "text-white",
+      "border_primary": "border-[#E81E7C]",
+      "hover_primary": "hover:bg-[#C81566]",
+      "hover_text_primary": "hover:text-[#E81E7C]"
     }
   },
   "layouts": {
-    "header": {
-      "style": "Crystal Glassmorphism",
-      "classes": "sticky top-0 z-50 w-full h-20 backdrop-blur-xl bg-white/80 border-b border-bud-line px-6 lg:px-12 flex items-center justify-between",
-      "spacing": "Generous internal padding. Do not use transparent backgrounds without blur.",
-      "mobile": "Bottom tab bar (`fixed bottom-0 w-full bg-white border-t border-bud-line pb-safe pt-2`) for Home, Discover, Events, Chat, You."
+    "blog_index": {
+      "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 lg:py-32",
+      "header_section": "flex flex-col md:flex-row md:items-end justify-between mb-16 space-y-6 md:space-y-0",
+      "grid": "grid grid-cols-1 md:grid-cols-12 gap-8 lg:gap-12",
+      "hero_post": "col-span-full grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-16 items-center mb-24",
+      "hero_image": "col-span-full lg:col-span-8 h-[50vh] lg:h-[70vh] rounded-2xl overflow-hidden relative group cursor-pointer",
+      "hero_content": "col-span-full lg:col-span-4 flex flex-col justify-center space-y-6"
     },
-    "footer": {
-      "style": "High-Contrast Anchor",
-      "classes": "bg-bud-ink text-white py-24 px-6 lg:px-12",
-      "structure": "Grid layout. Top section: Logo + Tagline (left), 3 link groups (right). Bottom section: City marquee (slow scrolling ribbon in text-bud-muted), Legal line, Social icons.",
-      "typography": "Links should be text-sm text-white/70 hover:text-white transition-colors."
+    "blog_article": {
+      "wrapper": "bg-white pt-24 pb-32 relative",
+      "header": "max-w-4xl mx-auto px-4 text-center mb-16",
+      "cover_image": "w-full max-w-6xl mx-auto h-[40vh] md:h-[60vh] object-cover rounded-3xl mb-16 shadow-lg",
+      "container": "max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 relative flex flex-col lg:flex-row items-start lg:justify-center gap-12",
+      "article_body": "max-w-prose w-full space-y-8 text-lg sm:text-xl leading-relaxed text-slate-700",
+      "drop_cap": "first-letter:text-7xl first-letter:font-serif first-letter:font-bold first-letter:text-[#E81E7C] first-letter:mr-3 first-letter:float-left first-letter:leading-[0.8]",
+      "pull_quote": "border-l-4 border-[#E81E7C] pl-6 py-2 my-12 text-2xl sm:text-3xl font-serif italic text-slate-900",
+      "inline_image": "w-full rounded-2xl my-12 shadow-sm object-cover max-h-[70vh]",
+      "sticky_rail": "hidden lg:flex flex-col sticky top-32 w-16 space-y-6 items-center self-start"
     },
-    "auth_page": {
-      "style": "Split Editorial",
-      "layout": "Grid cols-1 lg:grid-cols-2 min-h-screen.",
-      "left_panel": "White background (`bg-white`), content perfectly centered with generous padding (`p-12 lg:p-24`). Form max-width `max-w-md`.",
-      "right_panel": "Brand imagery/lifestyle photo with a subtle gradient overlay (`bg-gradient-to-t from-bud-ink/50 to-transparent`). Never a flat pink block.",
-      "21_gate_messaging": "Styled as a distinct, trust-building badge above the form: `inline-flex items-center gap-2 bg-bud-bg border border-bud-line px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest text-bud-ink mb-8`."
-    },
-    "admin_console": {
-      "style": "Soft Utility Grouped Sidebar",
-      "layout": "Desktop: `grid lg:grid-cols-[260px_1fr] min-h-screen`. Mobile: Collapsible drawer for sidebar.",
-      "sidebar_classes": "bg-[#FAFAFA] border-r border-bud-line h-screen sticky top-0 overflow-y-auto p-6 flex flex-col gap-8",
-      "sidebar_groups": {
-        "Base": ["Dashboard", "Events", "Settings"],
-        "Money": ["Orders", "Payments", "Payouts", "Coupons", "Memberships", "Products", "Ledger"],
-        "Content": ["Content", "Pages", "Site sections", "City guides", "Emails", "Countries & cities"],
-        "People": ["Users", "Partners", "Console access", "Hangouts", "Team & roles"],
-        "Trust": ["Verification", "ID checks", "Travel crew", "Reports", "Reviews", "Photo wall", "Audit logs"]
-      },
-      "active_state": "Do NOT use solid pink blocks for active tabs. Use: `bg-pink-50 text-bud-magenta font-semibold rounded-lg` with a subtle pink dot or line indicator.",
-      "content_area": "bg-white p-8 lg:p-12"
+    "homepage_teaser": {
+      "container": "bg-slate-50 py-24 sm:py-32 border-t border-slate-200",
+      "grid": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-3 gap-8"
     }
   },
   "components": {
-    "buttons": {
-      "primary": "bg-bud-magenta text-white font-semibold rounded-full px-6 py-3 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-bud-magenta/25 transition-all",
-      "secondary": "bg-bud-bg text-bud-ink border border-bud-line font-semibold rounded-full px-6 py-3 hover:bg-bud-line/50 transition-all"
+    "category_chip": "inline-flex items-center px-5 py-2 rounded-full text-xs font-semibold uppercase tracking-widest bg-slate-100 text-slate-700 hover:bg-[#E81E7C] hover:text-white transition-all duration-300 cursor-pointer shadow-sm hover:shadow-md",
+    "blog_card": {
+      "wrapper": "group cursor-pointer flex flex-col col-span-full md:col-span-6 lg:col-span-4 space-y-6",
+      "image_container": "aspect-[4/3] overflow-hidden rounded-2xl relative bg-slate-100",
+      "image": "w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-105",
+      "meta": "flex items-center space-x-3 text-sm text-slate-500 font-medium",
+      "title": "text-2xl font-serif font-semibold text-slate-900 group-hover:text-[#E81E7C] transition-colors duration-300 line-clamp-3",
+      "excerpt": "text-slate-600 line-clamp-2"
     },
-    "cards_and_tables": {
-      "style": "Flat, sharp, border-driven. No muddy shadows.",
-      "classes": "bg-white border border-bud-line rounded-2xl overflow-hidden",
-      "table_headers": "bg-[#FAFAFA] text-xs uppercase tracking-wider text-bud-muted font-bold py-4 px-6 border-b border-bud-line"
+    "cta_block": "mt-16 p-8 sm:p-12 bg-slate-900 rounded-3xl text-white text-center flex flex-col items-center space-y-6",
+    "author_meta": "flex items-center space-x-4 border-t border-b border-slate-200 py-6 my-12"
+  },
+  "motion": {
+    "libraries": [
+      "framer-motion",
+      "lenis"
+    ],
+    "patterns": {
+      "fade_up": "initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-100px' }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}",
+      "stagger_children": "variants={{ hidden: {}, show: { transition: { staggerChildren: 0.1 } } }}",
+      "image_reveal": "initial={{ scale: 1.1, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 1.2, ease: 'easeOut' }}"
     }
   },
-  "functionality_fixes": {
-    "membership_pricing_bug": "CRITICAL TASK FOR MAIN AGENT: The user reported 'I changed the price in backend but it is not getting updated on website content section'. You MUST trace the data fetching logic for the membership section on the frontend and ensure it correctly binds to the backend database/API endpoint instead of relying on hardcoded or heavily cached data."
+  "seo_and_admin": {
+    "admin_ui": "Use shadcn/ui components: 'Input' for SEO titles, 'Textarea' for descriptions, 'Switch' for Featured/Draft toggles. Use a custom file upload dropzone for Cover Images.",
+    "seo_surface": "Include React Helmet or Next.js next/head equivalent to inject canonical tags, OG image tags, and JSON-LD structured data (schema.org/BlogPosting) on every article page. Internal links to city/event pages should use standard anchor tags for crawler visibility."
   },
-  "accessibility_and_testing": {
-    "data_testid": "CRITICAL: Every interactive element MUST retain or be assigned a `data-testid` attribute (e.g., `dash-tile-*`, `ledger-export`, `forgot-link`). Do not remove any existing test IDs.",
-    "contrast": "Ensure all text over images uses proper text-shadow or gradient overlays to maintain 4.5:1 contrast."
+  "image_urls": [
+    {
+      "url": "https://images.unsplash.com/photo-1699730148440-22fc68a96752?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHw0fHxmcmllbmRzJTIwZGlubmVyJTIwcGFydHl8ZW58MHx8fHwxNzg3NTA0MDA4fDA&ixlib=rb-4.1.0&q=85",
+      "category": "hero_featured",
+      "description": "Friends enjoying an upscale dinner party. Ideal for the main featured hero post."
+    },
+    {
+      "url": "https://images.pexels.com/photos/26447525/pexels-photo-26447525.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "category": "standard_post_nightlife",
+      "description": "Live concert crowd. Perfect for an article about festivals or concerts."
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1566417713940-fe7c737a9ef2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzR8MHwxfHNlYXJjaHwyfHxjb2NrdGFpbCUyMGJhcnxlbnwwfHx8fDE3ODc1MDQwMDh8MA&ixlib=rb-4.1.0&q=85",
+      "category": "standard_post_dining",
+      "description": "Bartender pouring a cocktail. Great for nightlife or dining guide articles."
+    }
+  ],
+  "accessibility": {
+    "rules": [
+      "All interactive elements MUST have a data-testid attribute (e.g., data-testid='blog-share-twitter').",
+      "Ensure color contrast meets WCAG AA standards (4.5:1 for normal text). The #E81E7C color against white meets requirements for large text, use dark slate for smaller body text.",
+      "Include aria-labels for icon-only buttons like social media shares or bookmarks."
+    ]
   },
-  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
-    "NEVER use generic centered layouts or simplistic UI patterns.",
-    "Apply the updated Cabinet Grotesk (Headings) and Satoshi (Body) fonts. Update the font imports in the HTML/CSS.",
-    "Remove the overwhelmingly pink design elements. Use the neutral palette provided, keeping magenta ONLY for primary buttons and active indicators.",
-    "Implement the 27-tab admin layout as a deeply grouped sidebar (Money, Content, People, Trust).",
-    "Ensure the header has a backdrop-blur and footer has generous padding (py-24).",
-    "Fix the membership pricing API linkage between the admin settings and the frontend display.",
-    "Preserve all `data-testid` attributes on interactive elements.",
-    "Use `lucide-react` for icons and `sonner` for toasts."
+  "instructions_to_main_agent": "Implement an editorial 'digital magazine' feel for the Buddilio blog. Emphasize large imagery and extreme typographical contrast between massive Playfair Display headings and clean sans-serif body text. Avoid generic Shadcn cards for the blog listing—build cardless, image-heavy layouts utilizing the provided Tailwind classes. The reading experience must have a strict measure (max-w-prose) to ensure optimal reading length, with a floating left-rail for sharing. Ensure mobile responsiveness is seamless, collapsing grids to single columns and making the share rail a sticky bottom bar instead.",
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid this: make creative, distinctive frontends.",
+    "Do not make generic centered layouts. Create depth through layered design elements and asymmetry.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap (use py-24, py-32).",
+    "Never use AI emoji characters.",
+    "Never use pure transparent backgrounds for headers or overlays that have content underneath.",
+    "Prioritize optical alignment over strict geometric alignment.",
+    "Every interaction needs micro-animations (hover states, transitions). Static = dead.",
+    "Always use lucide-react for icons.",
+    "Ensure all interactive elements have data-testid attributes."
   ]
 }

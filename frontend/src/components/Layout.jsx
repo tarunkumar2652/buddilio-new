@@ -16,6 +16,7 @@ const NAV_PUBLIC = [
   { to: "/hosts", label: "Organisers" },
   { to: "/passes", label: "Passes" },
   { to: "/membership", label: "Membership" },
+  { to: "/blog", label: "Journal" },
   { to: "/safety", label: "Safety" },
 ];
 
@@ -29,6 +30,7 @@ const NAV_USER = [
   { to: "/messages", label: "Messages" },
   { to: "/membership", label: "Membership" },
   { to: "/orders", label: "Orders" },
+  { to: "/blog", label: "Journal" },
   { to: "/ledger", label: "Payments" },
   { to: "/wallet", label: "Wallet" },
 ];
@@ -250,6 +252,7 @@ const FOOT_LINKS = [
     ["Cancellation & Refund Policy", "/p/refund"], ["Cookie Policy", "/p/cookies"],
     ["Vendor Terms", "/p/vendor-terms"]]],
   ["Explore", [["Events", "/events"], ["Experiences", "/passes"], ["Companions", "/discover"],
+    ["Journal", "/blog"],
     ["Membership", "/membership"]]],
 ];
 

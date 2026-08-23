@@ -14,8 +14,8 @@ API = f"{BASE_URL}/api"
 
 ADMIN = {"email": "admin@buddilio.com", "password": "Admin@123"}
 PARTNER = {"email": "partner@buddilio.com", "password": "Partner@123"}
-USER = {"email": "aarav.mehta@example.com", "password": "User@123"}
-USER2 = {"email": "diya.sharma@example.com", "password": "User@123"}
+USER = {"email": "aarav.mehta@example.com", "password": "User@12345"}
+USER2 = {"email": "diya.sharma@example.com", "password": "User@12345"}
 
 
 def _login(email, password):

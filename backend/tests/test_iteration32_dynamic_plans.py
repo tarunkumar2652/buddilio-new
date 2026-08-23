@@ -14,9 +14,9 @@ if not base_url:
 BASE = base_url.rstrip("/") + "/api"
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
-AARAV = ("aarav.mehta@example.com", "User@123")
-DIYA = ("diya.sharma@example.com", "User@123")
-ARJUN = ("arjun.sethi@example.com", "User@123")
+AARAV = ("aarav.mehta@example.com", "User@12345")
+DIYA = ("diya.sharma@example.com", "User@12345")
+ARJUN = ("arjun.sethi@example.com", "User@12345")
 
 PLAN_FIELDS = ["name", "price", "duration_days", "description", "benefits", "discount_percent",
                "price_overrides", "messages_per_week", "hangouts_access", "premium_filters",

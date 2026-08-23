@@ -32,7 +32,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "clean":
     raise SystemExit
 
 tok = requests.post(f"{API}/auth/login",
-                    json={"email": "arjun.sethi@example.com", "password": "User@123"},
+                    json={"email": "arjun.sethi@example.com", "password": "User@12345"},
                     timeout=30).json()["access_token"]
 h = {"Authorization": f"Bearer {tok}"}
 uid = requests.get(f"{API}/auth/me", headers=h, timeout=30).json()["id"]

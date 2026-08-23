@@ -8,6 +8,7 @@ import os
 import asyncio
 import json
 import re
+from urllib.parse import quote
 import jwt
 import bcrypt
 import bleach
@@ -37,6 +38,10 @@ from invoices import invoice_pdf, template_for
 import agreements as agr
 import paypal
 import passes
+import vault
+import blog
+import seo
+import support
 import botguard
 from city_guides import guide_for, auto_guide
 import ai
@@ -88,8 +93,8 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(user_id: str, email: str, role: str) -> str:
-    payload = {"sub": user_id, "email": email, "role": role,
+def create_access_token(user_id: str, email: str, role: str, token_version: int = 0) -> str:
+    payload = {"sub": user_id, "email": email, "role": role, "ver": int(token_version or 0),
                "exp": now_utc() + timedelta(days=7), "type": "access"}
     return jwt.encode(payload, os.environ["JWT_SECRET"], algorithm=JWT_ALGORITHM)
 
@@ -110,6 +115,9 @@ async def get_current_user(request: Request,
         raise HTTPException(status_code=401, detail="User not found")
     if user.get("status") in ("banned", "suspended"):
         raise HTTPException(status_code=403, detail=f"Your account is {user['status']}. Contact support.")
+    if int(payload.get("ver") or 0) != int(user.get("token_version") or 0):
+        # Password changed or access revoked since this token was issued.
+        raise HTTPException(status_code=401, detail="Your session has ended. Please log in again.")
     return clean(user)
 
 
@@ -170,6 +178,8 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("Platform", "content:manage", "Edit CMS pages and platform settings"),
     ("Platform", "audit:view", "Read the audit and activity logs"),
     ("Platform", "team:manage", "Invite team members and change their permissions"),
+    ("Platform", "credentials:manage", "Rotate passwords and payment/service keys"),
+    ("Platform", "support:respond", "Read and reply to support chats from visitors and members"),
 ]
 ALL_PERMISSIONS = [p[1] for p in PERMISSIONS]
 
@@ -181,7 +191,8 @@ STAFF_ROLES: dict[str, dict] = {
                    "description": "Vendors, invitations, verification and the event calendar.",
                    "permissions": ["vendors:view", "vendors:manage", "invites:manage", "verification:manage",
                                    "agreements:manage",
-                                   "events:view", "events:moderate", "analytics:view", "audit:view"]},
+                                   "events:view", "events:moderate", "analytics:view", "audit:view",
+                                   "support:respond"]},
     "finance": {"label": "Finance", "scope": "admin",
                 "description": "Payouts, orders, refunds and pricing.",
                 "permissions": ["payouts:view", "payouts:pay", "finance:view", "finance:manage",
@@ -189,7 +200,7 @@ STAFF_ROLES: dict[str, dict] = {
     "support": {"label": "Support", "scope": "admin",
                 "description": "Members, reports and day-to-day moderation.",
                 "permissions": ["members:view", "members:manage", "moderation:manage", "events:view",
-                                "finance:view", "analytics:view"]},
+                                "finance:view", "analytics:view", "support:respond"]},
     "moderator": {"label": "Moderator", "scope": "admin",
                   "description": "Reviews, reports and the photo wall only.",
                   "permissions": ["moderation:manage", "events:view", "members:view"]},
@@ -250,6 +261,8 @@ DEFAULT_CURRENCIES = {
     **EXTRA_CURRENCIES,
 }
 ZERO_DECIMAL = {"JPY", "KRW"}
+# Shoppers switch between these four only; organisers can still price in their own city currency.
+DISPLAY_CURRENCIES = ["USD", "INR", "GBP", "EUR"]
 
 # Buddilio operates city by city. The live catalogue lives in db.countries so admins can add
 # countries, cities and tax rules without a deploy; this in-memory copy is refreshed on every write.
@@ -787,7 +800,7 @@ class RegisterIn(BaseModel):
     full_name: str
     email: EmailStr
     mobile: str
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=10)
     dob: str
     gender: str
     city: str
@@ -1072,7 +1085,8 @@ async def login(payload: LoginIn, request: Request, response: Response):
     if user.get("status") == "suspended":
         raise HTTPException(status_code=403, detail="This account is suspended. Contact support.")
     await db.login_attempts.delete_one({"identifier": ident})
-    token = create_access_token(str(user["_id"]), email, user.get("role", "user"))
+    token = create_access_token(str(user["_id"]), email, user.get("role", "user"),
+                                user.get("token_version", 0))
     set_cookies(response, token)
     return {"access_token": token, "user": clean(user)}
 
@@ -2667,6 +2681,190 @@ async def event_walk_in(event_id: str, payload: WalkInIn, user: dict = Depends(g
                        "Buddilio's commission comes off your next settlement."}
 
 
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class CredentialIn(BaseModel):
+    value: str = Field(min_length=1, max_length=4000)
+
+
+def strong_password(p: str) -> str:
+    p = (p or "").strip()
+    if len(p) < 10 or len(p) > 128:
+        raise HTTPException(status_code=400, detail="Use between 10 and 128 characters.")
+    if not (any(c.isupper() for c in p) and any(c.islower() for c in p) and any(c.isdigit() for c in p)):
+        raise HTTPException(status_code=400,
+                            detail="Include an upper-case letter, a lower-case letter and a number.")
+    return p
+
+
+def keyholder(user: dict) -> dict:
+    """Super admin, or an admin you granted the credentials permission."""
+    if user.get("staff_role") == "super_admin" or "credentials:manage" in perms_of(user):
+        return user
+    raise HTTPException(status_code=403, detail="Only a Super admin can manage credentials.")
+
+
+async def end_sessions(user_id: str) -> int:
+    """Bumping the token version invalidates every token already issued to this account."""
+    await db.users.update_one({"_id": as_oid(user_id, "user")}, {"$inc": {"token_version": 1}})
+    doc = await db.users.find_one({"_id": as_oid(user_id, "user")}, {"token_version": 1})
+    return int(doc.get("token_version") or 0)
+
+
+@api.post("/me/password")
+async def change_my_password(payload: PasswordChangeIn, response: Response,
+                            user: dict = Depends(get_current_user)):
+    row = await db.users.find_one({"_id": as_oid(user["id"], "user")})
+    if not verify_password(payload.current_password, row.get("password_hash", "")):
+        raise HTTPException(status_code=400, detail="That current password is not right.")
+    new = strong_password(payload.new_password)
+    if verify_password(new, row.get("password_hash", "")):
+        raise HTTPException(status_code=400, detail="Please choose a different password.")
+    await db.users.update_one({"_id": row["_id"]}, {"$set": {"password_hash": hash_password(new),
+                                                            "password_changed_at": iso(now_utc())}})
+    version = await end_sessions(user["id"])
+    await audit(user, "password.changed", "user", user["id"], {})
+    token = create_access_token(user["id"], row["email"], row.get("role", "user"), version)
+    set_cookies(response, token)
+    return {"ok": True, "access_token": token,
+            "message": "Password changed. Every other device has been signed out."}
+
+
+@api.get("/admin/security/accounts")
+async def security_accounts(user: dict = Depends(get_current_user)):
+    keyholder(user)
+    rows = await db.users.find({"role": {"$in": ["admin", "manager", "partner"]}},
+                               {"full_name": 1, "email": 1, "role": 1, "staff_role": 1, "status": 1,
+                                "password_changed_at": 1, "last_login_at": 1, "created_at": 1}) \
+        .sort("role", 1).limit(200).to_list(200)
+    return {"items": [clean(r) for r in rows], "me": user["id"]}
+
+
+@api.post("/admin/security/accounts/{uid}/password")
+async def admin_reset_password(uid: str, payload: CredentialIn, user: dict = Depends(get_current_user)):
+    keyholder(user)
+    if uid == user["id"]:
+        raise HTTPException(status_code=400, detail="Change your own password from 'My password'.")
+    row = await db.users.find_one({"_id": as_oid(uid, "user")})
+    if not row:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    new = strong_password(payload.value)
+    await db.users.update_one({"_id": row["_id"]}, {"$set": {"password_hash": hash_password(new),
+                                                            "password_changed_at": iso(now_utc())}})
+    await end_sessions(uid)
+    await audit(user, "password.admin_reset", "user", uid, {"email": row.get("email", "")})
+    await notify(uid, "Your password was changed",
+                 "A Buddilio administrator set a new password for your account. If this wasn't "
+                 "expected, contact the Super admin.", "system", "/login")
+    return {"ok": True, "message": f"New password set for {row.get('email', 'that account')}. "
+                                   "They have been signed out everywhere."}
+
+
+@api.post("/admin/security/accounts/{uid}/revoke")
+async def admin_revoke_sessions(uid: str, user: dict = Depends(get_current_user)):
+    keyholder(user)
+    row = await db.users.find_one({"_id": as_oid(uid, "user")}, {"email": 1})
+    if not row:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    await end_sessions(uid)
+    await audit(user, "sessions.revoked", "user", uid, {"email": row.get("email", "")})
+    return {"ok": True, "message": "Signed out of every device."}
+
+
+@api.post("/admin/security/accounts/{uid}/access")
+async def admin_set_access(uid: str, body: dict = Body(default={}),
+                           user: dict = Depends(get_current_user)):
+    keyholder(user)
+    if uid == user["id"]:
+        raise HTTPException(status_code=400, detail="You cannot lock your own account.")
+    row = await db.users.find_one({"_id": as_oid(uid, "user")}, {"email": 1, "status": 1})
+    if not row:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    active = bool(body.get("active", False))
+    await db.users.update_one({"_id": row["_id"]},
+                              {"$set": {"status": "active" if active else "suspended"}})
+    await end_sessions(uid)
+    await audit(user, "access.restored" if active else "access.revoked", "user", uid,
+                {"email": row.get("email", "")})
+    return {"ok": True, "status": "active" if active else "suspended",
+            "message": ("Access restored." if active else
+                        "Access revoked and all their sessions killed.")}
+
+
+@api.get("/admin/credentials")
+async def list_credentials(user: dict = Depends(get_current_user)):
+    keyholder(user)
+    rows = await db.audit_logs.find({"action": {"$regex": "^(credential|password|access|sessions)\\."}}) \
+        .sort("created_at", -1).limit(40).to_list(40)
+    return {"items": await vault.status(db), "history": [clean(r) for r in rows],
+            "not_managed_here": [
+                {"what": "Hostinger account password", "where": "hpanel.hostinger.com → Account → Security"},
+                {"what": "Database (MongoDB) password", "where": "Your MongoDB Atlas project → Database Access"},
+                {"what": "Domain / DNS login", "where": "Wherever buddilio.com is registered"},
+                {"what": "PayPal business account login", "where": "paypal.com → Security"}]}
+
+
+@api.put("/admin/credentials/{name}")
+async def set_credential(name: str, payload: CredentialIn, user: dict = Depends(get_current_user)):
+    keyholder(user)
+    if name not in vault.NAMES:
+        raise HTTPException(status_code=404, detail="That setting isn't managed here.")
+    value = payload.value.strip()
+    if name == "PAYPAL_ENV" and value.lower() not in ("live", "sandbox"):
+        raise HTTPException(status_code=400, detail="PayPal mode must be live or sandbox.")
+    if name == "JWT_SECRET" and len(value) < 24:
+        raise HTTPException(status_code=400, detail="Use at least 24 characters for the login secret.")
+    await vault.set_secret(db, name, value)
+    await audit(user, "credential.updated", "credential", name, {"name": name})
+    logger.info(f"credential {name} updated by {user['email']}")
+    extra = (" Everyone will need to log in again." if name == "JWT_SECRET" else "")
+    return {"ok": True, "message": f"Saved. Buddilio is now using the new {name}.{extra}"}
+
+
+@api.delete("/admin/credentials/{name}")
+async def reset_credential(name: str, user: dict = Depends(get_current_user)):
+    keyholder(user)
+    if name not in vault.NAMES:
+        raise HTTPException(status_code=404, detail="That setting isn't managed here.")
+    await vault.clear_secret(db, name)
+    await audit(user, "credential.reverted", "credential", name, {"name": name})
+    return {"ok": True, "message": "Reverted to the value in the server file."}
+
+
+@api.post("/admin/credentials/test/{service}")
+async def test_credential(service: str, user: dict = Depends(get_current_user)):
+    keyholder(user)
+    if service == "paypal":
+        if not paypal.enabled():
+            return {"ok": False, "message": "PayPal keys are not set."}
+        try:
+            await paypal.list_webhooks()
+        except paypal.PayPalError as exc:
+            return {"ok": False, "message": paypal.message_of(exc)}
+        return {"ok": True, "message": f"PayPal answered in {os.environ.get('PAYPAL_ENV', 'sandbox')} mode."}
+    if service == "email":
+        if not os.environ.get("RESEND_API_KEY"):
+            return {"ok": False, "message": "No email key is set."}
+        sent = await send_email(user["email"], "Buddilio credential test",
+                               "<p>Your Resend key works — this email came from Buddilio.</p>")
+        return {"ok": bool(sent), "message": ("Test email sent to " + user["email"]) if sent
+                else "Resend rejected the request. Check the key."}
+    if service == "ai":
+        if not ai.ai_enabled():
+            return {"ok": False, "message": "No AI key is set."}
+        try:
+            reply = await ai.draft_event_copy(f"cred-test-{uuid.uuid4().hex[:6]}",
+                                              "Rooftop jazz night for 40 guests in Dubai")
+            return {"ok": bool(reply), "message": "AI key works — Buddy answered."
+                    if reply else "AI key was accepted but returned nothing usable."}
+        except Exception as exc:
+            return {"ok": False, "message": f"AI key failed: {str(exc)[:120]}"}
+    raise HTTPException(status_code=404, detail="Nothing to test for that service.")
+
+
 CANCEL_TIERS = [(7, 30), (2, 50), (0, 100)]   # days notice -> % deducted (minimum 30%)
 
 
@@ -3443,7 +3641,7 @@ async def meta():
             "base_currency": BASE_CURRENCY,
             "categories": [c["name"] for c in cats],
             "interests": [i["name"] for i in ints],
-            "currencies": [{"code": k, **v} for k, v in conf.items()],
+            "currencies": [{"code": k, **conf[k]} for k in DISPLAY_CURRENCIES if k in conf],
             "settings": clean(await db.settings.find_one({}) or {"_id": ObjectId(), "platform_name": "Buddilio"})}
 
 
@@ -6717,12 +6915,14 @@ DEFAULT_SITE_CONTENT: dict[str, dict] = {
     "testimonials": {"heading": "What members say", "items": []},
     "nav": {"public": [{"label": "Events", "to": "/events"}, {"label": "Organisers", "to": "/hosts"},
                        {"label": "Passes", "to": "/passes"}, {"label": "Membership", "to": "/membership"},
+                       {"label": "Journal", "to": "/blog"},
                        {"label": "Safety", "to": "/safety"}],
             "member": [{"label": "Dashboard", "to": "/dashboard"}, {"label": "Discover", "to": "/discover"},
                        {"label": "Events", "to": "/events"}, {"label": "Organisers", "to": "/hosts"},
                        {"label": "Hangouts", "to": "/hangouts"},
                        {"label": "Messages", "to": "/messages"}, {"label": "Membership", "to": "/membership"},
-                       {"label": "Orders", "to": "/orders"}, {"label": "Wallet", "to": "/wallet"}]},
+                       {"label": "Orders", "to": "/orders"}, {"label": "Journal", "to": "/blog"},
+                       {"label": "Wallet", "to": "/wallet"}]},
     "footer": {"legal_note": ("Buddilio is a social discovery and experience platform for adults aged 21+. "
                               "Buddilio is not a dating or matchmaking platform. User interactions, "
                               "third-party services, events and experiences may involve independent "
@@ -6732,6 +6932,7 @@ DEFAULT_SITE_CONTENT: dict[str, dict] = {
                "groups": [
         {"title": "Buddilio", "links": [{"label": "About Us", "to": "/p/about"},
                                         {"label": "How It Works", "to": "/p/how-it-works"},
+                                        {"label": "Journal", "to": "/blog"},
                                         {"label": "FAQ", "to": "/p/faq"},
                                         {"label": "Contact Us", "to": "/p/contact"},
                                         {"label": "Cities We Serve", "to": "/p/cities"}]},
@@ -6757,12 +6958,27 @@ async def site_content() -> dict:
         k: v for k, v in saved.items() if k not in DEFAULT_SITE_CONTENT}
 
 
-@api.get("/sitemap.xml")
-async def sitemap_xml():
-    """Dynamic sitemap built from live published content."""
-    base = (FRONTEND_URL or "https://buddilio.com").rstrip("/")
+def site_base() -> str:
+    return (FRONTEND_URL or "https://buddilio.com").rstrip("/")
+
+
+def seo_site_base() -> str:
+    """Canonicals and sitemaps must name the live domain, never the preview host."""
+    base = site_base()
+    return "https://buddilio.com" if ("localhost" in base or ".preview." in base) else base
+
+
+async def _sitemap_urls() -> tuple[list, dict]:
+    """Every indexable path — shared by the sitemap and the SEO & indexing panel."""
     urls = [("/", "1.0"), ("/events", "0.9"), ("/passes", "0.8"), ("/membership", "0.8"),
-            ("/discover", "0.8"), ("/organisers", "0.7"), ("/safety", "0.7")]
+            ("/discover", "0.8"), ("/organisers", "0.7"), ("/safety", "0.7"), ("/blog", "0.9")]
+    for post in await db.blog_posts.find({"status": "published"},
+                                         {"slug": 1, "updated_at": 1, "category": 1}) \
+            .sort("published_at", -1).limit(500).to_list(500):
+        urls.append((f"/blog/{post['slug']}", "0.7"))
+    for cat in blog.CATEGORIES:
+        # matches the URLSearchParams encoding the Journal chips produce, so it stays one canonical URL
+        urls.append((f"/blog?category={cat.replace(' ', '+')}", "0.5"))
     pages = await db.cms_pages.find({"status": {"$ne": "draft"}}, {"slug": 1, "last_updated": 1}) \
         .limit(200).to_list(200)
     lastmod = {}
@@ -6779,17 +6995,123 @@ async def sitemap_xml():
     for ev in await db.events.find({"status": "published"}, {"_id": 1, "updated_at": 1}) \
             .sort("starts_at", -1).limit(500).to_list(500):
         urls.append((f"/events/{ev['_id']}", "0.7"))
-    seen, body = set(), []
+    seen, out = set(), []
     for loc, pri in urls:
         if loc in seen:
             continue
         seen.add(loc)
+        out.append((loc, pri))
+    return out, lastmod
+
+
+@api.get("/sitemap.xml")
+async def sitemap_xml():
+    """Dynamic sitemap built from live published content."""
+    base = seo_site_url(await seo_settings())
+    urls, lastmod = await _sitemap_urls()
+    body = []
+    for loc, pri in urls:
         mod = f"<lastmod>{lastmod[loc]}</lastmod>" if loc in lastmod else ""
-        body.append(f"<url><loc>{base}{loc}</loc>{mod}<priority>{pri}</priority></url>")
+        body.append(f"<url><loc>{base}{xml_escape(loc)}</loc>{mod}<priority>{pri}</priority></url>")
     xml = ('<?xml version="1.0" encoding="UTF-8"?>'
            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + "".join(body) + "</urlset>")
     return Response(content=xml, media_type="application/xml",
                     headers={"Cache-Control": "public, max-age=3600"})
+
+
+@api.get("/blog")
+async def blog_index(category: str = "", q: str = "", tag: str = "", limit: int = 24, skip: int = 0):
+    """Public journal listing — featured post first, then newest."""
+    query: dict = {"status": "published"}
+    if category:
+        query["category"] = category
+    if tag:
+        query["tags"] = tag
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [{"title": rx}, {"excerpt": rx}, {"tags": rx}]
+    rows = await db.blog_posts.find(query, {"body": 0}).sort("published_at", -1) \
+        .skip(max(skip, 0)).limit(min(max(limit, 1), 48)).to_list(48)
+    items = [blog.card(clean(r)) for r in rows]
+    featured = next((i for i in items if i["featured"]), items[0] if items else None)
+    counts = await db.blog_posts.aggregate([{"$match": {"status": "published"}},
+                                            {"$group": {"_id": "$category", "n": {"$sum": 1}}}]) \
+        .to_list(50)
+    return {"items": items, "featured": featured, "total": await db.blog_posts.count_documents(query),
+            "categories": [{"name": c["_id"], "count": c["n"]} for c in counts if c["_id"]],
+            "all_categories": blog.CATEGORIES}
+
+
+@api.get("/blog/{slug}")
+async def blog_post(slug: str):
+    doc = await db.blog_posts.find_one({"slug": slug, "status": "published"})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That story isn't published.")
+    await db.blog_posts.update_one({"_id": doc["_id"]}, {"$inc": {"views": 1}})
+    post = clean(doc)
+    related = await db.blog_posts.find(
+        {"status": "published", "slug": {"$ne": slug},
+         "$or": [{"category": post["category"]}, {"tags": {"$in": post.get("tags", [])}}]},
+        {"body": 0}).sort("published_at", -1).limit(3).to_list(3)
+    if len(related) < 3:
+        more = await db.blog_posts.find({"status": "published", "slug": {"$ne": slug}}, {"body": 0}) \
+            .sort("published_at", -1).limit(3).to_list(3)
+        seen = {r["slug"] for r in related}
+        related += [m for m in more if m["slug"] not in seen][:3 - len(related)]
+    site = (FRONTEND_URL or "https://buddilio.com").rstrip("/")
+    return {"post": post, "related": [blog.card(clean(r)) for r in related],
+            "jsonld": blog.article_jsonld(post, site)}
+
+
+@api.get("/admin/blog")
+async def admin_blog_list(user: dict = Depends(require_perm("content:manage"))):
+    rows = await db.blog_posts.find({}, {"body": 0}).sort("updated_at", -1).limit(200).to_list(200)
+    return {"items": [clean(r) | {"status": r.get("status", "draft")} for r in rows],
+            "categories": blog.CATEGORIES}
+
+
+@api.get("/admin/blog/{post_id}")
+async def admin_blog_get(post_id: str, user: dict = Depends(require_perm("content:manage"))):
+    doc = await db.blog_posts.find_one({"_id": as_oid(post_id, "post")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    return clean(doc)
+
+
+@api.post("/admin/blog")
+async def admin_blog_create(payload: blog.PostIn, user: dict = Depends(require_perm("content:manage"))):
+    doc = blog.to_doc(payload)
+    doc["author_name"] = doc["author_name"] or user.get("full_name", "Buddilio Editorial")
+    if await db.blog_posts.find_one({"slug": doc["slug"]}):
+        doc["slug"] = f"{doc['slug']}-{uuid.uuid4().hex[:4]}"
+    res = await db.blog_posts.insert_one(doc)
+    await audit(user, "blog.created", "post", str(res.inserted_id), {"title": doc["title"]})
+    return {"ok": True, "id": str(res.inserted_id), "slug": doc["slug"]}
+
+
+@api.put("/admin/blog/{post_id}")
+async def admin_blog_update(post_id: str, payload: blog.PostIn,
+                            user: dict = Depends(require_perm("content:manage"))):
+    existing = await db.blog_posts.find_one({"_id": as_oid(post_id, "post")})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    doc = blog.to_doc(payload, existing)
+    clash = await db.blog_posts.find_one({"slug": doc["slug"], "_id": {"$ne": existing["_id"]}})
+    if clash:
+        doc["slug"] = f"{doc['slug']}-{uuid.uuid4().hex[:4]}"
+    await db.blog_posts.update_one({"_id": existing["_id"]}, {"$set": doc})
+    await audit(user, "blog.updated", "post", post_id, {"title": doc["title"], "status": doc["status"]})
+    return {"ok": True, "slug": doc["slug"]}
+
+
+@api.delete("/admin/blog/{post_id}")
+async def admin_blog_delete(post_id: str, user: dict = Depends(require_perm("content:manage"))):
+    doc = await db.blog_posts.find_one({"_id": as_oid(post_id, "post")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    await db.blog_posts.delete_one({"_id": doc["_id"]})
+    await audit(user, "blog.deleted", "post", post_id, {"title": doc.get("title", "")})
+    return {"ok": True}
 
 
 @api.post("/admin/cms/seed-policies")
@@ -8662,6 +8984,269 @@ async def my_ledger(kind: str = "", user: dict = Depends(get_current_user)):
             "kinds": MONEY_IN_KINDS, "currency": BASE_CURRENCY}
 
 
+# ---------------- SEO & indexing ----------------
+def xml_escape(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+async def seo_settings() -> dict:
+    return await db.seo_settings.find_one({"_id": "seo"}) or {}
+
+
+def _write_key_file(key: str) -> bool:
+    """IndexNow needs {key}.txt at the site root; public/ ships with every build."""
+    try:
+        folder = Path(__file__).resolve().parent.parent / "frontend" / "public"
+        for old in folder.glob("*.txt"):
+            if old.stem != "robots" and old.stem != key and len(old.stem) == 32:
+                old.unlink(missing_ok=True)   # a rotated key must stop working
+        (folder / f"{key}.txt").write_text(key, encoding="utf-8")
+        return True
+    except Exception as e:
+        logger.error(f"Could not write IndexNow key file: {e}")
+        return False
+
+
+async def ensure_indexnow_key() -> str:
+    doc = await seo_settings()
+    key = doc.get("indexnow_key")
+    if not key:
+        key = seo.new_key()
+        await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"indexnow_key": key}}, upsert=True)
+    _write_key_file(key)
+    return key
+
+
+def seo_site_url(doc: dict) -> str:
+    return (doc.get("site_url") or seo_site_base()).rstrip("/")
+
+
+class SeoSettingsIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    gsc_verification: str = ""
+    site_url: str = ""
+
+
+class SeoSubmitIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    scope: Literal["all", "blog", "custom"] = "all"
+    urls: List[str] = []
+
+
+@api.get("/seo/public")
+async def seo_public():
+    """Read by the build's prerender step so verification tags land in the served HTML."""
+    doc = await seo_settings()
+    return {"gsc_verification": doc.get("gsc_verification", ""),
+            "indexnow_key": doc.get("indexnow_key", ""), "site_url": seo_site_url(doc)}
+
+
+@api.get("/admin/seo")
+async def admin_seo(user: dict = Depends(require_perm("content:manage"))):
+    doc = await seo_settings()
+    urls, _ = await _sitemap_urls()
+    base = seo_site_url(doc)
+    groups: dict[str, int] = {}
+    for loc, _pri in urls:
+        key = ("Journal" if loc.startswith("/blog") else "Events" if loc.startswith("/events")
+               else "Cities" if loc.startswith("/city/") else "Pages" if loc.startswith("/p/")
+               else "Core")
+        groups[key] = groups.get(key, 0) + 1
+    key = doc.get("indexnow_key", "")
+    return {"site_url": base, "sitemap_url": f"{base}/api/sitemap.xml",
+            "robots_url": f"{base}/robots.txt",
+            "gsc_verification": doc.get("gsc_verification", ""),
+            "indexnow_key": key, "key_file_url": f"{base}/{key}.txt" if key else "",
+            "total": len(urls), "groups": groups,
+            "urls": [loc for loc, _p in urls][:400],
+            "last_submit": doc.get("last_submit") or None,
+            "can_submit": bool(base) and "localhost" not in base and ".preview." not in base}
+
+
+@api.put("/admin/seo")
+async def admin_seo_save(payload: SeoSettingsIn, user: dict = Depends(require_perm("content:manage"))):
+    tag = payload.gsc_verification.strip()
+    if tag and "content=" in tag:  # accept the full <meta> tag and keep only the token
+        m = re.search(r'content=["\']([^"\']+)["\']', tag)
+        tag = m.group(1) if m else tag
+    site = payload.site_url.strip().rstrip("/")
+    if site and not site.startswith("http"):
+        site = f"https://{site}"
+    await db.seo_settings.update_one({"_id": "seo"},
+                                    {"$set": {"gsc_verification": tag[:200], "site_url": site[:200]}},
+                                    upsert=True)
+    await audit(user, "seo.settings", "seo", "seo", {"site_url": site, "verification": bool(tag)})
+    return {"ok": True, "message": "SEO settings saved. Republish the site to put them in the HTML."}
+
+
+@api.post("/admin/seo/indexnow-key")
+async def admin_seo_rotate_key(user: dict = Depends(require_perm("content:manage"))):
+    key = seo.new_key()
+    await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"indexnow_key": key}}, upsert=True)
+    written = _write_key_file(key)
+    await audit(user, "seo.indexnow_key", "seo", "seo", {})
+    return {"ok": True, "indexnow_key": key, "key_file_written": written,
+            "message": "New IndexNow key created. Republish so the key file goes live."}
+
+
+@api.post("/admin/seo/submit")
+async def admin_seo_submit(payload: SeoSubmitIn, user: dict = Depends(require_perm("content:manage"))):
+    doc = await seo_settings()
+    base = seo_site_url(doc)
+    if not base or "localhost" in base or ".preview." in base:
+        raise HTTPException(status_code=400,
+                            detail="Set your live site address (e.g. https://buddilio.com) first — "
+                                   "search engines can't crawl the preview.")
+    key = await ensure_indexnow_key()
+    if payload.scope == "custom":
+        paths = [u.strip() for u in payload.urls if u.strip()][:200]
+    else:
+        urls, _ = await _sitemap_urls()
+        paths = [loc for loc, _p in urls if payload.scope == "all" or loc.startswith("/blog")]
+    targets = [p if p.startswith("http") else f"{base}{p if p.startswith('/') else '/' + p}"
+               for p in paths]
+    if not targets:
+        raise HTTPException(status_code=400, detail="Nothing to submit.")
+    results = await seo.submit(base, key, targets)
+    record = {"at": iso(now_utc()), "count": len(targets), "scope": payload.scope,
+              "by": user.get("email", ""), "results": results}
+    await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"last_submit": record}}, upsert=True)
+    await audit(user, "seo.submit", "seo", "seo", {"count": len(targets), "scope": payload.scope})
+    ok = sum(1 for r in results if r["ok"])
+    return {"ok": ok > 0, "submitted": len(targets), "results": results,
+            "message": (f"{len(targets)} URLs sent to {ok} of {len(results)} endpoints."
+                        if ok else "Search engines rejected the submission — check the details below.")}
+
+
+# ---------------- human support inbox ----------------
+async def _support_thread(tid: str, token: str = "", user: Optional[dict] = None) -> dict:
+    doc = await db.support_threads.find_one({"_id": as_oid(tid, "conversation")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That conversation no longer exists.")
+    owned = (user and doc.get("user_id") == user["id"]) or (token and doc.get("token") == token)
+    if not owned:
+        raise HTTPException(status_code=403, detail="That conversation isn't yours.")
+    return doc
+
+
+@api.post("/support/threads")
+async def support_start(payload: support.StartIn, request: Request,
+                       user: Optional[dict] = Depends(optional_user)):
+    """Escalates a chat to a human. Guests identify themselves with a name and email."""
+    name = (user.get("full_name") if user else payload.name.strip())[:80]
+    email = (user.get("email") if user else payload.email.strip().lower())[:160]
+    if not user:
+        if not name or "@" not in email:
+            raise HTTPException(status_code=400, detail="Please add your name and email so we can reply.")
+        ip = botguard.client_ip(request)
+        recent = await db.support_threads.count_documents({"ip": ip, "created_at": {"$gte": iso(
+            now_utc() - timedelta(hours=1))}})
+        if recent >= 5:
+            raise HTTPException(status_code=429, detail="That's a lot of chats. Please try again later.")
+    token = support.new_token()
+    first = support.message("visitor", payload.message, name)
+    doc = {"user_id": user["id"] if user else "", "name": name, "email": email,
+           "subject": (payload.subject.strip() or payload.message.strip())[:120],
+           "page": payload.page[:200], "status": "open", "token": token,
+           "ip": "" if user else botguard.client_ip(request),
+           "ai_transcript": [str(t)[:1000] for t in payload.ai_transcript][:6],
+           "messages": [first], "unread_for_staff": True, "unread_for_visitor": False,
+           "created_at": iso(now_utc()), "updated_at": iso(now_utc())}
+    res = await db.support_threads.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return {"thread": support.public_thread(doc), "token": token}
+
+
+@api.get("/support/threads/{tid}")
+async def support_get(tid: str, token: str = "", user: Optional[dict] = Depends(optional_user)):
+    doc = await _support_thread(tid, token, user)
+    if doc.get("unread_for_visitor"):
+        await db.support_threads.update_one({"_id": doc["_id"]}, {"$set": {"unread_for_visitor": False}})
+    return {"thread": support.public_thread(doc)}
+
+
+@api.get("/support/threads")
+async def support_mine(user: dict = Depends(get_current_user)):
+    rows = await db.support_threads.find({"user_id": user["id"]}).sort("updated_at", -1).limit(20).to_list(20)
+    return {"items": [support.public_thread(r) | {"unread": bool(r.get("unread_for_visitor"))} for r in rows]}
+
+
+@api.post("/support/threads/{tid}/messages")
+async def support_reply(tid: str, payload: support.ReplyIn,
+                        user: Optional[dict] = Depends(optional_user)):
+    doc = await _support_thread(tid, payload.token, user)
+    if doc.get("status") == "closed":
+        await db.support_threads.update_one({"_id": doc["_id"]}, {"$set": {"status": "open"}})
+    msg = support.message("visitor", payload.message, doc.get("name", ""))
+    await db.support_threads.update_one({"_id": doc["_id"]}, {
+        "$push": {"messages": {"$each": [msg], "$slice": -support.MAX_MESSAGES}},
+        "$set": {"unread_for_staff": True, "updated_at": iso(now_utc())}})
+    return {"ok": True, "message": msg}
+
+
+@api.get("/admin/support")
+async def admin_support_list(status: str = "", q: str = "",
+                             user: dict = Depends(require_perm("support:respond"))):
+    query: dict = {}
+    if status in support.STATUSES:
+        query["status"] = status
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        query["$or"] = [{"name": rx}, {"email": rx}, {"subject": rx}]
+    rows = await db.support_threads.find(query).sort("updated_at", -1).limit(200).to_list(200)
+    counts = {s: await db.support_threads.count_documents({"status": s}) for s in support.STATUSES}
+    counts["unread"] = await db.support_threads.count_documents({"unread_for_staff": True})
+    return {"items": [support.staff_card(r) for r in rows], "counts": counts}
+
+
+@api.get("/admin/support/{tid}")
+async def admin_support_get(tid: str, user: dict = Depends(require_perm("support:respond"))):
+    doc = await db.support_threads.find_one({"_id": as_oid(tid, "conversation")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That conversation no longer exists.")
+    await db.support_threads.update_one({"_id": doc["_id"]}, {"$set": {"unread_for_staff": False}})
+    return {"thread": support.staff_card(doc) | support.public_thread(doc),
+            "ai_transcript": doc.get("ai_transcript", [])}
+
+
+@api.post("/admin/support/{tid}/reply")
+async def admin_support_reply(tid: str, payload: support.ReplyIn,
+                             user: dict = Depends(require_perm("support:respond"))):
+    doc = await db.support_threads.find_one({"_id": as_oid(tid, "conversation")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That conversation no longer exists.")
+    msg = support.message("staff", payload.message, first_name(user.get("full_name")) or "Buddilio")
+    await db.support_threads.update_one({"_id": doc["_id"]}, {
+        "$push": {"messages": {"$each": [msg], "$slice": -support.MAX_MESSAGES}},
+        "$set": {"unread_for_visitor": True, "unread_for_staff": False, "status": "pending",
+                 "updated_at": iso(now_utc())}})
+    if doc.get("user_id"):
+        await notify(doc["user_id"], "Buddilio support replied", payload.message[:180],
+                     "system", "/dashboard", cta="Read the reply")
+    elif doc.get("email"):
+        await send_email(doc["email"], "Buddilio support replied to you",
+                         wrap("We've replied", f"<p>{payload.message[:900]}</p>"
+                              "<p>Open Buddilio and click Ask Buddy — your conversation is waiting there.</p>",
+                              "Open Buddilio", site_base()))
+    await audit(user, "support.reply", "support_thread", tid, {})
+    return {"ok": True, "message": "Reply sent."}
+
+
+@api.patch("/admin/support/{tid}")
+async def admin_support_status(tid: str, body: dict,
+                              user: dict = Depends(require_perm("support:respond"))):
+    status = str(body.get("status", "")).lower()
+    if status not in support.STATUSES:
+        raise HTTPException(status_code=400, detail="Unknown status.")
+    doc = await db.support_threads.find_one_and_update(
+        {"_id": as_oid(tid, "conversation")},
+        {"$set": {"status": status, "updated_at": iso(now_utc())}})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That conversation no longer exists.")
+    await audit(user, "support.status", "support_thread", tid, {"status": status})
+    return {"ok": True, "message": f"Conversation marked {status}."}
+
+
 import vendor_routes
 
 vendor_routes.register({
@@ -8684,6 +9269,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    loaded = await vault.load_into_env(db)
+    if loaded:
+        logger.info(f"credential overrides loaded from the dashboard: {loaded}")
     if not await db.countries.count_documents({}):
         await db.countries.insert_many([dict(c) | {"created_at": iso(now_utc())} for c in COUNTRY_SEED])
     await db.countries.create_index("code", unique=True)
@@ -8740,6 +9328,9 @@ async def startup():
     await db.upload_sessions.create_index("upload_id", unique=True)
     await db.upload_sessions.create_index("created_at", expireAfterSeconds=3600)
     await db.login_attempts.create_index("identifier")
+    await db.support_threads.create_index([("status", 1), ("updated_at", -1)])
+    await db.support_threads.create_index("token")
+    await db.support_threads.create_index("user_id")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     admin_email = os.environ["ADMIN_EMAIL"]
     existing = await db.users.find_one({"email": admin_email})
@@ -8747,12 +9338,15 @@ async def startup():
         await db.users.insert_one({
             "full_name": "Buddilio Admin", "email": admin_email,
             "password_hash": hash_password(os.environ["ADMIN_PASSWORD"]), "role": "admin",
+            "staff_role": "super_admin",
             "status": "active", "city": "Delhi NCR", "age": 35, "photo": "", "bio": "",
             "interests": [], "event_categories": [], "blocked": [], "connections": [],
             "saved_events": [], "verified": True, "created_at": iso(now_utc())})
     elif not verify_password(os.environ["ADMIN_PASSWORD"], existing.get("password_hash", "")):
         await db.users.update_one({"_id": existing["_id"]},
                                   {"$set": {"password_hash": hash_password(os.environ["ADMIN_PASSWORD"])}})
+    if existing and not existing.get("staff_role"):
+        await db.users.update_one({"_id": existing["_id"]}, {"$set": {"staff_role": "super_admin"}})
     asyncio.create_task(reminder_loop())
     asyncio.create_task(payout_loop())
     try:

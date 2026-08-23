@@ -20,8 +20,8 @@ BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("RE
     else "https://lifestyle-connect-17.preview.emergentagent.com"
 API = f"{BASE_URL}/api"
 
-DIYA = ("diya.sharma@example.com", "User@123")   # Mumbai
-TARA = ("tara.joshi@example.com", "User@123")    # Delhi NCR
+DIYA = ("diya.sharma@example.com", "User@12345")   # Mumbai
+TARA = ("tara.joshi@example.com", "User@12345")    # Delhi NCR
 
 FORBIDDEN_WORDS = ["candidate", "same-country", "same country", "variety", "JSON",
                    "json", "rule", "id=", "prompt"]

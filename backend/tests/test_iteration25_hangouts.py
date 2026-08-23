@@ -35,9 +35,9 @@ BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 DB = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 
 ADMIN = ("admin@buddilio.com", "Admin@123")
-TARA = ("tara.joshi@example.com", "User@123")
-ANANYA = ("ananya.kapoor@example.com", "User@123")
-ARJUN = ("arjun.sethi@example.com", "User@123")
+TARA = ("tara.joshi@example.com", "User@12345")
+ANANYA = ("ananya.kapoor@example.com", "User@12345")
+ARJUN = ("arjun.sethi@example.com", "User@12345")
 PARTNER = ("partner@buddilio.com", "Partner@123")
 MANAGER = ("ops.manager@buddilio.com", "Console@123")
 

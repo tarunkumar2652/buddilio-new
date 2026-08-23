@@ -36,7 +36,7 @@ def find_rooftop_event(tok):
 
 # ---------- Report review ----------
 def test_report_review_flow():
-    tok = login("tara.joshi@example.com", "User@123")
+    tok = login("tara.joshi@example.com", "User@12345")
     ev_id = find_rooftop_event(tok)
     assert ev_id
     r = requests.get(f"{BASE}/api/events/{ev_id}/reviews", headers=H(tok), timeout=15)
