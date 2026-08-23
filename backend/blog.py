@@ -49,6 +49,7 @@ class PostIn(BaseModel):
     related_city: str = ""
     cta_label: str = ""
     cta_url: str = ""
+    author_slug: str = ""
 
 
 def to_doc(payload: PostIn, existing: Optional[dict] = None) -> dict:
@@ -68,11 +69,48 @@ def to_doc(payload: PostIn, existing: Optional[dict] = None) -> dict:
     return doc
 
 
+class AuthorIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str = Field(min_length=2, max_length=80)
+    slug: str = ""
+    role: str = ""
+    bio: str = ""
+    photo: str = ""
+    city: str = ""
+    x_url: str = ""
+    instagram_url: str = ""
+    site_url: str = ""
+
+
+def author_doc(payload: "AuthorIn") -> dict:
+    doc = payload.model_dump()
+    doc["slug"] = slugify(payload.slug or payload.name)
+    doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+    return doc
+
+
+def author_card(doc: dict) -> dict:
+    return {"id": doc.get("id", ""), "slug": doc["slug"], "name": doc["name"],
+            "role": doc.get("role", ""), "bio": doc.get("bio", ""), "photo": doc.get("photo", ""),
+            "city": doc.get("city", ""), "x_url": doc.get("x_url", ""),
+            "instagram_url": doc.get("instagram_url", ""), "site_url": doc.get("site_url", "")}
+
+
+def author_jsonld(doc: dict, site: str, posts: list) -> dict:
+    return {"@context": "https://schema.org", "@type": "Person", "name": doc["name"],
+            "jobTitle": doc.get("role", ""), "description": doc.get("bio", ""),
+            "image": doc.get("photo", ""), "url": f"{site}/blog/author/{doc['slug']}",
+            "worksFor": {"@type": "Organization", "name": "Buddilio", "url": site},
+            "subjectOf": [{"@type": "BlogPosting", "headline": p["title"],
+                           "url": f"{site}/blog/{p['slug']}"} for p in posts[:20]]}
+
+
 def card(doc: dict) -> dict:
     """What listings need — never the full body."""
     return {"id": doc["id"], "slug": doc["slug"], "title": doc["title"], "category": doc["category"],
             "excerpt": doc.get("excerpt", ""), "cover_image": doc.get("cover_image", ""),
             "author_name": doc.get("author_name", "Buddilio Editorial"),
+            "author_slug": doc.get("author_slug", ""),
             "read_minutes": doc.get("read_minutes", 3), "featured": bool(doc.get("featured")),
             "published_at": doc.get("published_at", ""), "tags": doc.get("tags", []),
             "views": int(doc.get("views") or 0)}

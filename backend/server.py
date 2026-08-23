@@ -6980,6 +6980,8 @@ async def _sitemap_urls() -> tuple[list, dict]:
     for cat in blog.CATEGORIES:
         # matches the URLSearchParams encoding the Journal chips produce, so it stays one canonical URL
         urls.append((f"/blog?category={cat.replace(' ', '+')}", "0.5"))
+    for a in await db.blog_authors.find({}, {"slug": 1}).limit(100).to_list(100):
+        urls.append((f"/blog/author/{a['slug']}", "0.5"))
     pages = await db.cms_pages.find({"status": {"$ne": "draft"}}, {"slug": 1, "last_updated": 1}) \
         .limit(200).to_list(200)
     lastmod = {}
@@ -7086,8 +7088,77 @@ async def blog_post(slug: str, request: Request):
         seen = {r["slug"] for r in related}
         related += [m for m in more if m["slug"] not in seen][:3 - len(related)]
     site = (FRONTEND_URL or "https://buddilio.com").rstrip("/")
-    return {"post": post, "related": [blog.card(clean(r)) for r in related],
+    author = None
+    if post.get("author_slug"):
+        a = await db.blog_authors.find_one({"slug": post["author_slug"]})
+        author = blog.author_card(clean(a)) if a else None
+    return {"post": post, "author": author, "related": [blog.card(clean(r)) for r in related],
             "jsonld": blog.article_jsonld(post, site)}
+
+
+@api.get("/blog-authors")
+async def blog_authors_public():
+    rows = await db.blog_authors.find({}).sort("name", 1).limit(100).to_list(100)
+    return {"items": [blog.author_card(clean(r)) for r in rows]}
+
+
+@api.get("/blog-authors/{slug}")
+async def blog_author_public(slug: str):
+    doc = await db.blog_authors.find_one({"slug": slug})
+    if not doc:
+        raise HTTPException(status_code=404, detail="We don't have a writer by that name.")
+    posts = await db.blog_posts.find({"status": "published", "author_slug": slug}, {"body": 0}) \
+        .sort("published_at", -1).limit(50).to_list(50)
+    cards = [blog.card(clean(p)) for p in posts]
+    author = blog.author_card(clean(doc))
+    return {"author": author, "posts": cards,
+            "jsonld": blog.author_jsonld(author, seo_site_base(), cards)}
+
+
+@api.get("/admin/blog-authors")
+async def admin_authors(user: dict = Depends(require_perm("content:manage"))):
+    rows = await db.blog_authors.find({}).sort("name", 1).limit(100).to_list(100)
+    counts = {}
+    for r in rows:
+        counts[r["slug"]] = await db.blog_posts.count_documents({"author_slug": r["slug"]})
+    return {"items": [blog.author_card(clean(r)) | {"posts": counts.get(r["slug"], 0)} for r in rows]}
+
+
+@api.post("/admin/blog-authors")
+async def admin_author_create(payload: blog.AuthorIn,
+                             user: dict = Depends(require_perm("content:manage"))):
+    doc = blog.author_doc(payload)
+    if await db.blog_authors.find_one({"slug": doc["slug"]}):
+        raise HTTPException(status_code=400, detail="A writer with that web address already exists.")
+    res = await db.blog_authors.insert_one(doc)
+    await audit(user, "blog.author_created", "author", str(res.inserted_id), {"name": doc["name"]})
+    return {"ok": True, "id": str(res.inserted_id), "slug": doc["slug"]}
+
+
+@api.put("/admin/blog-authors/{aid}")
+async def admin_author_update(aid: str, payload: blog.AuthorIn,
+                             user: dict = Depends(require_perm("content:manage"))):
+    existing = await db.blog_authors.find_one({"_id": as_oid(aid, "writer")})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Writer not found.")
+    doc = blog.author_doc(payload)
+    await db.blog_authors.update_one({"_id": existing["_id"]}, {"$set": doc})
+    if doc["slug"] != existing["slug"]:
+        await db.blog_posts.update_many({"author_slug": existing["slug"]},
+                                        {"$set": {"author_slug": doc["slug"]}})
+    await db.blog_posts.update_many({"author_slug": doc["slug"]},
+                                    {"$set": {"author_name": doc["name"], "author_role": doc["role"]}})
+    await audit(user, "blog.author_updated", "author", aid, {"name": doc["name"]})
+    return {"ok": True, "slug": doc["slug"]}
+
+
+@api.delete("/admin/blog-authors/{aid}")
+async def admin_author_delete(aid: str, user: dict = Depends(require_perm("content:manage"))):
+    doc = await db.blog_authors.find_one_and_delete({"_id": as_oid(aid, "writer")})
+    if doc:
+        await db.blog_posts.update_many({"author_slug": doc["slug"]}, {"$set": {"author_slug": ""}})
+        await audit(user, "blog.author_deleted", "author", aid, {"name": doc.get("name", "")})
+    return {"ok": True}
 
 
 @api.get("/admin/blog")

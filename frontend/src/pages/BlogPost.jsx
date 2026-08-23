@@ -85,8 +85,25 @@ export default function BlogPost() {
         </h1>
         <p className="mt-5 text-base text-slate-600 sm:text-lg">{p.excerpt}</p>
         <p className="mt-6 flex flex-wrap items-center justify-center gap-3 text-xs text-slate-500">
-          <span className="font-semibold text-slate-900">{p.author_name || "Buddilio Editorial"}</span>
-          {p.author_role && <span>{p.author_role}</span>}
+          {d.author ? (
+            <Link to={`/blog/author/${d.author.slug}`} data-testid="post-author-link"
+              className="inline-flex items-center gap-2 transition hover:text-brand-magenta">
+              {d.author.photo ? (
+                <img src={d.author.photo} alt={d.author.name} className="h-8 w-8 rounded-full object-cover" />
+              ) : (
+                <span className="grid h-8 w-8 place-items-center rounded-full bg-slate-900 text-[11px] font-black text-white">
+                  {d.author.name.slice(0, 1)}
+                </span>
+              )}
+              <span className="font-semibold text-slate-900">{d.author.name}</span>
+              {d.author.role && <span className="text-slate-500">{d.author.role}</span>}
+            </Link>
+          ) : (
+            <>
+              <span className="font-semibold text-slate-900">{p.author_name || "Buddilio Editorial"}</span>
+              {p.author_role && <span>{p.author_role}</span>}
+            </>
+          )}
           <span>{day(p.published_at)}</span>
           <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" />{p.read_minutes} min read</span>
         </p>
@@ -148,8 +165,31 @@ export default function BlogPost() {
         </div>
       </div>
 
-      {!!d.related.length && (
-        <section className="mx-auto mt-24 max-w-7xl px-4 pb-24 sm:px-6 lg:px-8" data-testid="post-related">
+      {d.author && (
+        <section className="mx-auto mt-20 max-w-3xl px-4 sm:px-6" data-testid="post-author-card">
+          <div className="flex flex-col gap-5 rounded-3xl border border-slate-200 bg-slate-50 p-6 sm:flex-row sm:items-center">
+            {d.author.photo ? (
+              <img src={d.author.photo} alt={d.author.name}
+                className="h-16 w-16 shrink-0 rounded-full object-cover ring-4 ring-white" />
+            ) : (
+              <span className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-slate-900 text-xl font-black text-white">
+                {d.author.name.slice(0, 1)}
+              </span>
+            )}
+            <div className="min-w-0">
+              <p className="text-sm font-black text-slate-900">{d.author.name}</p>
+              {d.author.role && <p className="text-xs font-bold uppercase tracking-wide text-brand-magenta">{d.author.role}</p>}
+              {d.author.bio && <p className="mt-2 text-sm text-slate-600">{d.author.bio}</p>}
+              <Link to={`/blog/author/${d.author.slug}`} data-testid="post-author-more"
+                className="mt-3 inline-block text-xs font-bold text-slate-900 underline decoration-brand-magenta decoration-2 underline-offset-4">
+                All stories by {d.author.name.split(" ")[0]}
+              </Link>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {!!d.related.length && (        <section className="mx-auto mt-24 max-w-7xl px-4 pb-24 sm:px-6 lg:px-8" data-testid="post-related">
           <h2 className="font-display text-2xl font-bold text-slate-900">Keep reading</h2>
           <div className="mt-8 grid gap-10 sm:grid-cols-2 lg:grid-cols-3">
             {d.related.map((r, i) => <PostCard key={r.slug} p={r} index={i} />)}

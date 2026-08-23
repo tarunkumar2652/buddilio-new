@@ -252,6 +252,17 @@ Checked https://buddilio.com directly:
   picker, overwrite on). Intended use: export on preview, import on the live site, since blog content
   does not travel between environments.
 
+## 2026-08-24 — Journal author profiles
+- `db.blog_authors` (+ `blog.AuthorIn/author_doc/author_card/author_jsonld`); posts carry `author_slug`.
+- Public: `GET /api/blog-authors`, `GET /api/blog-authors/{slug}` (author + their published stories +
+  Person JSON-LD); page at `/blog/author/:slug` (`BlogAuthor.jsx`), byline with photo + author card on
+  every article, author URLs in the sitemap and prerendered into static HTML.
+- Admin: `BlogAuthors.jsx` inside Admin → Journal (blog) — add/edit/delete writers with photo, role,
+  bio, city and social links; renaming a writer updates the byline on all their stories; deleting one
+  leaves the stories published. The post editor has a **Writer** picker that fills the byline.
+- Verified in preview: byline link, author card, author page with story grid, sitemap entry and the
+  prerendered `build/blog/author/<slug>/index.html`.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.

@@ -6,12 +6,13 @@ import { Spinner, Badge } from "@/components/Shared";
 import { ImageUpload } from "@/components/ImageUpload";
 
 import { BlogInsights } from "@/components/BlogInsights";
+import { BlogAuthors } from "@/components/BlogAuthors";
 
 const PILL = "rounded-full px-4 py-2 text-xs font-bold";
 const IN = "mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm";
 const blank = {
   title: "", slug: "", category: "Community", excerpt: "", body: "", cover_image: "", cover_credit: "",
-  author_name: "", author_role: "", tags: [], seo_title: "", seo_description: "", featured: false,
+  author_name: "", author_role: "", author_slug: "", tags: [], seo_title: "", seo_description: "", featured: false,
   status: "draft", cta_label: "", cta_url: "",
 };
 
@@ -29,6 +30,7 @@ export const BlogAdmin = () => {
   const [f, setF] = useState(null);
   const [doomed, setDoomed] = useState(null);
   const [subs, setSubs] = useState(null);
+  const [authors, setAuthors] = useState([]);
   const [sending, setSending] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -152,6 +154,17 @@ export const BlogAdmin = () => {
           <Field label="Cover credit">
             <input value={f.cover_credit} onChange={(e) => setF({ ...f, cover_credit: e.target.value })} className={IN} data-testid="blog-cover-credit" />
           </Field>
+          <Field label="Writer" hint="Adds the byline, photo and a link to their page.">
+            <select value={f.author_slug || ""} data-testid="blog-author-select" className={IN}
+              onChange={(e) => {
+                const a = authors.find((x) => x.slug === e.target.value);
+                setF({ ...f, author_slug: e.target.value,
+                  author_name: a ? a.name : f.author_name, author_role: a ? a.role : f.author_role });
+              }}>
+              <option value="">No writer profile — use the name below</option>
+              {authors.map((a) => <option key={a.slug} value={a.slug}>{a.name}{a.role ? ` · ${a.role}` : ""}</option>)}
+            </select>
+          </Field>
           <Field label="Author name">
             <input value={f.author_name} onChange={(e) => setF({ ...f, author_name: e.target.value })} className={IN} data-testid="blog-author" placeholder="Buddilio Editorial" />
           </Field>
@@ -214,6 +227,7 @@ export const BlogAdmin = () => {
       </div>
 
       <div className="mt-6"><BlogInsights /></div>
+      <div className="mt-6"><BlogAuthors onChange={setAuthors} /></div>
 
       <div className="mt-5 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white">        {list.length ? list.map((p) => (
           <div key={p.id} className="flex flex-wrap items-center gap-4 p-4" data-testid={`blog-row-${p.slug}`}>

@@ -119,7 +119,7 @@ const cardHtml = (p, site) => `
   let count = 0;
   for (const p of unique) {
     try {
-      const { post, jsonld } = await get(`/blog/${p.slug}`);
+      const { post, jsonld, author } = await get(`/blog/${p.slug}`);
       write(`blog/${post.slug}`, page(shell, {
         title: post.seo_title || post.title,
         description: post.seo_description || post.excerpt,
@@ -129,7 +129,9 @@ const cardHtml = (p, site) => `
           <p>${esc(post.category)} · ${esc(post.read_minutes)} min read</p>
           <h1>${esc(post.title)}</h1>
           <p>${esc(post.excerpt)}</p>
-          <p>By ${esc(post.author_name || "Buddilio Editorial")}${post.published_at ? ` · ${esc(String(post.published_at).slice(0, 10))}` : ""}</p>
+          <p>By ${author
+            ? `<a href="${site}/blog/author/${esc(author.slug)}">${esc(author.name)}</a>${author.role ? `, ${esc(author.role)}` : ""}`
+            : esc(post.author_name || "Buddilio Editorial")}${post.published_at ? ` · ${esc(String(post.published_at).slice(0, 10))}` : ""}</p>
           ${post.cover_image ? `<img src="${esc(post.cover_image)}" alt="${esc(post.title)}" />` : ""}
           ${post.body || ""}
           <p><a href="${site}/blog">Back to the Journal</a></p>
@@ -139,4 +141,28 @@ const cardHtml = (p, site) => `
     } catch (e) { console.log(`  skipped ${p.slug}: ${e.message}`); }
   }
   console.log(`[prerender] done — Journal index + ${count} articles`);
+
+  // author pages
+  let writers = [];
+  try { writers = (await get("/blog-authors")).items || []; } catch (e) { /* none yet */ }
+  for (const w of writers) {
+    try {
+      const { author, posts, jsonld } = await get(`/blog-authors/${w.slug}`);
+      write(`blog/author/${author.slug}`, page(shell, {
+        title: `${author.name} — Buddilio Journal`,
+        description: author.bio || `Stories by ${author.name} in the Buddilio Journal.`,
+        canonical: `${site}/blog/author/${author.slug}`,
+        verification, jsonld,
+        body: `<main>
+          ${author.photo ? `<img src="${esc(author.photo)}" alt="${esc(author.name)}" width="120" />` : ""}
+          <h1>${esc(author.name)}</h1>
+          ${author.role ? `<p>${esc(author.role)}</p>` : ""}
+          ${author.bio ? `<p>${esc(author.bio)}</p>` : ""}
+          <h2>Stories by ${esc(author.name)}</h2>
+          ${posts.map((p) => cardHtml(p, site)).join("")}
+        </main>`,
+      }));
+    } catch (e) { console.log(`  skipped author ${w.slug}: ${e.message}`); }
+  }
+  if (writers.length) console.log(`[prerender] ${writers.length} author pages`);
 })().catch((e) => console.log(`[prerender] skipped: ${e.message}`));
