@@ -69,6 +69,13 @@ const cardHtml = (p, site) => `
   const site = (pub.site_url || "https://buddilio.com").replace(/\/$/, "");
   const verification = pub.gsc_verification || "";
 
+  // The SPA shell is what most URLs serve, so the verification tag belongs in it too.
+  if (verification && !shell.includes(verification)) {
+    fs.writeFileSync(shellPath, shell.replace("</head>",
+      `<meta name="google-site-verification" content="${esc(verification)}" />\n</head>`), "utf8");
+    console.log("  injected Google verification tag into index.html");
+  }
+
   // key file for IndexNow, served from the site root
   if (pub.indexnow_key) {
     fs.writeFileSync(path.join(BUILD, `${pub.indexnow_key}.txt`), pub.indexnow_key, "utf8");

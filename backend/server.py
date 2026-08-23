@@ -11,6 +11,7 @@ import re
 from urllib.parse import quote
 import jwt
 import bcrypt
+import httpx
 import bleach
 import uuid
 import io
@@ -8993,10 +8994,22 @@ async def seo_settings() -> dict:
     return await db.seo_settings.find_one({"_id": "seo"}) or {}
 
 
+def _public_folder() -> Path:
+    return Path(__file__).resolve().parent.parent / "frontend" / "public"
+
+
+def _shipped_key() -> str:
+    """The IndexNow key file that ships with the build — 32 hex chars, one only."""
+    for f in sorted(_public_folder().glob("*.txt")):
+        if len(f.stem) == 32 and all(c in "0123456789abcdef" for c in f.stem):
+            return f.stem
+    return ""
+
+
 def _write_key_file(key: str) -> bool:
     """IndexNow needs {key}.txt at the site root; public/ ships with every build."""
     try:
-        folder = Path(__file__).resolve().parent.parent / "frontend" / "public"
+        folder = _public_folder()
         for old in folder.glob("*.txt"):
             if old.stem != "robots" and old.stem != key and len(old.stem) == 32:
                 old.unlink(missing_ok=True)   # a rotated key must stop working
@@ -9008,13 +9021,43 @@ def _write_key_file(key: str) -> bool:
 
 
 async def ensure_indexnow_key() -> str:
+    """The deployed key file is the source of truth — a DB key nobody can verify is useless."""
     doc = await seo_settings()
     key = doc.get("indexnow_key")
+    shipped = _shipped_key()
+    if shipped and shipped != key:
+        key = shipped
+        await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"indexnow_key": key}}, upsert=True)
     if not key:
         key = seo.new_key()
         await db.seo_settings.update_one({"_id": "seo"}, {"$set": {"indexnow_key": key}}, upsert=True)
     _write_key_file(key)
     return key
+
+
+async def indexnow_key_live(site: str, key: str) -> bool:
+    """Bing/Yandex only accept a submission once {site}/{key}.txt serves that exact key."""
+    if not (site and key):
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            r = await c.get(f"{site.rstrip('/')}/{key}.txt")
+        return r.status_code == 200 and key in r.text
+    except Exception as e:
+        logger.error(f"IndexNow key file check failed for {site}: {e}")
+        return False
+
+
+async def meta_tag_live(site: str, token: str) -> bool:
+    """Google verifies from the served HTML, so check the tag actually reached the deployed site."""
+    if not (site and token):
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            r = await c.get(site)
+        return token in r.text
+    except Exception:
+        return False
 
 
 def seo_site_url(doc: dict) -> str:
@@ -9053,10 +9096,14 @@ async def admin_seo(user: dict = Depends(require_perm("content:manage"))):
                else "Core")
         groups[key] = groups.get(key, 0) + 1
     key = doc.get("indexnow_key", "")
+    shipped = _shipped_key()
+    live = await indexnow_key_live(base, key) if key else False
     return {"site_url": base, "sitemap_url": f"{base}/api/sitemap.xml",
             "robots_url": f"{base}/robots.txt",
             "gsc_verification": doc.get("gsc_verification", ""),
+            "gsc_live": bool(doc.get("gsc_verification")) and await meta_tag_live(base, doc["gsc_verification"]),
             "indexnow_key": key, "key_file_url": f"{base}/{key}.txt" if key else "",
+            "key_file_live": live, "key_needs_publish": bool(key and shipped == key and not live),
             "total": len(urls), "groups": groups,
             "urls": [loc for loc, _p in urls][:400],
             "last_submit": doc.get("last_submit") or None,
@@ -9069,6 +9116,7 @@ async def admin_seo_save(payload: SeoSettingsIn, user: dict = Depends(require_pe
     if tag and "content=" in tag:  # accept the full <meta> tag and keep only the token
         m = re.search(r'content=["\']([^"\']+)["\']', tag)
         tag = m.group(1) if m else tag
+    tag = re.sub(r"^google-site-verification[=:]\s*", "", tag).strip()
     site = payload.site_url.strip().rstrip("/")
     if site and not site.startswith("http"):
         site = f"https://{site}"
@@ -9098,6 +9146,10 @@ async def admin_seo_submit(payload: SeoSubmitIn, user: dict = Depends(require_pe
                             detail="Set your live site address (e.g. https://buddilio.com) first — "
                                    "search engines can't crawl the preview.")
     key = await ensure_indexnow_key()
+    if not await indexnow_key_live(base, key):
+        raise HTTPException(status_code=400,
+                            detail=f"{base}/{key}.txt isn't live yet, so Bing refuses the submission. "
+                                   "Republish the site, then try again.")
     if payload.scope == "custom":
         paths = [u.strip() for u in payload.urls if u.strip()][:200]
     else:

@@ -202,6 +202,25 @@ Shipped in Preview, tested (iteration 52: 24 backend tests pass, all UI checks p
 - P2 scale: support alerts and newsletter sends loop recipients inline in the request — fine at current
   volume, should move to a background job before large lists.
 
+## 2026-08-24 — SEO panel split per engine + IndexNow 403 root cause
+- **Root cause of the Bing/IndexNow `SiteVerificationNotCompleted` 403**: the production DB held a
+  rotated IndexNow key (`b1f4d2…`) while the deployed key file was the older `89c2f6….txt`, so Bing
+  could not verify. Fixed: `ensure_indexnow_key()` now treats the **key file shipped in
+  `frontend/public/` as the source of truth** and self-heals the DB, and `/api/admin/seo/submit`
+  pre-flights `{site}/{key}.txt` and refuses with a "republish first" message instead of a raw 403.
+- **Google verification**: the token is now injected into the built `index.html` by the prerender step
+  (the SPA shell is what every URL serves), and `/api/admin/seo` reports `gsc_live` by fetching the
+  live site. Pasting a token still requires a republish before Search Console can verify. Saved tokens
+  now also strip a leading `google-site-verification=`.
+- **SEO panel** rebuilt as three separate sections — Google Search Console (step-by-step + URL
+  inspection guidance), Bing Webmaster Tools (import-from-GSC + sitemap), IndexNow instant push with a
+  live key-file status. `httpx` was missing from `server.py` imports (the live checks failed silently).
+- **Open**: production still serves the SPA shell for `/blog` even though `build/sitemap.xml` shows the
+  postbuild prerender ran, i.e. `build/blog/index.html` is not reaching/served by the deployed static
+  host. Root-level real files (`offline.html`, `*.txt`) ARE served. Re-check after the next republish;
+  if it persists, either Emergent Support must allow directory-index files or accept JS-rendered
+  indexing (Google and Bing both render).
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.
