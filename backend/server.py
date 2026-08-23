@@ -7097,6 +7097,50 @@ async def admin_blog_list(user: dict = Depends(require_perm("content:manage"))):
             "categories": blog.CATEGORIES}
 
 
+@api.get("/admin/blog/export")
+async def admin_blog_export(user: dict = Depends(require_perm("content:manage"))):
+    """Portable copy of every story, so the same words can be loaded onto the live site."""
+    rows = await db.blog_posts.find({}).sort("created_at", -1).limit(500).to_list(500)
+    fields = list(blog.PostIn.model_fields.keys())
+    return {"version": 1, "exported_at": iso(now_utc()), "count": len(rows),
+            "posts": [{f: r.get(f, "") for f in fields} for r in rows]}
+
+
+class BlogImportIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    posts: List[dict]
+    overwrite: bool = False
+
+
+@api.post("/admin/blog/import")
+async def admin_blog_import(payload: BlogImportIn,
+                            user: dict = Depends(require_perm("content:manage"))):
+    if not payload.posts:
+        raise HTTPException(status_code=400, detail="That file has no stories in it.")
+    added, updated, skipped = 0, 0, 0
+    for raw in payload.posts[:200]:
+        try:
+            item = blog.PostIn(**raw)
+        except Exception:
+            skipped += 1
+            continue
+        doc = blog.to_doc(item)
+        doc["author_name"] = doc["author_name"] or "Buddilio Editorial"
+        existing = await db.blog_posts.find_one({"slug": doc["slug"]})
+        if existing:
+            if not payload.overwrite:
+                skipped += 1
+                continue
+            await db.blog_posts.update_one({"_id": existing["_id"]}, {"$set": doc})
+            updated += 1
+        else:
+            await db.blog_posts.insert_one(doc)
+            added += 1
+    await audit(user, "blog.imported", "post", "", {"added": added, "updated": updated})
+    return {"ok": True, "added": added, "updated": updated, "skipped": skipped,
+            "message": f"{added} added, {updated} updated, {skipped} skipped."}
+
+
 @api.get("/admin/blog/insights")
 async def admin_blog_insights(days: int = 7, user: dict = Depends(require_perm("content:manage"))):
     """Which stories brought readers in, this period against the one before it."""

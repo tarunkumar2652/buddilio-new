@@ -245,6 +245,13 @@ Checked https://buddilio.com directly:
   The live key file `89c2f6….txt` is confirmed reachable on production.
 - SEO panel now warns when the site has no published stories and when a key rotation is pending.
 
+## 2026-08-24 — Journal export / import
+- `GET /api/admin/blog/export` returns every story in `blog.PostIn` shape; `POST /api/admin/blog/import`
+  (`{posts, overwrite}`) upserts by slug, validates each item and reports added/updated/skipped.
+- Admin → Journal (blog) has **Export stories** (downloads a JSON file) and **Import stories** (file
+  picker, overwrite on). Intended use: export on preview, import on the live site, since blog content
+  does not travel between environments.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.

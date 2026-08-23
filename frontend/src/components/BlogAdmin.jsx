@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, ExternalLink, Star, Send, Users } from "lucide-react";
+import { Plus, Trash2, ExternalLink, Star, Send, Users, Download, Upload } from "lucide-react";
 import { api, errMsg, fmtDate } from "@/lib/api";
 import { Spinner, Badge } from "@/components/Shared";
 import { ImageUpload } from "@/components/ImageUpload";
@@ -39,8 +39,34 @@ export const BlogAdmin = () => {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const sendNewsletter = async (p, force) => {
-    setSending(p.id);
+  const exportStories = async () => {
+    try {
+      const { data } = await api.get("/admin/blog/export");
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)],
+        { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `buddilio-journal-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`${data.count} stories downloaded.`);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const importStories = async (file) => {
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const posts = Array.isArray(parsed) ? parsed : parsed.posts;
+      const { data } = await api.post("/admin/blog/import", { posts, overwrite: true });
+      toast.success(data.message);
+      load();
+    } catch (e) {
+      toast.error(e instanceof SyntaxError ? "That file isn't a Journal export." : errMsg(e));
+    }
+  };
+
+  const sendNewsletter = async (p, force) => {    setSending(p.id);
     try {
       const { data } = await api.post(`/admin/blog/${p.id}/newsletter`, {}, { params: { force } });
       toast.success(data.message);
@@ -170,6 +196,14 @@ export const BlogAdmin = () => {
               <Users className="h-3.5 w-3.5" />{subs.active} subscribers
             </span>
           )}
+          <button onClick={exportStories} className={`${PILL} border border-slate-200`} data-testid="blog-export">
+            <Download className="mr-1.5 inline h-3.5 w-3.5" />Export stories
+          </button>
+          <label className={`${PILL} cursor-pointer border border-slate-200`} data-testid="blog-import-label">
+            <Upload className="mr-1.5 inline h-3.5 w-3.5" />Import stories
+            <input type="file" accept="application/json" className="hidden" data-testid="blog-import"
+              onChange={(e) => { importStories(e.target.files?.[0]); e.target.value = ""; }} />
+          </label>
           <a href="/blog" target="_blank" rel="noreferrer" className={`${PILL} border border-slate-200`} data-testid="blog-view-live">
             <ExternalLink className="mr-1.5 inline h-3.5 w-3.5" />View journal
           </a>
