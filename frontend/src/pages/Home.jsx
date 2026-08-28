@@ -9,6 +9,7 @@ import { GuestConcierge } from "@/components/GuestConcierge";
 import { planFeatures } from "@/pages/Commerce";
 import { JournalTeaser } from "@/components/JournalTeaser";
 import { AdSlot } from "@/components/AdSlot";
+import { ProofStrip } from "@/components/ProofStrip";
 import { ShieldCheck, Sparkles, UserCheck, Ticket, ArrowRight, Star, Check, MessageCircle } from "lucide-react";
 
 const HERO = "https://images.pexels.com/photos/8921578/pexels-photo-8921578.jpeg?auto=compress&w=1600";
@@ -94,6 +95,8 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      <ProofStrip />
 
       {/* FIND YOUR PEOPLE — bento */}
       <section className="mx-auto max-w-7xl px-4 sm:px-6 py-20 sm:py-28">

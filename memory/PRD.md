@@ -329,6 +329,16 @@ Checked https://buddilio.com directly:
 - Production About page text lives in its own DB, so it must be re-saved in Admin → Pages there
   (or reseeded); hero/nav/footer defaults ship with the code.
 
+### Rebrand support pieces (2026-08-28)
+- Journal launch story "Leave the virtual. Live the social." — seeded via
+  `backend/scripts/seed_rebrand_story.py` (idempotent by slug, featured, published). Preview DB only;
+  production needs the Journal export/import in Admin or a re-run of the script there.
+- Social share card at `frontend/public/brand/og-cover.jpg` (1200x630, generated). `index.html` now
+  carries og:description/og:image/og:image dimensions + full twitter:card set, and `SEO` in
+  `Shared.jsx` sets og/twitter description + image per page (accepts an `image` prop override).
+- `ProofStrip.jsx` — scrollable "last week on Buddilio" photo strip directly under the Home hero
+  (testids `proof-strip`, `proof-shot-{i}`); stock imagery, swap for real member photos later.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.

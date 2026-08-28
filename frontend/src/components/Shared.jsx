@@ -64,14 +64,27 @@ export const Stat = ({ label, value, sub, testid }) => (
   </div>
 );
 
-export const SEO = ({ title, description }) => {
+const setMeta = (attr, key, content) => {
+  let el = document.querySelector(`meta[${attr}="${key}"]`);
+  if (!el) { el = document.createElement("meta"); el.setAttribute(attr, key); document.head.appendChild(el); }
+  el.setAttribute("content", content);
+};
+
+export const SEO = ({ title, description, image }) => {
   if (typeof document !== "undefined") {
     document.title = title
       ? (title.includes("Buddilio") ? title : `${title} | Buddilio`)
-      : "Buddilio — Find your people for every experience";
-    let m = document.querySelector('meta[name="description"]');
-    if (!m) { m = document.createElement("meta"); m.name = "description"; document.head.appendChild(m); }
-    m.content = description || "Discover events, parties, dining and lifestyle experiences and find verified companions to go with.";
+      : "Buddilio — Meet real people. Share real experiences.";
+    const desc = description
+      || "Online is where it starts. Buddilio is where it happens — real people, real experiences, in 27 cities.";
+    setMeta("name", "description", desc);
+    setMeta("property", "og:description", desc);
+    setMeta("name", "twitter:card", "summary_large_image");
+    setMeta("name", "twitter:title", title || "Buddilio");
+    setMeta("name", "twitter:description", desc);
+    const card = image || `${window.location.origin}/brand/og-cover.jpg`;
+    setMeta("property", "og:image", card);
+    setMeta("name", "twitter:image", card);
     let og = document.querySelector('meta[property="og:title"]');
     if (!og) { og = document.createElement("meta"); og.setAttribute("property", "og:title"); document.head.appendChild(og); }
     og.content = title || "Buddilio";
