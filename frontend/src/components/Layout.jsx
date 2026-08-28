@@ -82,7 +82,7 @@ export const Logo = ({ tone = "dark", tagline = true, size = "h-9 w-9" }) => (
       </span>
       {tagline && (
         <span className={`mt-1 block text-[10px] font-semibold tracking-wide ${tone === "light" ? "text-white/55" : "text-slate-400"}`}>
-          Your Vibe, Your Buddy
+          Live the social
         </span>
       )}
     </span>
@@ -284,8 +284,8 @@ export const Footer = () => {
         <div>
           <Logo tone="light" />
           <p className="mt-6 text-sm text-white/70 leading-relaxed max-w-sm">
-            A curated social club for adults. Find the experience, find your people, and never skip a great
-            night out because nobody was free.
+            Your Vibe, Your Buddy. Online is where it starts — Buddilio is where it happens: real people,
+            real experiences, in real places near you.
           </p>
           <p className="mt-5 inline-flex items-center gap-2 rounded-full bg-white/10 px-3.5 py-1.5 text-xs font-bold text-white/80">
             <MapPin className="h-3.5 w-3.5" />Live in 27 cities · 12 countries

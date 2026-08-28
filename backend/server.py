@@ -3964,11 +3964,12 @@ def refund_ceiling(order: dict) -> tuple[float, str]:
     base = float(order.get("charge_total") or order["total"])
     if order["kind"] == "membership":
         return 0.0, "Membership fees are non-refundable under the cancellation policy."
-    quote = order.get("cancellation") or {}
-    if quote.get("refundable") is not None and quote.get("status") in ("requested", "settled"):
-        return round(float(quote["refundable"]), 2), (
-            f"The cancellation policy allows {fmt_money(float(quote['refundable']), order.get('currency'))} "
-            f"back after a {quote.get('deduction_percent', 0)}% deduction.")
+    cancel_quote = order.get("cancellation") or {}
+    if cancel_quote.get("refundable") is not None and cancel_quote.get("status") in ("requested", "settled"):
+        return round(float(cancel_quote["refundable"]), 2), (
+            f"The cancellation policy allows "
+            f"{fmt_money(float(cancel_quote['refundable']), order.get('currency'))} "
+            f"back after a {cancel_quote.get('deduction_percent', 0)}% deduction.")
     return base, ""
 
 
@@ -5999,7 +6000,6 @@ async def send_verification_reminders() -> int:
 
 async def expire_vendor_documents() -> dict:
     """Reminds vendors 30/7/1 days before a mandatory document expires, then pauses them on expiry."""
-    import agreements as agr
     mandatory = agr.REQUIRED_DOCS + agr.BANK_PROOF_DOCS
     today = now_utc()
     reminded, expired = 0, 0
@@ -6902,12 +6902,11 @@ async def delete_page(pid: str, user: dict = Depends(require_perm("content:manag
 
 
 DEFAULT_SITE_CONTENT: dict[str, dict] = {
-    "hero": {"tagline": "Your Vibe, Your Buddy",
-             "headline": "Great nights out shouldn't",
-             "headline_highlight": "depend on who's free.",
-             "subtext": "Buddilio is a curated social club for adults, live in 27 cities worldwide. Discover "
-                        "parties, dinners, concerts and getaways — then find verified companions who actually "
-                        "want to go.",
+    "hero": {"tagline": "Leave the virtual. Live the social.",
+             "headline": "Meet real people.",
+             "headline_highlight": "Share real experiences.",
+             "subtext": "Online is where it starts. Buddilio is where it happens — dinners, gigs, treks and "
+                        "getaways with verified people in 27 cities worldwide.",
              "cities_line": "Delhi NCR · Dubai · London · New York · Singapore",
              "image": "", "primary_label": "Explore Events", "primary_url": "/events",
              "secondary_label": "Find Companions", "secondary_url": "/discover"},
@@ -9547,13 +9546,15 @@ async def admin_seo_submit(payload: SeoSubmitIn, user: dict = Depends(require_pe
 
 # ---------------- human support inbox ----------------
 async def _support_thread(tid: str, token: str = "", user: Optional[dict] = None) -> dict:
-    doc = await db.support_threads.find_one({"_id": as_oid(tid, "conversation")})
-    if not doc:
+    """Internal helper — callers serialise it with support.public_thread before returning it."""
+    thread = await db.support_threads.find_one({"_id": as_oid(tid, "conversation")})
+    if not thread:
         raise HTTPException(status_code=404, detail="That conversation no longer exists.")
-    owned = (user and doc.get("user_id") == user["id"]) or (token and doc.get("token") == token)
+    owned = ((user and thread.get("user_id") == user["id"])
+             or (token and thread.get("token") == token))
     if not owned:
         raise HTTPException(status_code=403, detail="That conversation isn't yours.")
-    return doc
+    return dict(thread)
 
 
 @api.post("/support/threads")

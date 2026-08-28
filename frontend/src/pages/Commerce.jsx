@@ -82,9 +82,13 @@ export function Membership() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-10 pb-28" data-testid="membership-page">
-      <SEO title="Membership plans" description="Buddilio membership: discounts on passes, premium discovery filters and priority access." />
+      <SEO title="Membership plans" description="Buddilio membership: more real experiences every month — member pricing on passes, premium discovery filters and priority access." />
       <p className="overline">Membership</p>
       <h1 className="mt-2 text-3xl sm:text-4xl font-bold">Choose how you go out</h1>
+      <p className="mt-3 max-w-2xl text-base text-slate-600">
+        Membership is for people who actually turn plans into evenings out — member pricing, better
+        discovery and first access to the experiences that fill up fast.
+      </p>
       <AdSlot placement="membership" className="mt-6" />
 
       {mine && (

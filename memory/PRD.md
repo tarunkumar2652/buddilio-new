@@ -318,6 +318,17 @@ Checked https://buddilio.com directly:
 - Iteration 54 also fixed: unknown ad placement keys returned 500 → now a 422 via a
   `field_validator` on `ads.AdIn.placements`.
 
+### Brand positioning refresh (2026-08-28)
+- New line: **"Leave the virtual. Live the social."** with hero **"Meet real people. / Share real
+  experiences."** Voice rule: online connection isn't enough — never anti-internet.
+- Changed: `DEFAULT_SITE_CONTENT["hero"]` (tagline/headline/highlight/subtext), `Home.jsx` hero
+  fallbacks + `<SEO>` + "Real people. Real plans." section, `Layout.jsx` logo strapline
+  ("Live the social") and footer blurb (keeps "Your Vibe, Your Buddy" as the opening phrase),
+  `public/index.html` title/description/og:title, Membership intro in `Commerce.jsx`,
+  About page copy (`scripts/seed_policies.py` default + preview `cms_pages.about.content`).
+- Production About page text lives in its own DB, so it must be re-saved in Admin → Pages there
+  (or reseeded); hero/nav/footer defaults ship with the code.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.

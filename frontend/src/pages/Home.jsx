@@ -49,7 +49,8 @@ export default function Home() {
 
   return (
     <div data-testid="home-page">
-      <SEO title="Find your people for every experience" />
+      <SEO title="Meet real people. Share real experiences."
+        description="Online is where it starts. Buddilio is where it happens — dinners, gigs, nightlife and getaways with verified people in 27 cities." />
 
       {/* HERO */}
       <section className="relative overflow-hidden bg-slate-900 text-white grain">
@@ -59,15 +60,15 @@ export default function Home() {
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 py-24 sm:py-32 lg:py-40">
           <div className="max-w-2xl fade-up">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white/85" data-testid="hero-tagline">
-              <img src="/brand/mark.png" alt="" className="h-4 w-4 object-contain" />{hero.tagline || "Your Vibe, Your Buddy"}
+              <img src="/brand/mark.png" alt="" className="h-4 w-4 object-contain" />{hero.tagline || "Leave the virtual. Live the social."}
             </span>
             <h1 className="mt-6 text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.05]" data-testid="hero-headline">
-              {hero.headline || "Great nights out shouldn't"}{" "}
-              <span className="text-gradient">{hero.headline_highlight || "depend on who's free."}</span>
+              {hero.headline || "Meet real people."}{" "}
+              <span className="text-gradient">{hero.headline_highlight || "Share real experiences."}</span>
             </h1>
             <p className="mt-6 text-base md:text-lg text-white/75 leading-relaxed max-w-xl" data-testid="hero-subtext">
-              {hero.subtext || `Buddilio is a curated social club for adults, live in 27 cities worldwide. Discover parties, dinners,
-              concerts and getaways — then find verified companions who actually want to go.`}
+              {hero.subtext || `Online is where it starts. Buddilio is where it happens — dinners, gigs, treks
+              and getaways with verified people in 27 cities worldwide.`}
             </p>
             <p className="mt-5 text-xs font-bold uppercase tracking-[0.2em] text-white/45">{hero.cities_line || "Delhi NCR · Dubai · London · New York · Singapore"}</p>
             <div className="mt-9 flex flex-wrap gap-3">
@@ -99,10 +100,10 @@ export default function Home() {
         <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
           <div>
             <p className="overline">Find your people</p>
-            <h2 className="mt-4 text-3xl sm:text-4xl font-bold">Companions first. Plans second.</h2>
+            <h2 className="mt-4 text-3xl sm:text-4xl font-bold">Real people. Real plans.</h2>
             <p className="mt-5 text-slate-600 leading-relaxed">
               Tell us your city, your interests and the kind of nights you enjoy. Buddilio surfaces members
-              with overlapping taste — not a swipe deck. Connect, chat, then decide what you're doing together.
+              with overlapping taste — not a swipe deck. Chat online, then go and actually do the thing.
             </p>
             <ul className="mt-8 space-y-4">
               {[[UserCheck, "Verified adults only", "Every profile is age-checked and moderated. 21+, always."],

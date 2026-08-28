@@ -92,10 +92,10 @@ PAGES = [
          seo_description="Learn about Buddilio, a social discovery and experience platform helping adults "
                          "discover companions, events, activities and experiences.",
          nav_footer_group="Buddilio", nav_label="About Us", order=1,
-         content=p("<b>Find your people for every experience.</b>",
-                   "Buddilio is a social discovery and experience platform designed to help adults discover "
-                   "people, events, activities and experiences that make social life easier, more comfortable "
-                   "and more meaningful.",
+         content=p("<b>Meet real people. Share real experiences.</b>",
+                   "Online is where it starts. Buddilio is where it happens — a social discovery and "
+                   "experience platform that turns online connection into dinners, events, activities and "
+                   "trips with real people, in real places.",
                    "Whether you want someone to join you for a dinner, attend an event, explore a new place, "
                    "enjoy an activity, travel, celebrate an occasion or simply share an experience, Buddilio "
                    "helps make social connections more accessible."),
