@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 55 — Buddilio Autopilot (Journal + Events auto-writer). Backend: 19/19 pytest tests pass (perms, validation, persistence, a real forced run that created 1 published story + 1 series event + 1 curated Mumbai event via Gemini 3.1 Pro, series idempotency, cron regression). Frontend: Autopilot admin panel loads with every documented data-testid, model 'gemini-3.1-pro-preview' shown, host-name change persists, series add/delete persists, run log shows the created items. Regression smoke (home hero, /blog, /membership, Admin → Ads publish-btn, Admin → Settings hide_hangouts) all render without console errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/admin/autopilot", "issue": "ConfigIn.blog_days is List[int] with no per-item bounds — values like 9 are silently accepted and stored. Spec asks for 0..6 rejection. Add `conlist(int, ...)` with Field constraints or a validator (e.g. `all(0 <= x <= 6)`)."},
+      {"endpoint": "POST /api/admin/autopilot/run", "issue": "Long-running LLM call (~60s+) hits the Cloudflare/preview proxy 502 gateway timeout for the caller, even though the backend completes successfully. Recommend converting the endpoint to `BackgroundTasks` (like the cron path) so the API returns immediately and the UI polls the run log."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Admin tab state", "issue": "Admin route does not preserve the selected tab across a hard page reload — reload sends you back to Dashboard. Not a testing blocker (re-clicking the Autopilot tab works), but nicer UX would be `?tab=autopilot` deep-linking.", "affected_selectors": ["admin-tab-autopilot"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_autopilot_iter55.py",
+    "/app/test_reports/pytest/i55.xml",
+    "/app/test_reports/pytest/i55_autopilot.png",
+    "/app/test_reports/pytest/i55_admin.png"
+  ],
+  "action_items": [
+    "Add 0..6 per-item validation to ConfigIn.blog_days so PUT rejects out-of-range weekdays with 422 (spec requirement).",
+    "Move POST /api/admin/autopilot/run to a background task so the request returns instantly (currently ~60s call that trips Cloudflare 502 in preview — work still completes server-side).",
+    "Optional: persist the admin tab in the URL so hard reload keeps you on Autopilot."
+  ],
+  "critical_code_review_comments": [
+    "autopilot.py cleanly separates prompts, models and helpers — good size and no _id leakage.",
+    "STORY_SYSTEM restricts anchors to a whitelist of internal paths; verified in the generated story (only /discover and /safety used, no external hrefs).",
+    "run_autopilot() correctly guards series idempotency via de-duped `next_occurrences` insert — verified: 2nd run added 0 new events.",
+    "server.py `admin_autopilot_run` blocks the request until run_autopilot() completes; consider `BackgroundTasks` (cron path already queues it).",
+    "ConfigIn.blog_days lacks per-element bounds — silent accept of 9 is a real spec deviation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_autopilot_iter55.py"
+  ],
+  "success_rate": {"backend": "19/19 (100%)", "frontend": "100% of manually asserted flows"},
+  "test_credentials": "admin@buddilio.com / Admin@123 (super admin); writer.aisha@example.com / Writer@12345 for 403 checks; WEBHOOK_CRON_SECRET from backend/.env for cron regression.",
+  "seed_data_creation": "Left the config in the exact state the request asked for: blog_enabled=true, blog_days=[0,2,4], blog_publish=true, events_enabled=true, events_per_run=2, events_min_upcoming=6, series=[]. The forced run left behind 2 published autopilot stories and 2 autopilot events plus 1 series event in the DB (real generated content, kept as requested).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Autopilot admin panel testids match the JSX exactly. The only run-endpoint gotcha in preview is the Cloudflare 60s cap — verify autopilot side-effects via GET /api/admin/autopilot rather than the POST response. `blog_days` bound-check is the one PUT-validation gap remaining. A single forced /run in this iteration created ID '6aa46e86bcb517f38e5e8cc1' (slug the-mumbai-equation-...) and events cover_image with Unsplash IDs from autopilot.COVERS. Series idempotency test disables blog+events so it doesn't cost extra LLM credits.",
+  "rca of the issue": "1) blog_days: pydantic List[int] with no Field/conlist bounds ⇒ 9 stored. Fix: define `blog_days: conlist(conint(ge=0, le=6), max_length=7)` or add `@field_validator`. 2) /run 502 in preview: FastAPI awaits ~60s LLM chain; Cloudflare's L7 idle timeout kicks in before response. Fix: `async def admin_autopilot_run(background_tasks: BackgroundTasks, ...): background_tasks.add_task(run_autopilot, True); return {\"ok\": True, \"queued\": True}` and let the UI poll GET /admin/autopilot for the new run entries."
+}

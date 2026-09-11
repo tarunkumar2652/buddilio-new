@@ -28,6 +28,7 @@ import { SecurityCredentials } from "@/components/SecurityCredentials";
 import { SeoIndexing } from "@/components/SeoIndexing";
 import { SupportInbox } from "@/components/SupportInbox";
 import { AdsAdmin } from "@/components/AdsAdmin";
+import { AutopilotAdmin } from "@/components/AutopilotAdmin";
 import { WriterDesk } from "@/components/WriterDesk";
 import { BlogAdmin } from "@/components/BlogAdmin";
 import { useAuth } from "@/context/AuthContext";
@@ -49,6 +50,7 @@ const NAV = [
   ["content", "Content", "content:manage"],
   ["pages", "Pages", "content:manage"], ["blog", "Journal (blog)", "content:manage"],
   ["mystories", "My stories", "content:draft"], ["ads", "Ads", "content:manage"],
+  ["autopilot", "Autopilot", "content:manage"],
   ["support", "Support inbox", "support:respond"], ["seo", "SEO & indexing", "content:manage"],
   ["sections", "Site sections", "content:manage"],
   ["guides", "City guides", "content:manage"], ["emails", "Emails", "content:manage"],
@@ -158,7 +160,7 @@ const Input = ({ label, ...p }) => (
 const GROUPS = [
   ["Overview", ["dashboard", "events", "settings"]],
   ["Money", ["orders", "payments", "cancellations", "payouts", "vendorpay", "coupons", "memberships", "products", "ledger"]],
-  ["Content", ["content", "pages", "blog", "mystories", "ads", "sections", "guides", "emails", "places", "seo"]],
+  ["Content", ["content", "pages", "blog", "mystories", "autopilot", "ads", "sections", "guides", "emails", "places", "seo"]],
   ["People", ["users", "partners", "agreements", "managers", "companions", "team", "support"]],
   ["Trust", ["verification", "idchecks", "providers", "reports", "reviews", "photos", "audit", "security"]],
 ];
@@ -284,6 +286,7 @@ export default function Admin() {
         {active === "blog" && <BlogAdmin />}
         {active === "mystories" && <WriterDesk />}
         {active === "ads" && <AdsAdmin />}
+        {active === "autopilot" && <AutopilotAdmin />}
         {active === "support" && <SupportInbox />}
         {active === "seo" && <SeoIndexing />}
         {active === "payouts" && <Payouts />}

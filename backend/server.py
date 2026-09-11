@@ -43,6 +43,7 @@ import passes
 import vault
 import blog
 import ads
+import autopilot
 import seo
 import support
 import botguard
@@ -6131,10 +6132,11 @@ async def cron_daily_maintenance(_: None = Depends(cron_guard)):
     asyncio.create_task(expire_vendor_documents())
     asyncio.create_task(send_membership_renewal_reminders())
     asyncio.create_task(send_pass_reminders())
+    asyncio.create_task(run_autopilot())
     if now_utc().day == 1:
         asyncio.create_task(generate_monthly_commission_invoices())
     return {"ok": True, "queued": ["verification-reminders", "vendor-doc-expiry",
-                                   "membership-renewal-reminders", "pass-reminders"]}
+                                   "membership-renewal-reminders", "pass-reminders", "autopilot"]}
 
 
 async def generate_monthly_commission_invoices() -> dict:
@@ -9892,6 +9894,242 @@ async def ads_click(ad_id: str, request: Request, user: Optional[dict] = Depends
 
 
 BUILD_DIR = Path("/app/frontend/build")
+
+
+# ---------------- autopilot: self-writing Journal + calendar top-up ----------------
+async def autopilot_config() -> dict:
+    return autopilot.clean_config(await db.autopilot.find_one({"_id": "config"}))
+
+
+async def autopilot_log(kind: str, detail: dict):
+    await db.autopilot_runs.insert_one({"kind": kind, "at": iso(now_utc()), **detail})
+
+
+async def autopilot_cities(picked: List[str]) -> list:
+    if picked:
+        return picked
+    rows = await db.events.aggregate([{"$match": {"status": "published"}},
+                                      {"$group": {"_id": "$city", "n": {"$sum": 1}}},
+                                      {"$sort": {"n": -1}}, {"$limit": 8}]).to_list(8)
+    return [r["_id"] for r in rows if r["_id"]]
+
+
+async def autopilot_ping(paths: List[str]):
+    """Tell the engines that accept submissions; Google still crawls on its own schedule."""
+    doc = await seo_settings()
+    base = seo_site_url(doc)
+    if not base or "localhost" in base or ".preview." in base:
+        return
+    key = doc.get("indexnow_key", "")
+    if not key or not await indexnow_key_live(base, key):
+        return
+    try:
+        await seo.submit(base, key, [f"{base}{p}" for p in paths])
+    except Exception as e:
+        logger.info(f"autopilot indexnow: {e}")
+
+
+async def autopilot_write_story(cfg: dict) -> dict:
+    """One Journal story, on a rotating angle and city so the archive stays varied."""
+    cities = await autopilot_cities(cfg["blog_cities"])
+    written = await db.blog_posts.count_documents({"source": "autopilot"})
+    category, angle = autopilot.ANGLES[written % len(autopilot.ANGLES)]
+    city = cities[written % len(cities)] if cities else ""
+    recent = await db.blog_posts.find({}, {"title": 1}).sort("created_at", -1).limit(25).to_list(25)
+    live = await db.events.find({"status": "published"} | ({"city": city} if city else {}),
+                                {"title": 1, "category": 1, "city": 1}).limit(8).to_list(8)
+    data = await autopilot.ask(autopilot.STORY_SYSTEM,
+                               autopilot.story_prompt(angle, city,
+                                                      [r.get("title", "") for r in recent], live),
+                               f"autopilot-story-{now_utc().date()}")
+    payload = blog.PostIn(
+        title=str(data.get("title", ""))[:180],
+        category=data.get("category") or category,
+        excerpt=str(data.get("excerpt", ""))[:400],
+        body=safe_html(str(data.get("body", ""))),
+        cover_image=autopilot.cover_for(""),
+        author_name="Buddilio Editorial", author_role="Editorial desk",
+        tags=[str(t)[:24] for t in (data.get("tags") or [])][:6],
+        seo_title=str(data.get("seo_title", ""))[:70],
+        seo_description=str(data.get("seo_description", ""))[:200],
+        related_city=city,
+        status="published" if cfg["blog_publish"] else "in_review")
+    doc = blog.to_doc(payload) | {"source": "autopilot"}
+    if not doc["body"] or len(doc["body"]) < 400:
+        raise ValueError("the draft came back too short")
+    if await db.blog_posts.find_one({"slug": doc["slug"]}):
+        doc["slug"] = f"{doc['slug']}-{uuid.uuid4().hex[:4]}"
+    res = await db.blog_posts.insert_one(doc)
+    out = {"id": str(res.inserted_id), "slug": doc["slug"], "title": doc["title"],
+           "status": doc["status"], "city": city}
+    await autopilot_log("story", out)
+    if cfg["ping_search_engines"] and doc["status"] == "published":
+        asyncio.create_task(autopilot_ping([f"/blog/{doc['slug']}", "/blog"]))
+    return out
+
+
+async def autopilot_house_host(cfg: dict) -> tuple[str, str]:
+    admin = await db.users.find_one({"role": "admin"}, {"_id": 1}, sort=[("created_at", 1)])
+    return (str(admin["_id"]) if admin else "buddilio"), cfg["events_host_name"]
+
+
+async def autopilot_new_event(cfg: dict, city: str, when: datetime) -> dict:
+    country = (country_for_city(city) or {}).get("name", "")
+    existing = await db.events.find({"city": city}, {"title": 1}) \
+        .sort("starts_at", -1).limit(15).to_list(15)
+    data = await autopilot.ask(
+        autopilot.EVENT_SYSTEM,
+        autopilot.event_prompt(city, country, autopilot.ALLOWED_EVENT_CATEGORIES,
+                               [e.get("title", "") for e in existing],
+                               when.strftime("%A %d %B, %H:%M")),
+        f"autopilot-event-{city}-{when.date()}")
+    category = (data.get("category") if data.get("category") in autopilot.ALLOWED_EVENT_CATEGORIES
+                else "Social Gatherings")
+    host_id, host_name = await autopilot_house_host(cfg)
+    price = round(min(max(float(data.get("suggested_price_usd") or 0), 0), 200), 2)
+    payload = EventIn(title=str(data.get("title", ""))[:120],
+                      description=str(data.get("description", "")),
+                      category=category, city=city, venue=str(data.get("venue", ""))[:160],
+                      starts_at=iso(when), ends_at=iso(when + timedelta(hours=3)),
+                      cover_image=autopilot.cover_for(category), price=price, price_currency="USD",
+                      capacity=int(min(max(int(data.get("capacity") or 30), 2), 500)),
+                      rules=str(data.get("rules", ""))[:400])
+    if not payload.title:
+        raise ValueError("the model returned no title")
+    doc = await price_event(with_country(payload.model_dump()))
+    doc.update({"partner_id": host_id, "partner_name": host_name, "status": "published",
+                "participant_count": 0, "source": "autopilot", "created_at": iso(now_utc())})
+    res = await db.events.insert_one(doc)
+    out = {"id": str(res.inserted_id), "title": doc["title"], "city": city,
+           "starts_at": doc["starts_at"]}
+    await autopilot_log("event", out)
+    return out
+
+
+async def autopilot_run_series(cfg: dict) -> list:
+    """Keeps each weekly series stocked with its next few dates — no duplicates."""
+    made = []
+    host_id, host_name = await autopilot_house_host(cfg)
+    for s in cfg["series"]:
+        if not s.get("active"):
+            continue
+        for when in autopilot.next_occurrences(int(s["weekday"]), int(s["hour"]),
+                                               int(s["weeks_ahead"])):
+            day = when.date().isoformat()
+            if await db.events.find_one({"series_title": s["title"], "city": s["city"],
+                                         "starts_at": {"$regex": f"^{day}"}}):
+                continue
+            payload = EventIn(title=s["title"], description=safe_html(s.get("description") or ""),
+                              category=s.get("category") or "Social Gatherings", city=s["city"],
+                              venue=s.get("venue", ""), starts_at=iso(when),
+                              ends_at=iso(when + timedelta(hours=3)),
+                              cover_image=autopilot.cover_for(s.get("category") or ""),
+                              price=float(s.get("price") or 0), price_currency="USD",
+                              capacity=int(s.get("capacity") or 30))
+            doc = await price_event(with_country(payload.model_dump()))
+            doc.update({"partner_id": host_id, "partner_name": host_name, "status": "published",
+                        "participant_count": 0, "source": "autopilot-series",
+                        "series_title": s["title"], "created_at": iso(now_utc())})
+            res = await db.events.insert_one(doc)
+            row = {"id": str(res.inserted_id), "title": doc["title"], "city": s["city"],
+                   "starts_at": doc["starts_at"]}
+            await autopilot_log("series", row)
+            made.append(row)
+    return made
+
+
+async def run_autopilot(force: bool = False) -> dict:
+    """Called daily by the cron and by the admin's Run now button."""
+    cfg = await autopilot_config()
+    out: dict[str, Any] = {"stories": [], "events": [], "series": [], "skipped": [], "errors": []}
+    if not autopilot.LLM_KEY:
+        out["errors"].append("No AI key configured.")
+        return out
+
+    if cfg["blog_enabled"] and (force or now_utc().weekday() in cfg["blog_days"]):
+        today = iso(now_utc())[:10]
+        already = await db.autopilot_runs.count_documents({"kind": "story",
+                                                           "at": {"$regex": f"^{today}"}})
+        if already and not force:
+            out["skipped"].append("a story already went out today")
+        else:
+            try:
+                out["stories"].append(await autopilot_write_story(cfg))
+            except Exception as e:
+                logger.warning(f"autopilot story failed: {e}")
+                out["errors"].append(f"Story: {e}")
+    elif cfg["blog_enabled"]:
+        out["skipped"].append("not a writing day")
+
+    if cfg["events_enabled"]:
+        try:
+            out["series"] = await autopilot_run_series(cfg)
+        except Exception as e:
+            logger.warning(f"autopilot series failed: {e}")
+            out["errors"].append(f"Series: {e}")
+        cities = await autopilot_cities(cfg["events_cities"])
+        horizon = iso(now_utc() + timedelta(days=cfg["events_days_ahead"]))
+        for city in cities[:cfg["events_per_run"]]:
+            upcoming = await db.events.count_documents(
+                {"city": city, "status": "published",
+                 "starts_at": {"$gt": iso(now_utc()), "$lt": horizon}})
+            if upcoming >= cfg["events_min_upcoming"]:
+                out["skipped"].append(f"{city} already has {upcoming} upcoming")
+                continue
+            when = (now_utc() + timedelta(days=random.randint(7, cfg["events_days_ahead"]))) \
+                .replace(hour=random.choice([19, 20, 21]), minute=0, second=0, microsecond=0)
+            try:
+                out["events"].append(await autopilot_new_event(cfg, city, when))
+            except Exception as e:
+                logger.warning(f"autopilot event failed for {city}: {e}")
+                out["errors"].append(f"{city}: {e}")
+
+    if cfg["ping_search_engines"] and (out["events"] or out["series"]):
+        asyncio.create_task(autopilot_ping(["/events", "/"]))
+    await db.autopilot.update_one({"_id": "config"},
+                                  {"$set": {"last_run": iso(now_utc()),
+                                            "last_result": {k: len(v) for k, v in out.items()}}},
+                                  upsert=True)
+    return out
+
+
+@api.get("/admin/autopilot")
+async def admin_autopilot(user: dict = Depends(require_perm("content:manage"))):
+    saved = await db.autopilot.find_one({"_id": "config"}) or {}
+    runs = await db.autopilot_runs.find({}).sort("at", -1).limit(30).to_list(30)
+    return {"config": autopilot.clean_config(saved), "last_run": saved.get("last_run"),
+            "last_result": saved.get("last_result"), "ai_ready": bool(autopilot.LLM_KEY),
+            "model": autopilot.MODEL, "cities": await autopilot_cities([]),
+            "event_categories": autopilot.ALLOWED_EVENT_CATEGORIES,
+            "weekdays": autopilot.WEEKDAYS,
+            "runs": [{"kind": r["kind"], "at": r["at"], "title": r.get("title", ""),
+                      "city": r.get("city", ""), "slug": r.get("slug", ""),
+                      "status": r.get("status", "")} for r in runs],
+            "stories_written": await db.blog_posts.count_documents({"source": "autopilot"}),
+            "events_created": await db.events.count_documents(
+                {"source": {"$in": ["autopilot", "autopilot-series"]}})}
+
+
+@api.put("/admin/autopilot")
+async def admin_autopilot_save(payload: autopilot.ConfigIn,
+                               user: dict = Depends(require_perm("content:manage"))):
+    cfg = payload.model_dump()
+    await db.autopilot.update_one({"_id": "config"}, {"$set": cfg}, upsert=True)
+    await audit(user, "autopilot.saved", "autopilot", "config",
+                {"blog": cfg["blog_enabled"], "events": cfg["events_enabled"]})
+    return {"ok": True, "config": cfg, "message": "Autopilot settings saved."}
+
+
+@api.post("/admin/autopilot/run")
+async def admin_autopilot_run(user: dict = Depends(require_perm("content:manage"))):
+    """Writing takes a minute or so, so hand it off and let the admin watch the log fill in."""
+    if not autopilot.LLM_KEY:
+        raise HTTPException(status_code=400, detail="No AI key is configured for this site.")
+    asyncio.create_task(run_autopilot(force=True))
+    await audit(user, "autopilot.run", "autopilot", "config", {"forced": True})
+    return {"ok": True, "queued": True,
+            "message": "Autopilot is writing now — the log below fills in within a minute or two."}
+
 
 
 @api.get("/admin/publish")

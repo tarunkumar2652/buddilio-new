@@ -339,6 +339,22 @@ Checked https://buddilio.com directly:
 - `ProofStrip.jsx` — scrollable "last week on Buddilio" photo strip directly under the Home hero
   (testids `proof-strip`, `proof-shot-{i}`); stock imagery, swap for real member photos later.
 
+### Autopilot — self-writing Journal + auto events (2026-09-11, iteration 55)
+- User choices: AI-invented curated events **plus** repeating weekly series, published live automatically;
+  2-3 Journal posts a week published automatically; rotating topics (city guides + playbooks/safety/
+  community); model **Gemini 3.1 Pro** (`gemini-3.1-pro-preview`) on the Emergent universal key.
+- `backend/autopilot.py`: `ConfigIn`/`SeriesIn`, six rotating article `ANGLES`, story + event system
+  prompts (JSON-only output, internal links only, no invented venues/stats), `_json_block` parser,
+  `next_occurrences()` for series, per-category cover images.
+- `server.py`: `run_autopilot()` queued from `/api/cron/daily-maintenance` (5-cron cap reached, so it
+  rides the daily job) + `GET/PUT /api/admin/autopilot` and `POST /api/admin/autopilot/run`
+  (fire-and-forget so the proxy can't time out). Stories get `source: "autopilot"`, events
+  `source: "autopilot"`/`"autopilot-series"`; every item is logged in `db.autopilot_runs`.
+  IndexNow ping on publish when a live key file exists — Google still crawls on its own schedule.
+- `AutopilotAdmin.jsx` + Admin → Content → **Autopilot**: on/off for stories and events, writing days,
+  publish-vs-review, cities, per-run limits, top-up threshold, host name, series CRUD, Run now and a
+  log of everything created. Post-test fixes: weekday validation (0-6) and the non-blocking run.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.
