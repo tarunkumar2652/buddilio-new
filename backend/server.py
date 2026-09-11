@@ -6133,6 +6133,8 @@ async def cron_daily_maintenance(_: None = Depends(cron_guard)):
     asyncio.create_task(send_membership_renewal_reminders())
     asyncio.create_task(send_pass_reminders())
     asyncio.create_task(run_autopilot())
+    if now_utc().weekday() == 6:
+        asyncio.create_task(build_weekly_digest())
     if now_utc().day == 1:
         asyncio.create_task(generate_monthly_commission_invoices())
     return {"ok": True, "queued": ["verification-reminders", "vendor-doc-expiry",
@@ -9783,6 +9785,86 @@ async def admin_blog_newsletter(post_id: str, force: bool = False,
     await audit(user, "blog.newsletter", "post", post_id, {"sent": sent, "of": len(subs)})
     return {"ok": True, "sent": sent, "subscribers": len(subs),
             "message": f"Sent to {sent} of {len(subs)} subscribers."}
+
+
+# ---------------- weekly Journal digest ----------------
+async def build_weekly_digest(force: bool = False) -> Optional[dict]:
+    """Gathers the week's published stories into one digest that waits for an admin to send it."""
+    since = iso(now_utc() - timedelta(days=7))
+    posts = await db.blog_posts.find(
+        {"status": "published", "published_at": {"$gte": since}, "digest_id": {"$exists": False}},
+        {"title": 1, "slug": 1, "excerpt": 1, "cover_image": 1}).sort("published_at", -1).to_list(20)
+    if not posts:
+        return None
+    pending = await db.newsletter_digests.find_one({"status": "ready"})
+    if pending and not force:
+        return None
+    doc = {"status": "ready", "created_at": iso(now_utc()), "week_of": iso(now_utc())[:10],
+           "posts": [{"id": str(p["_id"]), "title": p.get("title", ""), "slug": p.get("slug", ""),
+                      "excerpt": p.get("excerpt", ""), "cover_image": p.get("cover_image", "")}
+                     for p in posts],
+           "sent_at": "", "sent_count": 0}
+    res = await db.newsletter_digests.insert_one(doc)
+    await db.blog_posts.update_many({"_id": {"$in": [p["_id"] for p in posts]}},
+                                    {"$set": {"digest_id": str(res.inserted_id)}})
+    return {"id": str(res.inserted_id), "stories": len(posts)}
+
+
+def digest_row(d: dict) -> dict:
+    return {"id": str(d["_id"]), "status": d.get("status", "ready"), "week_of": d.get("week_of", ""),
+            "created_at": d.get("created_at", ""), "sent_at": d.get("sent_at", ""),
+            "sent_count": d.get("sent_count", 0),
+            "posts": [{"title": p["title"], "slug": p["slug"]} for p in d.get("posts", [])]}
+
+
+@api.get("/admin/newsletter/digests")
+async def admin_digests(user: dict = Depends(require_perm("content:manage"))):
+    rows = await db.newsletter_digests.find({}).sort("created_at", -1).limit(12).to_list(12)
+    return {"items": [digest_row(d) for d in rows],
+            "subscribers": await db.newsletter_subs.count_documents({"status": "active"})}
+
+
+@api.post("/admin/newsletter/digests/build")
+async def admin_digest_build(user: dict = Depends(require_perm("content:manage"))):
+    made = await build_weekly_digest(force=True)
+    if not made:
+        return {"ok": False, "message": "No new stories have published since the last digest."}
+    return {"ok": True, **made, "message": f"Digest ready with {made['stories']} story(ies)."}
+
+
+@api.post("/admin/newsletter/digests/{digest_id}/send")
+async def admin_digest_send(digest_id: str, user: dict = Depends(require_perm("content:manage"))):
+    d = await db.newsletter_digests.find_one({"_id": as_oid(digest_id, "digest")})
+    if not d:
+        raise HTTPException(status_code=404, detail="That digest no longer exists.")
+    if d.get("sent_at"):
+        raise HTTPException(status_code=400, detail="This digest has already gone out.")
+    subs = await db.newsletter_subs.find({"status": "active"},
+                                         {"email": 1, "token": 1}).limit(5000).to_list(5000)
+    if not subs:
+        raise HTTPException(status_code=400, detail="Nobody has subscribed to the Journal yet.")
+    base = seo_site_url(await seo_settings())
+    lead = d["posts"][0]
+    items = "".join(
+        f'<p style="margin:0 0 18px"><a href="{base}/blog/{p["slug"]}" '
+        f'style="font-weight:700;color:#0F172A;text-decoration:none">{p["title"]}</a><br/>'
+        f'<span style="color:#475569">{p.get("excerpt", "")}</span></p>' for p in d["posts"])
+    sent = 0
+    for s in subs:
+        body = (f"<p>This week in the Buddilio Journal — {len(d['posts'])} new "
+                f"{'story' if len(d['posts']) == 1 else 'stories'}:</p>{items}"
+                f'<p style="font-size:12px;color:#94A3B8">'
+                f'<a href="{base}/unsubscribe?t={s.get("token", "")}">Unsubscribe</a></p>')
+        if await send_email(s["email"], "This week in the Buddilio Journal",
+                            wrap("From the Journal", body, "Read the latest",
+                                 f"{base}/blog/{lead['slug']}")):
+            sent += 1
+    await db.newsletter_digests.update_one({"_id": d["_id"]},
+                                           {"$set": {"status": "sent", "sent_at": iso(now_utc()),
+                                                     "sent_count": sent}})
+    await audit(user, "newsletter.digest", "digest", digest_id, {"sent": sent, "of": len(subs)})
+    return {"ok": True, "sent": sent, "subscribers": len(subs),
+            "message": f"Digest sent to {sent} of {len(subs)} subscribers."}
 
 
 # ---------------- saved (canned) support replies ----------------

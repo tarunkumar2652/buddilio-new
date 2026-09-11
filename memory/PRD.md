@@ -355,6 +355,17 @@ Checked https://buddilio.com directly:
   publish-vs-review, cities, per-run limits, top-up threshold, host name, series CRUD, Run now and a
   log of everything created. Post-test fixes: weekday validation (0-6) and the non-blocking run.
 
+### Weekly digest + default series (2026-09-11)
+- `build_weekly_digest()` gathers each week's newly published stories (skips ones already in a
+  digest) into `db.newsletter_digests` every Sunday from the daily cron; it **waits** for an admin.
+  Endpoints: `GET /api/admin/newsletter/digests`, `POST .../build`, `POST .../{id}/send`.
+  UI: `NewsletterDigest.jsx` at the top of Admin → Journal (testids digest-panel/build/send/row-N).
+- Three default Autopilot series seeded on the user's "assume defaults": Thursday Supper Club
+  (Delhi NCR, 20:00, $18, 24), Friday Rooftop Sundown (Mumbai, 19:00, $15, 40), Sunday Slow Morning
+  Walk (Bengaluru, 08:00, free, 30) — 9 dates generated, live on /events.
+- Google Search Console: user picked verification+sitemap (already built). Read-access reporting is
+  NOT built — it needs a Google Cloud project + OAuth client ID/secret from the user first.
+
 ## Notes
 - Test credentials: `/app/memory/test_credentials.md` (login response field is `access_token`).
 - CMS page body lives in `page['blocks']`; `content` is only the intro paragraph.

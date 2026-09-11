@@ -7,6 +7,7 @@ import { ImageUpload } from "@/components/ImageUpload";
 
 import { BlogInsights } from "@/components/BlogInsights";
 import { BlogAuthors } from "@/components/BlogAuthors";
+import { NewsletterDigest } from "@/components/NewsletterDigest";
 
 const PILL = "rounded-full px-4 py-2 text-xs font-bold";
 const IN = "mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm";
@@ -245,6 +246,8 @@ export const BlogAdmin = () => {
           </button>
         </div>
       </div>
+
+      <div className="mt-5"><NewsletterDigest /></div>
 
       <div className="mt-6"><BlogInsights /></div>
       <div className="mt-6"><BlogAuthors onChange={setAuthors} /></div>
